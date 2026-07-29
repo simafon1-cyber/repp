@@ -1,0 +1,23 @@
+# Секреты — никогда не попадают в git
+.env
+bridge/.env
+bridge/config.toml
+
+# Журналы моста
+bridge/logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Компилированные файлы MT5
+*.ex5
+
+# Служебные файлы ОС/редакторов
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
