@@ -1,0 +1,10 @@
+# Скрипты установки должны попадать на Windows с переносами строк CRLF,
+# иначе cmd.exe может неправильно разобрать batch-файл.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Остальные файлы — с обычными переносами
+*.mq5 text eol=lf
+*.py  text eol=lf
+*.md  text eol=lf
+*.sh  text eol=lf
