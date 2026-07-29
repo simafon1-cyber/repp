@@ -180,6 +180,7 @@ string   g_gvDaySerial           = "";
 string   g_gvDayBalance          = "";
 string   g_gvBlockedDay          = "";
 string   g_gvPauseUntil          = "";
+string   g_gvBasketTPDone        = "";
 
 // Прочее
 string   g_lastBlockReason       = "";
@@ -352,6 +353,16 @@ bool IsUSDst(datetime gmt)
    return (gmt >= start && gmt < end);
   }
 
+// Приводит минуты в диапазон одних суток (0..1439)
+int NormalizeMinutes(int minutes)
+  {
+   int day = 24*60;
+   minutes = minutes % day;
+   if(minutes < 0)
+      minutes += day;
+   return minutes;
+  }
+
 // "08:30" -> минуты от полуночи; -1 при ошибке
 int ParseHHMM(const string s)
   {
@@ -379,14 +390,23 @@ bool IsInGoldSession(datetime gmt, string &reason)
    int londonOffset = IsEUDst(gmt) ? 60 : 0;          // Лондон = GMT или GMT+1
    int nyOffset     = (IsUSDst(gmt) ? -4 : -5) * 60;  // Нью-Йорк = GMT-5 или GMT-4
 
-   int startGMT = startLocal - londonOffset;          // начало в минутах GMT
-   int endGMT   = endLocal   - nyOffset;              // конец в минутах GMT
+   // Приводим локальное время бирж к минутам GMT в пределах суток.
+   // NormalizeMinutes нужен, потому что окно может выйти за границу суток
+   // (например 20:00 Нью-Йорка = 01:00 GMT следующего дня).
+   int startGMT = NormalizeMinutes(startLocal - londonOffset);
+   int endGMT   = NormalizeMinutes(endLocal   - nyOffset);
 
    MqlDateTime st;
    TimeToStruct(gmt, st);
    int nowMin = st.hour*60 + st.min;
 
-   if(nowMin < startGMT || nowMin >= endGMT)
+   bool inside;
+   if(startGMT < endGMT)
+      inside = (nowMin >= startGMT && nowMin < endGMT);
+   else
+      inside = (nowMin >= startGMT || nowMin < endGMT); // окно переходит через полночь
+
+   if(!inside)
      {
       reason = StringFormat("вне сессии Лондон+Нью-Йорк (сейчас %02d:%02d GMT, окно %02d:%02d-%02d:%02d GMT)",
                             st.hour, st.min, startGMT/60, startGMT%60, endGMT/60, endGMT%60);
@@ -421,7 +441,10 @@ void CollectNewsForCountry(const string country)
    MqlCalendarValue values[];
    datetime from = TimeTradeServer() - 12*3600;
    datetime to   = TimeTradeServer() + 24*3600;
-   if(!CalendarValueHistory(values, from, to, country))
+   ResetLastError();
+   // Важно отличать "нет событий" от "календарь недоступен": пустой список —
+   // это нормально, а вот ошибка означает, что фильтр новостей не работает.
+   if(!CalendarValueHistory(values, from, to, country) && GetLastError() != 0)
      {
       g_calendarAvailable = false;
       return;
@@ -872,7 +895,8 @@ void InitSharedRiskNames()
    g_gvDaySerial  = g_gvPrefix + "day";
    g_gvDayBalance = g_gvPrefix + "daybal";
    g_gvBlockedDay = g_gvPrefix + "blocked";
-   g_gvPauseUntil = g_gvPrefix + "pause";
+   g_gvPauseUntil   = g_gvPrefix + "pause";
+   g_gvBasketTPDone = g_gvPrefix + "btp";
   }
 
 // Атомарная блокировка через GlobalVariableSetOnCondition (0 -> 1).
@@ -1050,12 +1074,32 @@ void CheckSharedRisk()
 
    // 4. Корзинная фиксация прибыли: все позиции робота закрываются разом,
    //    когда суммарный плюс достиг цели. Паузы нет — можно входить снова.
+   //    Закрывает только ОДИН экземпляр (тот, кто первым занял блокировку),
+   //    иначе оба графика послали бы дублирующие запросы на закрытие.
    if(InpBasketTakeProfitPercent > 0 && floating > 0 &&
       floating >= equity * InpBasketTakeProfitPercent / 100.0)
      {
-      Log(StringFormat("КОРЗИННАЯ ФИКСАЦИЯ ПРИБЫЛИ: +%.2f (%.2f%% equity)",
-                       floating, floating/equity*100.0));
-      CloseAllRobotPositions("корзинная фиксация прибыли");
+      if(TimeCurrent() >= (datetime)(long)GVGet(g_gvBasketTPDone, 0))
+        {
+         bool claimed = false;
+         if(AcquireLock())
+           {
+            // Повторная проверка под блокировкой: второй экземпляр увидит
+            // уже выставленную метку и закрывать не станет.
+            if(TimeCurrent() >= (datetime)(long)GVGet(g_gvBasketTPDone, 0))
+              {
+               GlobalVariableSet(g_gvBasketTPDone, (double)(TimeCurrent() + 10));
+               claimed = true;
+              }
+            ReleaseLock();
+           }
+         if(claimed)
+           {
+            Log(StringFormat("КОРЗИННАЯ ФИКСАЦИЯ ПРИБЫЛИ: +%.2f (%.2f%% equity)",
+                             floating, floating/equity*100.0));
+            CloseAllRobotPositions("корзинная фиксация прибыли");
+           }
+        }
      }
 
    // Дозакрытие остатков, если действует блокировка/пауза
@@ -1083,6 +1127,30 @@ bool SharedRiskAllowsEntry(string &reason)
 //+------------------------------------------------------------------+
 //| РАСЧЁТ ОБЪЁМА ОТ РИСКА (через OrderCalcProfit)                   |
 //+------------------------------------------------------------------+
+// Сколько знаков после запятой у шага объёма (0.01 -> 2, 0.001 -> 3)
+int VolumeDigits(double step)
+  {
+   for(int d=0; d<=8; d++)
+     {
+      double scaled = step * MathPow(10, d);
+      if(MathAbs(scaled - MathRound(scaled)) < 1e-9)
+         return d;
+     }
+   return 2;
+  }
+
+// Округление объёма ВНИЗ до шага брокера.
+// Эпсилон обязателен: в двоичной арифметике 0.25/0.01 = 24.999999999999996,
+// и без него объём молча занижался бы на один шаг (0.24 вместо 0.25).
+double FloorToStep(double volume, double step)
+  {
+   if(step <= 0)
+      return volume;
+   int digits = VolumeDigits(step);
+   double steps = MathFloor(volume / step + 1e-9);
+   return NormalizeDouble(steps * step, digits);
+  }
+
 // Реальный денежный убыток 1.0 лота на дистанции entry -> sl.
 // OrderCalcProfit корректно учитывает валюту прибыли и контракт
 // конкретного брокера и для EURUSD, и для XAUUSD.
@@ -1117,8 +1185,7 @@ double CalcLotByRisk(int dir, double entry, double sl, double aiMult, string &re
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double step   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   if(step > 0)
-      lots = MathFloor(lots / step) * step;
+   lots = FloorToStep(lots, step);
 
    if(lots < minLot)
      {
@@ -1131,8 +1198,8 @@ double CalcLotByRisk(int dir, double entry, double sl, double aiMult, string &re
         }
       lots = minLot;
      }
-   if(lots > maxLot)    lots = maxLot;
-   if(lots > InpMaxLot) lots = InpMaxLot;
+   if(lots > maxLot)    lots = FloorToStep(maxLot, step);
+   if(lots > InpMaxLot) lots = FloorToStep(InpMaxLot, step);
 
    // Проверка маржи
    double margin = 0;
@@ -1149,7 +1216,7 @@ double CalcLotByRisk(int dir, double entry, double sl, double aiMult, string &re
       return 0;
      }
 
-   return NormalizeDouble(lots, 2);
+   return lots;
   }
 
 // Оценка суммарного открытого риска позиций робота (дистанция до SL в деньгах)
@@ -1456,7 +1523,7 @@ int OnInit()
    if(_Period != PERIOD_M5)
       Log("ВНИМАНИЕ: советник рассчитан на график M5, текущий период: " + EnumToString(_Period));
 
-   g_trade.SetExpertMagicNumber(g_magic);
+   g_trade.SetExpertMagicNumber((ulong)g_magic);
    g_trade.SetDeviationInPoints(20);
 
    // Хэндлы индикаторов создаются один раз — это критично для скорости
@@ -1530,12 +1597,13 @@ void OnTimer()
 
 void OnTick()
   {
-   // Сопровождение позиций и общий риск — на каждом тике
+   // Общий риск проверяется всегда — даже до готовности индикаторов,
+   // иначе дневной лимит не работал бы сразу после запуска советника.
+   CheckSharedRisk();
+
+   // Сопровождение позиций требует ATR, поэтому ждём готовности индикаторов
    if(g_indReady)
-     {
       ManageOpenPositions();
-      CheckSharedRisk();
-     }
 
    // Оценка входа — только по закрытой свече M5
    datetime barTime = iTime(_Symbol, PERIOD_M5, 0);

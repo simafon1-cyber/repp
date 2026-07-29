@@ -16,6 +16,11 @@ venv/
 # Компилированные файлы MT5
 *.ex5
 
+# Артефакты тестов
+tests/test_logic
+tests/test_mut*
+tests/generated_functions.h
+
 # Служебные файлы ОС/редакторов
 .DS_Store
 Thumbs.db
