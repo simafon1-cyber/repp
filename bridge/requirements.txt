@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn>=0.29
+anthropic>=0.40
+MetaTrader5>=5.0.45; sys_platform == 'win32'
+python-dotenv>=1.0
+httpx>=0.27
