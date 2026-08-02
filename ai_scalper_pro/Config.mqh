@@ -1,0 +1,451 @@
+//+------------------------------------------------------------------+
+//| Config.mqh                                                       |
+//| Все настройки (input), enum-ы и глобальные переменные советника. |
+//| Ничего не считает — только объявляет. Логика живёт в других      |
+//| модулях, они все читают эти переменные.                          |
+//+------------------------------------------------------------------+
+
+#define SIGNAL_SHIFT 1   // анализируем последнюю ЗАКРЫТУЮ свечу, не текущую формирующуюся
+#define PULLBACK_SHIFT 2 // свеча отката — на бар раньше сигнальной
+
+//===================== ИНДИКАТОРЫ (хендлы) ============
+int EMAFastHandle  = INVALID_HANDLE;  // текущий TF
+int EMASlowHandle  = INVALID_HANDLE;  // текущий TF
+int EMATrendHandle = INVALID_HANDLE;  // СТАРШИЙ TF (MTF-тренд, п.10)
+int ATRHandle      = INVALID_HANDLE;
+int ADXHandle      = INVALID_HANDLE;
+int RSIHandle      = INVALID_HANDLE;
+
+// --- Доп. подтверждение индикаторами (MultiIndicator.mqh) ---
+int MACDHandle     = INVALID_HANDLE;
+int BandsHandle    = INVALID_HANDLE;
+int StochHandle    = INVALID_HANDLE;
+
+// --- Контекст рынка (п.19): EMA-хендлы для СВЯЗАННЫХ инструментов (DXY, крипта и т.п.) ---
+int ContextHandle1 = INVALID_HANDLE;
+int ContextHandle2 = INVALID_HANDLE;
+int ContextHandle3 = INVALID_HANDLE;
+
+//===================== ПРОФИЛИ РИСКА (п.15) ====================
+enum ENUM_RISK_PROFILE
+{
+   PROFILE_CONSERVATIVE, // Консервативный — минимальный риск, скромный TP, редкие сделки
+   PROFILE_BALANCED,     // Сбалансированный — разумная середина (по умолчанию)
+   PROFILE_AGGRESSIVE,   // Агрессивный — частый скальпинг, несколько сделок сразу, риск выше
+   PROFILE_HYSTERIC      // "Истеричка" — игнорит время/новости/волатильность, стреляет часто, лоты крошечные
+};
+
+//===================== РЕЖИМ РЫНКА (п.18) ====================
+enum ENUM_MARKET_REGIME
+{
+   REGIME_UNKNOWN, // Нет уверенного большинства голосов — держим предыдущее состояние (защита от дребезга)
+   REGIME_TREND,   // Уверенный тренд — паттерн EA (откат+пробой) работает штатно
+   REGIME_RANGE    // Флэт/чоп — трендовые паттерны чаще ложные, score штрафуется
+};
+
+//===================== КОНТЕКСТ РЫНКА (п.19) ====================
+enum ENUM_CONTEXT_CORRELATION
+{
+   CONTEXT_POSITIVE, // Растёт вместе с нашим активом (прямая корреляция)
+   CONTEXT_NEGATIVE  // Растёт, когда наш актив падает (обратная корреляция, напр. DXY для золота)
+};
+
+//===================== НАСТРОЙКИ (интерфейс — на русском, через комментарии) ====
+input group "=== ПРОСТОЙ РЕЖИМ — для новичков, начни отсюда (п.15) ==="
+// Самый простой способ настроить советника: выбери ОДИН профиль ниже, и EA сам
+// подберёт риск на сделку, размер стоп-лосса, цель прибыли (TP), сколько сделок
+// держать одновременно и лимиты по просадке — всё вместе, сбалансированно.
+// Остальные параметры дальше по списку помечены "(Advanced)" — в простом режиме
+// они НЕ используются для риска/TP/частоты входов, их можно не трогать.
+// Хочешь настраивать всё вручную — выключи UseSimpleProfile.
+// PROFILE_HYSTERIC ("Истеричка") — отдельный случай: игнорирует время/новости/
+// волатильность/издержки-vs-TP, порог score почти нулевой, стреляет на любой чих.
+// НО лоты и риск на сделку намеренно оставлены крошечными, а дневной лимит убытка
+// и просадка (это НЕ фильтры входа, а аварийные стоп-краны) продолжают работать —
+// иначе это не агрессивный режим, а слив депозита за один день.
+input bool              UseSimpleProfile = true;             // ВКЛ = простой режим (рекомендуется)
+input ENUM_RISK_PROFILE RiskProfile      = PROFILE_HYSTERIC; // Профиль риска (действует, если простой режим включён)
+
+input group "=== Основные параметры ==="
+input double LotSize        = 0.01;     // Лот-fallback (используется, если не удаётся посчитать риск)
+input ulong  MagicNumber    = 123456;   // Уникальный ID советника (для запуска нескольких EA)
+
+input group "=== Multi-Timeframe тренд (п.10) ==="
+input ENUM_TIMEFRAMES TrendTimeframe = PERIOD_M15; // Старший таймфрейм — задаёт общее направление
+input int    EMATrendPeriod = 200;                 // Период EMA на старшем таймфрейме
+
+input group "=== EMA (текущий TF, вход) ==="
+input int    EMAFastPeriod      = 20;   // Период быстрой EMA (сигнал входа)
+input int    EMASlowPeriod      = 50;   // Период медленной EMA (сигнал входа)
+
+input group "=== ADX ==="
+input int    ADXPeriod       = 14;      // Период ADX
+input double ADXMinLevel     = 25;      // Опорный уровень ADX для скоринга (не жёсткий гейт)
+
+input group "=== RSI ==="
+input int    RSIPeriod       = 14;      // Период RSI
+input double RSIOverbought   = 70;      // Зона перекупленности
+input double RSIOversold     = 30;      // Зона перепроданности
+
+input group "=== ATR ==="
+input int    ATRPeriod       = 14;      // Период ATR (для стопов и скоринга)
+input int    ATRAvgPeriod    = 20;      // Период среднего ATR (сравнение волатильности)
+
+input group "=== Pullback + Price Action (п.3: усиленная логика) ==="
+input double PullbackTolerancePoints = 50;  // Допуск касания EMA на откате, в пунктах
+input double BodyPercentMin  = 60;          // Мин. % тела свечи от диапазона (сила движения)
+input double MaxWickPercent  = 30;          // Макс. % противоположного хвоста свечи
+
+input group "=== Объём — мягкий, необязательный фильтр (п.2) ==="
+input bool   UseVolumeFilter = false;   // ВКЛ проверку объёма (по умолч. ВЫКЛ: тиковый объём ненадёжен на XAU/индексах)
+input int    VolumeAvgPeriod = 20;      // Период среднего объёма
+
+input group "=== Жёсткие защитные проверки (не зависят от score) ==="
+// п.20: анти-дребезг — реальная причина серии убытков "открыл-закрылся в минус,
+// тут же открыл в другую сторону, тоже закрылся в минус". Действует ВСЕГДА,
+// даже в "Истеричке" — это не про качество сигнала, а про то, что рынку нужно
+// хотя бы пару баров, чтобы показать новое направление, иначе бот дерётся сам
+// с собой на шуме внутри пары свечей.
+input int    MinBarsBetweenReversal = 2; // Мин. баров между сделками в ПРОТИВОПОЛОЖНУЮ сторону
+input bool   UseSpreadFilter = true;    // ВКЛ проверку спреда
+input int    MaxSpreadPoints = 200;     // Макс. допустимый спред, пунктов
+input bool   UseTimeFilter   = false;   // ВКЛ торговлю только в заданные часы (ВЫКЛ = торговля круглосуточно)
+input int    StartHour       = 8;       // Час начала торговли (0-23, время сервера)
+input int    EndHour         = 20;      // Час окончания торговли
+input bool   UseNewsFilter   = false;   // Жёсткий блок: HIGH-новость рядом — сделки нет
+input int    NewsWindowMinutes = 30;    // Окно до/после новости, минут
+input bool   UseVolatilitySpikeGuard = true; // ВКЛ защиту от резких скачков волатильности (флэш-движений, п.16)
+input double VolatilitySpikeMultiplier = 2.5; // Если ATR больше среднего во столько раз — сигнал пропускается
+// п.22: "ролловерная дыра" — в момент смены торгового дня у брокера/поставщика
+// ликвидности спред может на пару минут раздуться в 5-10 раз (без реального
+// движения цены) — по опыту трейдеров это одна из частых причин "необъяснимого"
+// стопа. EA торгует круглосуточно (UseTimeFilter выключен по умолчанию), поэтому
+// эта узкая защита полезнее, чем общий тайм-фильтр. Час — ВРЕМЯ СЕРВЕРА брокера
+// (обычно смена дня/начисление свопа около полуночи по серверу — уточни у брокера).
+input bool   UseRolloverGuard      = true;  // ВКЛ защиту от ролловерного скачка спреда
+input int    RolloverHourServer    = 0;     // Час (0-23, время сервера), когда у брокера смена дня
+input int    RolloverGuardMinutes  = 15;    // Не открывать сделки ± столько минут от этого часа
+
+input group "=== Мягкий новостной скоринг — БЕСПЛАТНО, встроенный календарь MT5 (п.11) ==="
+input bool   UseNewsScoreSoft = true;   // MODERATE-новость рядом не блокирует, а просто снижает score
+input double NewsScorePenalty = 8;      // Сколько баллов вычитать при этом
+
+input group "=== Внешний AI/новостной сигнал — плагин под сторонний источник (п.11) ==="
+// п.23: включено по умолчанию под связку с bridge_ai_market_analysis.py (Claude/
+// ChatGPT) — таймаут поднят до 3с, т.к. ответ реального AI занимает 1-3 секунды,
+// дефолтная 1с обрывала бы запрос почти всегда. Если моста нет/не запущен —
+// это fail-open: сигнал просто игнорируется, торговля по обычному score идёт как есть.
+input bool   UseExternalSignal        = true;  // Включено — рассчитано на локальный AI-мост
+input string ExternalSignalURL        = "http://127.0.0.1:8787/signal"; // Локальный бридж или облачный API
+input double ExternalSignalWeight     = 10;    // Макс. баллов, которые сигнал может добавить/вычесть
+input int    ExternalSignalTimeoutMs  = 3000;  // Таймаут запроса к источнику, мс (AI отвечает не мгновенно)
+input bool   ExternalSignalRequireDirection = false; // ВКЛ = без совпадения направления сделки не будет
+// п.24: вес сигнала AI не фиксирован намертво — автоматически чуть растёт во
+// ФЛЭТЕ (свой паттерн EA там менее надёжен, мнение AI ценнее) и чуть падает
+// в подтверждённом ТРЕНДЕ (структура входа и так надёжна). См. EffectiveExternalSignalWeight()
+// в NewsAI.mqh. Это не смена решения AI, а лишь то, сколько баллов оно даёт/забирает.
+
+input group "=== Собственная стратегия советника (см. CustomStrategy.mqh) ==="
+// По просьбе пользователя ("сделай то же самое для советника", после того как
+// custom_strategy.py уже был сделан для Python-программы) — независимое ВТОРОЕ
+// мнение по 4 факторам (импульс/ускорение/согласованность/расширение диапазона),
+// которых в основном score (SignalEngine.mqh) ещё нет. Подмешивается с
+// ограниченным весом, как внешний AI-сигнал выше — не заменяет основной паттерн
+// откат+пробой, а мягко усиливает/ослабляет его. Версия и формулы — прямо в
+// CustomStrategy.mqh (CUSTOM_STRATEGY_VERSION + CHANGELOG), обновляй там.
+input bool   UseCustomStrategy     = true; // ВКЛ = подмешивать собственную стратегию в score
+input double CustomStrategyWeight  = 15;   // Макс. баллов, которые своя стратегия может добавить/вычесть
+
+input group "=== Доп. подтверждение классическими индикаторами (см. MultiIndicator.mqh) ==="
+// По просьбе пользователя "используй как можно больше индикаторов и торговых
+// стратегий": MACD/Bollinger Bands/Stochastic — ЕЩЁ ОДНО независимое мнение,
+// подмешивается с ограниченным весом, как собственная стратегия/AI-сигнал
+// выше — не заменяет основной паттерн откат+пробой.
+input bool   UseMultiIndicator      = true; // ВКЛ = подмешивать MACD/Bollinger/Stochastic в score
+input double MultiIndicatorWeight   = 12;   // Макс. баллов, которые эта группа может добавить/вычесть
+input int    MACDFastPeriod         = 12;   // MACD: период быстрой EMA
+input int    MACDSlowPeriod         = 26;   // MACD: период медленной EMA
+input int    MACDSignalPeriod       = 9;    // MACD: период сигнальной линии
+input int    BBPeriod                = 20;   // Bollinger Bands: период SMA
+input double BBDeviation             = 2.0;  // Bollinger Bands: множитель стандартного отклонения
+input int    StochKPeriod            = 14;   // Stochastic: период %K
+input int    StochDPeriod            = 3;    // Stochastic: период %D
+input int    StochSlowing            = 3;    // Stochastic: сглаживание
+
+input group "=== Режим торговли — скальпинг / новости (п.24) ==="
+// Один и тот же EA умеет работать в двух разных стилях.
+// СКАЛЬПИНГ (по умолчанию) — паттерн откат+пробой, новости — риск, их избегаем.
+// НОВОСТИ — наоборот: ждём HIGH-импакт событие (NFP, ставки, CPI и т.п.) и
+// ловим направленный пробой цены сразу после выхода цифр. Стопы шире
+// (NewsVolatilitySLBoost) — волатильность в этот момент объективно выше,
+// тесный стоп чаще выбивает шумом на самом развороте, а не по существу сделки.
+// ОБА — сначала пробует новостной вход, если условий нет — обычный скальпинг.
+enum ENUM_TRADING_MODE
+  {
+   MODE_SCALPING,     // Обычный скальпинг (откат+пробой), новости — фильтр-риск
+   MODE_NEWS_TRADING, // Торговля НА новостях — вход на пробой после HIGH-события
+   MODE_BOTH          // Комбо: новостной вход в приоритете, иначе обычный скальпинг
+  };
+input ENUM_TRADING_MODE TradingMode = MODE_SCALPING; // Выбор стиля торговли
+input int    NewsBreakoutWindowMinutes  = 15;  // Ловим пробой в течение стольки минут ПОСЛЕ HIGH-новости
+input double NewsBreakoutMinBodyPercent = 55;  // Мин. % тела свечи, чтобы считать её "пробойной реакцией"
+input double NewsVolatilitySLBoost      = 1.5; // Множитель к ATR-стопу для новостного входа (шире обычного)
+
+input group "=== Автонастройка под инструмент — любая пара рынка (п.24) ==="
+// Часть порогов ниже (допуск отката, мин/макс TP, шаг трейлинга, старт Profit
+// Lock и т.п.) задана в "пунктах" — а один пункт означает РАЗНОЕ на золоте
+// (0.01), форекс-паре с 5 знаками (0.00001) и крипте. Раньше это требовало
+// ручной перенастройки при смене инструмента. Если ВКЛ — EA сам пересчитывает
+// эти пороги как ДОЛЮ от текущего ATR инструмента (EffPointsThreshold в
+// Indicators.mqh) — дефолты остаются разумными на любой паре без правки
+// настроек. Если индикатор ещё не готов — используется ручное значение как fallback.
+// Выключи, если хочешь точный контроль в пунктах вручную (как было раньше).
+input bool   AutoAdaptToSymbol = true; // ВКЛ = пороги авто-масштабируются под ATR инструмента
+
+input group "=== Адаптация к режиму рынка — тренд/флэт (п.18, действует всегда) ==="
+// Один и тот же паттерн (откат+пробой) хорошо работает В ТРЕНДЕ и часто даёт
+// ложные сигналы ВО ФЛЭТЕ/ЧОПЕ. Этот блок определяет текущий режим рынка по
+// 3 независимым голосам (ADX, Efficiency Ratio, отношение ATR к среднему) —
+// побеждает большинство, при ничьей режим не меняется. Смена режима
+// подтверждается несколько баров подряд, чтобы не дёргаться от шума.
+input bool   UseMarketRegimeFilter = true;  // ВКЛ определение режима рынка и адаптацию score под него
+input int    RegimeERPeriod        = 10;    // Период для Efficiency Ratio (Kaufman)
+input double RegimeADXTrendLevel   = 25;    // ADX выше этого — голос за тренд
+input double RegimeADXRangeLevel   = 18;    // ADX ниже этого — голос за флэт
+input double RegimeERTrendLevel    = 0.5;   // Efficiency Ratio выше этого — голос за тренд (0..1)
+input double RegimeERRangeLevel    = 0.25;  // Efficiency Ratio ниже этого — голос за флэт
+input int    RegimeConfirmBars     = 3;     // Сколько баров подряд подтверждать смену режима
+input double RegimeRangePenalty    = 15;    // Штраф score во флэте (пункты score)
+input double RegimeTrendBonus      = 5;     // Бонус score в подтверждённом тренде (пункты score)
+// "Умнее" score (по просьбе пользователя, портировано из Python USE_ADAPTIVE_SCORE_WEIGHTS):
+// вместо ФИКСИРОВАННЫХ весов компонентов (Тренд20/Откат20/.../RSI5) — веса
+// подстраиваются под уже посчитанный режим рынка (g_currentRegime выше). В
+// подтверждённом ТРЕНДЕ структурные сигналы (тренд со старшего ТФ + сам паттерн
+// pullback+breakout) надёжнее — усиливаются. Во ФЛЭТЕ, наоборот, структурные
+// пробои чаще ложные, а RSI-запас хода (мин-реверсия) работает лучше —
+// усиливается он. См. AdaptiveMultiplier() в SignalEngine.mqh. ВЫКЛ = веса как
+// раньше, фиксированные.
+input bool   UseAdaptiveScoreWeights = true; // ВКЛ = веса score подстраиваются под режим рынка
+
+input group "=== Анти-'зеркало' фильтры входа (по жалобе пользователя на развороты сразу после входа) ==="
+// Диагноз: паттерн откат+пробой реагирует на пробой ПРЕДЫДУЩЕЙ свечи, но сила
+// самой сигнальной свечи (тело/тени — признак разворота) раньше была не
+// обязательна, а просто бонус к score — из-за этого вход иногда случался на
+// уже истощённом/разворачивающемся движении ("бот открывает в зеркало").
+input bool   UsePAHardGate         = true; // ВКЛ = Price Action подтверждение ОБЯЗАТЕЛЬНО (не просто бонус к score)
+input bool   BlockEntryInRange     = true; // ВКЛ = полный запрет входа во ФЛЭТЕ (не просто штраф score)
+input bool   UseExhaustionFilter   = true; // ВКЛ = не входить, если сигнальная свеча уже сильно растянута
+input double ExhaustionRangeATRRatio = 2.0; // Диапазон свечи > этого × средний ATR -> вход блокируется
+
+input group "=== Контекст всего рынка — сверка с другими инструментами (п.19) ==="
+// Цена редко живёт в вакууме: золото (XAUUSD) почти всегда торгуется в обратной
+// корреляции к индексу доллара (DXY/USDX), крипта часто ходит синхронно между
+// собой. Если сигнал на покупку золота совпадает с падением доллара — это
+// подтверждение из независимого инструмента, а не просто паттерн на графике.
+// Внутри терминала, без внешних сервисов и парсинга сайтов — MT5 сам видит
+// котировки других инструментов, если они есть у брокера.
+// ВАЖНО: впиши символы ТОЧНО как они называются у твоего брокера в Market Watch
+// (часто "USDX"/"DXY"/"USDollar" для индекса доллара, "BTCUSD" для биткоина —
+// у разных брокеров по-разному). Пустая строка = слот не используется.
+input bool   UseMarketContext      = false;         // ВКЛ сверку с другими инструментами
+input string ContextSymbol1        = "";             // Инструмент 1 (например, индекс доллара)
+input ENUM_CONTEXT_CORRELATION ContextSymbol1Corr = CONTEXT_NEGATIVE; // Тип корреляции с нашим символом
+input string ContextSymbol2        = "";             // Инструмент 2 (опционально)
+input ENUM_CONTEXT_CORRELATION ContextSymbol2Corr = CONTEXT_POSITIVE;
+input string ContextSymbol3        = "";             // Инструмент 3 (опционально)
+input ENUM_CONTEXT_CORRELATION ContextSymbol3Corr = CONTEXT_POSITIVE;
+input int    ContextEMAPeriod      = 50;              // Период EMA для тренда контекстных инструментов
+input double ContextScoreWeight    = 10;              // Баллов score за каждый согласованный инструмент (штраф — половина)
+
+input group "=== SCORE — единый фильтр входа (Advanced, только в ручном режиме) ==="
+input bool   UseScoreFilter  = true;    // ВЫКЛ = вход по жёстким условиям паттерна, без порога score
+input double MinScoreToTrade = 65;      // Порог score для входа (используется, если UseSimpleProfile=false)
+// Веса (сумма=100): Тренд20 Откат20 PriceAction15 ATR10 ADX10 Спред5 Объём10 Время5 RSI5
+
+input group "=== Риск / лот (Advanced, только в ручном режиме) ==="
+input bool   UseRiskPercent  = false;   // ВКЛ расчёт лота по риску в % от депозита (вместо фиксированного LotSize)
+input double RiskPercent     = 1.0;     // Риск на сделку, % от депозита (если включён расчёт выше)
+input int    MaxTradesPerDay = 20;      // Макс. сделок в день (суммарно)
+input int    MaxOpenPositions = 3;      // Сколько сделок держать ОДНОВРЕМЕННО
+                                         // Внимание: каждая позиция считает риск/лот независимо —
+                                         // суммарный риск = RiskPercent × MaxOpenPositions.
+
+input group "=== Цель прибыли в деньгах (Advanced, только в ручном режиме) ==="
+// По умолчанию TP считается в пунктах (ATR × RiskRewardRatio). Если включить это —
+// TP пересчитывается так, чтобы при ТЕКУЩЕМ лоте сделка приносила ровно TargetProfitMoney
+// в валюте счёта — маленький TP теперь не обрезается снизу искусственным лимитом.
+input bool   UseMoneyTP         = false;  // ВКЛ = цель прибыли в деньгах вместо пунктов/RR
+input double TargetProfitMoney  = 5.0;    // Целевая прибыль за сделку, в валюте счёта (USD и т.п.)
+
+input group "=== Контроль издержек и совокупного риска — по опыту трейдеров (п.16, действует всегда) ==="
+// Скальпинг с маленьким TP особенно уязвим к спреду/комиссии: если издержки съедают
+// большую часть цели по прибыли, сделка в среднем убыточна ещё до движения цены.
+// А несколько одновременных сделок на ОДНОМ инструменте не диверсифицируют риск,
+// а суммируют его — этот блок держит совокупный риск под жёстким потолком.
+input double MaxSpreadCostPercentOfTP = 30.0; // Если спред "съедает" больше этого % от TP — сделки не будет
+input double MaxTotalRiskPercent      = 3.0;  // Потолок суммарного риска по ВСЕМ открытым сделкам EA, % от equity
+input int    OrderRetryAttempts       = 3;    // Сколько раз повторить отправку ордера при реквоте/сдвиге цены
+
+input group "=== Просадка и серии убытков (Advanced, только в ручном режиме) ==="
+input bool   UseDailyLossLimit   = true;    // ВКЛ дневной лимит убытка
+input double DailyLossLimitPercent = 3.0;   // Дневной лимит убытка, % от equity на начало дня
+input bool   UseMaxDrawdownLimit = true;    // ВКЛ лимит просадки от пикового equity
+input double MaxDrawdownPercent  = 10.0;    // Просадка от пика, % — останов до перезапуска EA
+input int    MaxConsecutiveLosses = 5;      // После скольких убытков подряд ставим паузу
+input int    PauseHoursAfterLossStreak = 12;// На сколько часов пауза после серии убытков
+// п.22: по опыту трейдеров/MQL5-блогов — жёсткая пауза только ПОСЛЕ N убытков
+// подряд слишком грубая: лучше плавно снижать риск по мере приближения к порогу,
+// а не торговать на полную катушку вплоть до самой паузы.
+input bool   UseLossStreakRiskScaling  = true; // ВКЛ плавное снижение риска по мере серии убытков
+input double MinLossStreakRiskMultiplier = 0.3; // Мин. множитель риска у самого порога паузы (0..1)
+
+input group "=== Стопы: ATR-based, TP с ограничениями (Advanced, только в ручном режиме) ==="
+input double ATRSLMultiplier    = 1.2;   // Множитель ATR для стоп-лосса (меньше = теснее стоп, меньше риск)
+input double RiskRewardRatio    = 3.0;   // Соотношение TP к SL (если TP НЕ в деньгах). Было 1.2 — по факту
+                                          // реальных сделок пользователя (TP всего +$1 против SL -$30...-$111+)
+                                          // поднято до 3.0: TP всегда минимум в 3 раза больше SL.
+input double TPMinPoints        = 50;    // TP не может быть меньше этого, пунктов
+input double TPMaxPoints        = 1000;  // TP не может быть больше этого, пунктов
+// КРИТИЧНО (см. п.58 задачи пользователя): даже если UseMoneyTP даёт денежную
+// цель прибыли меньше риска сделки — TP всё равно НИКОГДА не опустится ниже
+// SL x MinRiskRewardRatio. Это жёсткий пол, защищающий от инвертированного
+// риск:прибыль (напр. TP +$1 против SL -$100), который был найден по
+// реальному скриншоту истории сделок пользователя. См. ApplyMinRiskRewardFloor()
+// в RiskManager.mqh — применяется и к CalcTPDistance(), и к CalcTPDistanceMoney().
+input double MinRiskRewardRatio = 3.0;   // Мин. Risk/Reward — TP никогда не меньше SL x это число
+// "Тянуть максимальную прибыль сколько возможно" (просьба пользователя): вместо
+// фиксированного TP — сделка ведётся ТОЛЬКО Break Even/ATR-трейлингом/Profit
+// Lock (см. TradeManager.mqh -> ManageOpenPositions), закрывается, когда цена
+// разворачивается и выбивает трейлинг-стоп, а не по заранее посчитанному TP.
+// При ВКЛ верхней границы прибыли нет вовсе. MinRiskRewardRatio при этом не
+// используется (TP не выставляется), но остаётся как пол на случай отключения.
+input bool   UseMaxProfitRide   = true;  // ВКЛ = без фикс. TP, тянуть максимум прибыли трейлингом
+
+input group "=== Break Even / Trailing — ATR-adaptive (п.4, действует всегда) ==="
+input bool   UseBreakEven           = true;   // ВКЛ перевод сделки в безубыток
+input double BreakEvenATRMultiplier = 1.0;    // Порог перевода в безубыток, в ATR
+input double BreakEvenOffsetPoints  = 10;     // Отступ от цены входа при переводе в БУ, пунктов
+input bool   UseTrailingStop        = true;   // ВКЛ трейлинг-стоп по ATR
+input double TrailingATRMultiplier  = 1.2;    // Множитель ATR для трейлинга
+input double TrailingMinPoints      = 40;     // Мин. дистанция трейлинга, пунктов
+input double TrailingStepMinPoints  = 5;      // Не двигать SL, если сдвиг меньше этого (меньше нагрузки на сервер)
+
+input bool   UsePartialClose        = false;  // ВКЛ частичное закрытие при достижении профита
+input double PartialCloseTriggerPoints = 150; // Профит для частичного закрытия, пунктов
+input double PartialClosePercent    = 50;     // % объёма, закрываемого частично
+
+input group "=== Profit Lock — тянет SL к МАКСИМУМУ достигнутой прибыли (п.12, действует всегда) ==="
+// В отличие от обычного ATR-трейлинга (который гонится за текущей ценой),
+// этот блок запоминает пиковую прибыль по сделке и не даёт SL отставать от
+// неё больше чем на ProfitLockPercent. Если цена пошла в плюс, а потом
+// развернулась — сделка закроется с частью пикового профита, а не по
+// первоначальному стопу вникуда.
+input bool   UseProfitLockTrailing  = true;   // ВКЛ трейлинг от пиковой прибыли
+input double ProfitLockStartPoints  = 20;     // С какой прибыли (в пунктах) начинаем защищать
+// Было 50 — поднято до 70 по жалобе пользователя (сделка держала пиковый
+// плавающий профит $300-360, а закрывалась в районе $10-150). Работает как
+// запасной % (если UseTieredProfitLock=false) и как один из уровней тира.
+input double ProfitLockPercent      = 70;     // % от пиковой прибыли, который гарантированно сохраняем
+
+// Ступенчатая (ratchet) фиксация: чем выше КОГДА-ЛИБО ДОСТИГНУТЫЙ пик профита
+// по сделке — тем больший % от него запирается стопом, вместо одного
+// фиксированного ProfitLockPercent для любого пика. Раньше сделка, которая
+// доходила до пика лишь чуть выше ProfitLockStartPoints, ловила лишь
+// минимальный % защиты — отсюда случаи "видел +360, закрылось на +10..40".
+// Множитель — от эффективного (авто-масштабированного под ATR) порога
+// ProfitLockStartPoints; используется САМЫЙ старший тир, до которого дорос пик.
+input bool   UseTieredProfitLock    = true;
+input double ProfitLockTier1Mult    = 1.0;    input double ProfitLockTier1Pct = 40;
+input double ProfitLockTier2Mult    = 2.0;    input double ProfitLockTier2Pct = 55;
+input double ProfitLockTier3Mult    = 4.0;    input double ProfitLockTier3Pct = 70;
+input double ProfitLockTier4Mult    = 8.0;    input double ProfitLockTier4Pct = 85;
+
+// КРИТИЧНО: порог запуска Profit Lock не может быть меньше этой доли ОТ
+// РИСКА САМОЙ СДЕЛКИ (её 1R = исходное расстояние openPrice<->SL). Диагноз
+// по реальным сделкам (xauusd/btcusd, "Истеричка"): ATR-порог выше не был
+// привязан к тому, насколько узкий стоп у профиля — у "Истерички"
+// (AtrSlMultiplier=0.5) это давало запуск лока уже на ~30% риска, РАНЬШЕ
+// даже безубытка. Сделка фиксировалась в крошечный плюс почти сразу (иногда
+// за 1-2 секунды на волатильном золоте), а неудачная теряла всю дистанцию
+// стопа — отсюда "мелкие плюсы, крупные минусы". 1.0 = лок не стартует, пока
+// прибыль не отобьёт собственный риск сделки целиком (1R).
+input double ProfitLockStartRFraction = 1.0;
+
+input group "=== Панель и логи ==="
+input bool   ShowDashboard   = true;    // Показывать информационную панель на графике
+input bool   EnableCSVLog    = true;    // Вести CSV-лог сделок
+input string CSVFileName     = "AI_Scalper_Trades.csv"; // Имя CSV-файла (в общей папке терминала)
+
+//===================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
+datetime LastBar        = 0;
+int      TradesToday    = 0;
+datetime LastTradeDay   = 0;
+double   DayStartEquity = 0;
+double   g_peakEquity   = 0;
+ulong    g_partialClosedTickets[];
+
+// --- Profit Lock (п.12): пиковая прибыль по каждой открытой позиции, в пунктах ---
+ulong    g_posTickets[];
+double   g_posPeakPoints[];
+// Изначальный риск сделки (openPrice<->SL при первом же взгляде, до BE/
+// трейлинга/лока) — её "1R". См. UpdatePositionRisk() в TradeManager.mqh и
+// PROFIT_LOCK_START_R_FRACTION (диагноз: Profit Lock стартовал РАНЬШЕ
+// безубытка у узких стопов, отсюда "мелкие плюсы, крупные минусы").
+double   g_posRiskPoints[];
+
+int      g_consecutiveLosses = 0;
+datetime g_pauseUntil         = 0;
+
+int      g_totalTrades  = 0;
+int      g_winTrades    = 0;
+double   g_grossProfit  = 0;
+double   g_grossLoss    = 0;
+string   g_lastTradeResult = "—";
+string   g_lastRejectReason = "—";
+double   g_lastBuyScore = 0;
+double   g_lastSellScore = 0;
+// Собственная стратегия советника (см. CustomStrategy.mqh) — для дашборда
+double   g_lastCustomScore = 0;
+// Доп. подтверждение индикаторами (см. MultiIndicator.mqh) — для дашборда
+double   g_lastMultiIndicatorScore = 0;
+
+// --- внешний AI/новостной сигнал (п.11): кэш последнего успешного ответа ---
+string   g_extLastDirection  = "";      // "buy" / "sell" / "neutral"
+double   g_extLastConfidence = 0;       // 0..1
+bool     g_extLastOk         = false;   // источник доступен и вернул валидные данные
+datetime g_extLastFetch      = 0;
+
+// --- Простой режим (п.15): фактические ("эффективные") рабочие значения.
+// Весь остальной код использует ИМЕННО эти переменные, а не сырые input напрямую,
+// поэтому один и тот же код работает и в простом, и в ручном режиме. ---
+bool     g_effUseRiskPercent;
+double   g_effRiskPercent;
+double   g_effLotSize;
+double   g_effATRSLMultiplier;
+bool     g_effUseMoneyTP;
+double   g_effTargetProfitMoney;
+double   g_effMinScoreToTrade;
+int      g_effMaxOpenPositions;
+int      g_effMaxTradesPerDay;
+double   g_effDailyLossLimitPercent;
+double   g_effMaxDrawdownPercent;
+double   g_effMaxTotalRiskPercent;
+bool     g_effIgnoreSoftFilters = false; // "Истеричка" (п.17): true = игнорировать время/новости/волатильность/издержки-vs-TP
+// По просьбе пользователя (только "Истеричка"): при сигнале открываем СРАЗУ обе
+// стороны (BUY и SELL) вместо выбора одной по большему score. У каждой ноги —
+// ОБЫЧНЫЙ SL/TP/BE/трейлинг/Profit Lock, риском управляет штатный стоп-лосс.
+bool     g_effHedgeBothDirections = false;
+string   g_activeProfileName = "";
+
+// --- ускорение (п.16): не пересчитываем дашборд/тяжёлые проверки чаще, чем нужно глазу ---
+ulong    g_lastDashboardMs = 0;
+
+// --- Режим рынка (п.18): подтверждённое состояние + счётчик подтверждения кандидата ---
+ENUM_MARKET_REGIME g_currentRegime      = REGIME_UNKNOWN;
+ENUM_MARKET_REGIME g_regimeCandidate    = REGIME_UNKNOWN;
+int                g_regimeCandidateStreak = 0;
+
+// --- Анти-дребезг (п.20): счётчик баров + направление и бар последнего ЗАКРЫТИЯ сделки ---
+int      g_barCounter        = 0;
+int      g_lastCloseDirection = 0;   // 1=закрылась BUY, -1=закрылась SELL, 0=ещё не было сделок
+int      g_lastCloseBarIndex  = -1000;
