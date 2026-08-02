@@ -204,6 +204,7 @@ bool ExecuteMarketOrder(int direction,double lot,double slDist,double tpDist,dou
       if(sent)
       {
          TradesToday++;
+         SaveDailyState(); // п.25: счётчик сделок переживёт перезапуск советника
          g_lastRejectReason="OK";
          PrintFormat("%s | Score %.1f | ATR %.1f | Spread %d | Попытка %d",
                      dirTxt, score, atrPts, (long)SymbolInfoInteger(_Symbol,SYMBOL_SPREAD), attempt);

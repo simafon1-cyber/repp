@@ -117,6 +117,125 @@ void ApplyRiskProfile()
    }
 }
 
+//===================== ДНЕВНОЕ СОСТОЯНИЕ: ПЕРЕЖИВАЕТ ПЕРЕЗАПУСК (п.25) ==
+// Раньше DayStartEquity, TradesToday и пиковая equity жили только в памяти и
+// заново инициализировались в OnInit(). А OnInit() срабатывает не только при
+// перезапуске терминала, но и при СМЕНЕ ТАЙМФРЕЙМА графика и при изменении
+// ЛЮБОГО входного параметра — то есть при самых обычных действиях.
+// В результате дневной лимит убытка и счётчик сделок за день молча обнулялись:
+// советник, потерявший 2.5% за день, после переключения M5->M15 начинал день
+// заново и мог потерять лимит ещё раз.
+// Теперь состояние хранится в глобальных переменных терминала: они переживают
+// перезапуск советника и самого MetaTrader.
+//
+// Equity — величина уровня СЧЁТА, поэтому баланс начала дня и пик общие для
+// всех графиков. Счётчик сделок — свой у каждой пары "инструмент + magic".
+
+// Номер дня по времени сервера (совпадает с логикой CheckNewDay)
+long StateDaySerial()
+{
+   return (long)(TimeTradeServer()/86400);
+}
+
+string StateGVPrefix()
+{
+   return "AISP."+IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))+".";
+}
+
+// Префикс состояния конкретного экземпляра советника: свой для каждой пары
+// "инструмент + MagicNumber". Счётчик сделок, серия убытков и пауза — свои
+// у каждого графика, а equity начала дня общая (это уровень счёта).
+string StateGVInstance()
+{
+   return StateGVPrefix()+_Symbol+"."+IntegerToString(MagicNumber)+".";
+}
+
+string StateGVTradesName()
+{
+   return StateGVInstance()+"trades";
+}
+
+double StateGVGet(const string name,double def)
+{
+   if(!GlobalVariableCheck(name)) return def;
+   return GlobalVariableGet(name);
+}
+
+// Сохраняет текущее дневное состояние (вызывается после каждого изменения)
+void SaveDailyState()
+{
+   string p=StateGVPrefix();
+   GlobalVariableSet(p+"day",     (double)StateDaySerial());
+   GlobalVariableSet(p+"dayeq",   DayStartEquity);
+   GlobalVariableSet(p+"peakeq",  g_peakEquity);
+   GlobalVariableSet(StateGVTradesName(), (double)TradesToday);
+}
+
+// Серия убытков и пауза после неё. Хранятся ОТДЕЛЬНО от дневного состояния:
+// пауза может начаться в 23:00 и закончиться уже на следующий день, поэтому
+// сменой дня она не сбрасывается. Раньше и то и другое жило только в памяти —
+// значит аварийную паузу можно было случайно снять, просто переключив
+// таймфрейм графика (это перезапускает советника).
+void SaveRiskStreakState()
+{
+   string p=StateGVInstance();
+   GlobalVariableSet(p+"losses", (double)g_consecutiveLosses);
+   GlobalVariableSet(p+"pause",  (double)g_pauseUntil);
+}
+
+void LoadRiskStreakState()
+{
+   string p=StateGVInstance();
+   g_consecutiveLosses=(int)StateGVGet(p+"losses",0);
+   g_pauseUntil=(datetime)(long)StateGVGet(p+"pause",0);
+   if(g_consecutiveLosses<0) g_consecutiveLosses=0;
+   if(g_pauseUntil>TimeCurrent())
+      PrintFormat("Восстановлена пауза после серии убытков, до %s",
+                  TimeToString(g_pauseUntil,TIME_DATE|TIME_MINUTES));
+}
+
+// Начинает новый торговый день: запоминает стартовую equity и обнуляет счётчик
+void StartNewDayState()
+{
+   DayStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_peakEquity   = DayStartEquity;
+   TradesToday    = 0;
+   LastTradeDay   = TimeCurrent();
+   SaveDailyState();
+   PrintFormat("Новый торговый день. Equity начала дня: %.2f", DayStartEquity);
+}
+
+// Восстанавливает состояние при запуске советника.
+// Если сохранённое состояние от СЕГОДНЯШНЕГО дня — продолжаем его,
+// иначе начинаем новый день.
+void LoadDailyState()
+{
+   LoadRiskStreakState(); // серия убытков и пауза не зависят от смены дня
+
+   string p=StateGVPrefix();
+   long savedDay=(long)StateGVGet(p+"day",-1);
+
+   if(savedDay==StateDaySerial())
+   {
+      DayStartEquity = StateGVGet(p+"dayeq", 0);
+      g_peakEquity   = StateGVGet(p+"peakeq", 0);
+      TradesToday    = (int)StateGVGet(StateGVTradesName(), 0);
+      LastTradeDay   = TimeCurrent();
+
+      // Подстраховка на случай испорченных значений
+      double equity=AccountInfoDouble(ACCOUNT_EQUITY);
+      if(DayStartEquity<=0) DayStartEquity=equity;
+      if(g_peakEquity<DayStartEquity) g_peakEquity=DayStartEquity;
+      if(TradesToday<0) TradesToday=0;
+
+      PrintFormat("Дневное состояние восстановлено: equity начала дня %.2f, сделок сегодня %d",
+                  DayStartEquity, TradesToday);
+      return;
+   }
+
+   StartNewDayState();
+}
+
 //===================== ПОЗИЦИИ ПО MAGIC ================
 int CountOpenPositions()
 {
@@ -345,7 +464,13 @@ bool MaxDrawdownHit()
 {
    if(!UseMaxDrawdownLimit) return false;
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
-   if(equity>g_peakEquity) g_peakEquity=equity;
+   if(equity>g_peakEquity)
+   {
+      g_peakEquity=equity;
+      // п.25: новый пик сохраняем сразу — иначе после перезапуска советника
+      // просадка считалась бы от заниженного пика и лимит не сработал бы
+      GlobalVariableSet(StateGVPrefix()+"peakeq", g_peakEquity);
+   }
    if(g_peakEquity<=0) return false;
    double dd=(g_peakEquity-equity)/g_peakEquity*100.0;
    return dd >= g_effMaxDrawdownPercent;

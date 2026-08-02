@@ -79,9 +79,11 @@ int OnInit()
    CreateMarketContext(); // п.19: необязательный контекст, ошибка тут не валит EA
    CreateMultiIndicatorHandles(); // MACD/Bollinger/Stochastic, необязательно — ошибка тут не валит EA
 
-   DayStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   g_peakEquity   = DayStartEquity;
-   LastTradeDay   = TimeCurrent();
+   // п.25: дневное состояние восстанавливается из глобальных переменных
+   // терминала. Раньше оно обнулялось при каждом OnInit — то есть при смене
+   // таймфрейма или правке любого параметра дневной лимит убытка начинался
+   // заново. См. LoadDailyState() в RiskManager.mqh.
+   LoadDailyState();
 
    EnsureCSVHeader();
    CreateDashboardButtons(); // "Закрыть прибыльные"/"Закрыть убыточные" (см. Dashboard.mqh)
@@ -130,11 +132,7 @@ void CheckNewDay()
    TimeToStruct(TimeCurrent(), tmNow);
    TimeToStruct(LastTradeDay, tmLast);
    if(tmNow.day!=tmLast.day || tmNow.mon!=tmLast.mon || tmNow.year!=tmLast.year)
-   {
-      TradesToday    = 0;
-      LastTradeDay   = TimeCurrent();
-      DayStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   }
+      StartNewDayState(); // п.25: сохраняет новое состояние в глобальных переменных
 }
 
 //===================== ОСНОВНОЙ ЦИКЛ ====================
@@ -409,5 +407,9 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       }
    }
    else g_consecutiveLosses=0;
+
+   // п.25: серия убытков и пауза сохраняются, чтобы пережить перезапуск
+   // советника (смена таймфрейма, правка параметров, перезапуск терминала)
+   SaveRiskStreakState();
 }
 //+------------------------------------------------------------------+

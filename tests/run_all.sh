@@ -34,6 +34,9 @@ echo " 4/6  Тесты расчёта риска AI Scalper Pro (C++)"
 echo "==================================================="
 if python3 extract_functions.py ../ai_scalper_pro/RiskManager.mqh generated_scalper.h \
         VolumeDigitsOf FloorVolumeToStep GetLossStreakRiskMultiplier CalcLot \
+        StateDaySerial StateGVPrefix StateGVInstance StateGVTradesName StateGVGet \
+        SaveDailyState SaveRiskStreakState LoadRiskStreakState StartNewDayState \
+        LoadDailyState DailyLossLimitHit MaxDrawdownHit LossStreakPauseActive \
    && g++ -std=c++17 -Wall -o test_ai_scalper test_ai_scalper.cpp; then
     ./test_ai_scalper || FAILED=1
 else

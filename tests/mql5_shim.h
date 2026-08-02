@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -126,6 +127,16 @@ inline std::string StringFormat(const std::string &fmt, Args... args) {
     return std::string(buf);
 }
 
+// Печать в журнал советника — в тестах молчит, чтобы не засорять вывод
+extern bool g_shim_verbose;
+template <typename... Args>
+inline void PrintFormat(const std::string &fmt, Args... args) {
+    if (g_shim_verbose) std::cout << "    [лог] " << StringFormat(fmt, args...) << "\n";
+}
+inline void Print(const std::string &msg) {
+    if (g_shim_verbose) std::cout << "    [лог] " << msg << "\n";
+}
+
 inline std::string TimeToString(datetime t, int mode = 0) {
     (void)mode;
     MqlDateTime st;
@@ -145,7 +156,9 @@ inline double MathPow(double a, double b) { return std::pow(a, b); }
 
 // --- Типы MQL5, используемые в извлечённых функциях ---
 typedef std::string string;  // в MQL5 тип называется просто `string`
-#define TIME_MINUTES 0
+#define TIME_MINUTES 1
+#define TIME_DATE 2
+#define TIME_SECONDS 4
 
 enum ENUM_AI_REGIME {
     REGIME_NONE = 0,
@@ -173,6 +186,7 @@ struct FakeTerminal {
     double margin_per_lot = 300.0;
     bool calc_profit_fails = false;
     datetime now = 0;
+    long login = 123456;
 };
 extern FakeTerminal g_fake;
 
@@ -208,6 +222,27 @@ inline double NormalizeDouble(double value, int digits) {
 }
 
 inline datetime TimeCurrent() { return g_fake.now; }
+inline datetime TimeTradeServer() { return g_fake.now; }
+
+// --- Глобальные переменные терминала MT5 ---
+// В MT5 они переживают перезапуск советника и самого терминала; здесь —
+// обычная таблица, которую тест может очистить, имитируя новый запуск.
+extern std::map<std::string, double> g_globals;
+
+inline bool GlobalVariableCheck(const std::string &name) {
+    return g_globals.find(name) != g_globals.end();
+}
+inline double GlobalVariableGet(const std::string &name) {
+    auto it = g_globals.find(name);
+    return it == g_globals.end() ? 0.0 : it->second;
+}
+inline datetime GlobalVariableSet(const std::string &name, double value) {
+    g_globals[name] = value;
+    return g_fake.now;
+}
+
+enum ENUM_ACCOUNT_INFO_INTEGER { ACCOUNT_LOGIN = 0 };
+inline long AccountInfoInteger(ENUM_ACCOUNT_INFO_INTEGER) { return g_fake.login; }
 
 extern string _Symbol;
 

@@ -18,6 +18,21 @@ string g_lastRejectReason        = "";
 
 string _Symbol = "EURUSD";
 FakeTerminal g_fake;
+std::map<std::string, double> g_globals;
+bool g_shim_verbose = false;
+
+// Состояние дня, которое теперь должно переживать перезапуск советника
+double DayStartEquity = 0;
+double g_peakEquity = 0;
+int    TradesToday = 0;
+datetime LastTradeDay = 0;
+long   MagicNumber = 777;
+bool   UseDailyLossLimit = true;
+bool   UseMaxDrawdownLimit = true;
+double g_effDailyLossLimitPercent = 3.0;
+double g_effMaxDrawdownPercent = 10.0;
+datetime g_pauseUntil = 0;
+int PauseHoursAfterLossStreak = 4;
 
 // Заглушки, не используемые извлечёнными функциями
 string InpGoldSessionStartLondon = "";
@@ -48,6 +63,13 @@ static int g_failed = 0, g_passed = 0;
 static void check(bool ok, const std::string &name, const std::string &detail = "") {
     if (ok) { ++g_passed; std::cout << "  OK   " << name << "\n"; }
     else { ++g_failed; std::cout << "  СБОЙ " << name << (detail.empty() ? "" : "  -> " + detail) << "\n"; }
+}
+
+// Момент времени UTC для тестов
+static datetime utc(int y, int mo, int d, int h, int mi) {
+    MqlDateTime st = {};
+    st.year = y; st.mon = mo; st.day = d; st.hour = h; st.min = mi; st.sec = 0;
+    return StructToTime(st);
 }
 
 static void reset() {
@@ -181,6 +203,152 @@ int main() {
     lot = CalcLot(0.0020);
     check(lot <= 0.05 + 1e-9, "потолок объёма брокера соблюдается",
           "получено " + std::to_string(lot));
+
+    std::cout << "\n=== 7. Дневное состояние переживает перезапуск советника ===\n";
+    {
+        // Имитация: OnInit() вызывается заново при смене таймфрейма или
+        // правке любого параметра. Раньше это молча обнуляло дневной лимит.
+        auto restart_ea = [&]() { LoadDailyState(); };
+
+        g_globals.clear();
+        g_fake = FakeTerminal();
+        g_fake.now = utc(2026, 3, 10, 9, 0);
+        g_fake.equity = 10000.0;
+        TradesToday = 0;
+
+        restart_ea();  // первый запуск
+        check(std::fabs(DayStartEquity - 10000.0) < 1e-9,
+              "первый запуск: equity начала дня записана",
+              std::to_string(DayStartEquity));
+
+        // Торговали, потеряли 2.5%, сделали 7 сделок
+        TradesToday = 7;
+        SaveDailyState();
+        g_fake.equity = 9750.0;
+
+        // Пользователь переключил таймфрейм -> OnInit сработал заново
+        DayStartEquity = 0; g_peakEquity = 0; TradesToday = 0;  // память очищена
+        restart_ea();
+
+        check(std::fabs(DayStartEquity - 10000.0) < 1e-9,
+              "после перезапуска equity начала дня СОХРАНИЛАСЬ (было: обнулялась)",
+              std::to_string(DayStartEquity));
+        check(TradesToday == 7, "счётчик сделок за день сохранился",
+              std::to_string(TradesToday));
+
+        // Дневной лимит должен видеть реальную потерю 2.5%, а не ноль
+        g_effDailyLossLimitPercent = 2.0;
+        check(DailyLossLimitHit(),
+              "дневной лимит 2% срабатывает на реальной потере 2.5%");
+
+        // А если бы состояние обнулилось — лимит бы не сработал
+        DayStartEquity = g_fake.equity;
+        check(!DailyLossLimitHit(),
+              "проверка теста: при обнулённом состоянии лимит НЕ срабатывает (старое поведение)");
+        restart_ea();
+
+        std::cout << "\n=== 8. Новый день начинается заново ===\n";
+        g_fake.now = utc(2026, 3, 11, 9, 0);   // следующий день
+        g_fake.equity = 9750.0;
+        restart_ea();
+        check(std::fabs(DayStartEquity - 9750.0) < 1e-9,
+              "новый день: equity начала дня взята заново",
+              std::to_string(DayStartEquity));
+        check(TradesToday == 0, "новый день: счётчик сделок обнулён",
+              std::to_string(TradesToday));
+        g_effDailyLossLimitPercent = 2.0;
+        check(!DailyLossLimitHit(), "новый день: лимит убытка снят");
+
+        std::cout << "\n=== 9. Разделение состояния между счетами и парами ===\n";
+        // Счётчик сделок — свой у каждой пары "инструмент + magic"
+        TradesToday = 5; SaveDailyState();
+        std::string nameEur = StateGVTradesName();
+        _Symbol = "XAUUSD";
+        std::string nameGold = StateGVTradesName();
+        check(nameEur != nameGold, "у разных инструментов разные счётчики");
+        TradesToday = 0;
+        restart_ea();
+        check(TradesToday == 0, "золото не видит счётчик EURUSD",
+              std::to_string(TradesToday));
+        _Symbol = "EURUSD";
+        restart_ea();
+        check(TradesToday == 5, "EURUSD помнит свой счётчик",
+              std::to_string(TradesToday));
+
+        // Другой счёт — полностью отдельное состояние
+        std::string prefixA = StateGVPrefix();
+        g_fake.login = 999999;
+        std::string prefixB = StateGVPrefix();
+        check(prefixA != prefixB, "у разных счетов разные имена переменных");
+        g_fake.login = 123456;
+
+        std::cout << "\n=== 10. Пик equity для контроля просадки ===\n";
+        g_globals.clear();
+        g_fake.now = utc(2026, 3, 12, 9, 0);
+        g_fake.equity = 10000.0;
+        restart_ea();
+        g_fake.equity = 12000.0;
+        g_effMaxDrawdownPercent = 10.0;
+        MaxDrawdownHit();                       // фиксирует новый пик 12000
+        check(std::fabs(g_peakEquity - 12000.0) < 1e-9, "новый пик записан",
+              std::to_string(g_peakEquity));
+
+        g_peakEquity = 0;                       // память очищена перезапуском
+        restart_ea();
+        check(std::fabs(g_peakEquity - 12000.0) < 1e-9,
+              "пик сохранился после перезапуска", std::to_string(g_peakEquity));
+
+        g_fake.equity = 10500.0;                // просадка 12.5% от пика
+        check(MaxDrawdownHit(),
+              "просадка считается от НАСТОЯЩЕГО пика, а не от заниженного");
+    }
+
+    std::cout << "\n=== 11. Пауза после серии убытков переживает перезапуск ===\n";
+    {
+        g_globals.clear();
+        g_fake = FakeTerminal();
+        g_fake.now = utc(2026, 3, 13, 20, 0);
+        g_fake.equity = 10000.0;
+        LoadDailyState();
+
+        // Сработала серия убытков: пауза на 4 часа
+        g_consecutiveLosses = 0;
+        g_pauseUntil = g_fake.now + 4 * 3600;
+        SaveRiskStreakState();
+        check(LossStreakPauseActive(), "пауза активна сразу после срабатывания");
+
+        // Пользователь переключил таймфрейм — советник перезапустился
+        g_pauseUntil = 0;
+        g_consecutiveLosses = 0;
+        LoadDailyState();
+        check(LossStreakPauseActive(),
+              "пауза ПЕРЕЖИЛА перезапуск (было: снималась переключением таймфрейма)");
+
+        // Серия убытков тоже восстанавливается
+        g_consecutiveLosses = 3;
+        SaveRiskStreakState();
+        g_consecutiveLosses = 0;
+        LoadDailyState();
+        check(g_consecutiveLosses == 3, "серия убытков восстановлена",
+              std::to_string(g_consecutiveLosses));
+        check(GetLossStreakRiskMultiplier() < 1.0,
+              "значит и сниженный риск после убытков сохраняется");
+
+        // Пауза заканчивается по времени, а не по перезапуску
+        g_fake.now += 5 * 3600;
+        check(!LossStreakPauseActive(), "через 5 часов пауза закончилась сама");
+
+        // Смена дня не должна снимать паузу, если она ещё идёт
+        g_fake.now = utc(2026, 3, 13, 23, 30);
+        g_pauseUntil = g_fake.now + 2 * 3600;   // пауза уходит за полночь
+        SaveRiskStreakState();
+        g_fake.now = utc(2026, 3, 14, 0, 30);   // наступил следующий день
+        g_pauseUntil = 0;
+        LoadDailyState();                        // начнётся новый день
+        check(LossStreakPauseActive(),
+              "пауза, начатая вечером, действует и после полуночи");
+        check(TradesToday == 0, "при этом новый день начат: счётчик сделок обнулён");
+    }
 
     std::cout << "\n===========================================\n";
     std::cout << "Пройдено: " << g_passed << ", провалено: " << g_failed << "\n";
