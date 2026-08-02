@@ -58,9 +58,9 @@ python3 test_scalper_bridge.py || FAILED=1
 
 echo
 echo "==================================================="
-echo " 7/7  Тесты программы Trader (счета, пароли, процессы)"
+echo " 7/7  Тесты многосчётности (счета, шифрование, процессы)"
 echo "==================================================="
-python3 test_trader_app.py || FAILED=1
+python3 test_multi_account.py || FAILED=1
 
 echo
 if [ "$FAILED" -eq 0 ]; then
