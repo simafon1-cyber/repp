@@ -506,6 +506,21 @@ def _clear_remembered_password():
         pass
 
 
+# Разделы вкладки "Настройка": 118 параметров в 25 группах — в одном списке
+# их не найти. Раскладываем по смыслу на несколько подвкладок.
+CONFIG_SECTIONS = [
+    ("Торговля", ["Общее", "Часы торговли", "Лот", "Score-фильтр"]),
+    ("Сигнал", ["Индикаторы", "Price Action / откат", "Объём", "Доп. индикаторы",
+                "Собственная стратегия", "Режим рынка", "Контекст рынка",
+                "Анти-'зеркало' фильтры", "Автонастройка под инструмент"]),
+    ("Риск", ["Стопы / TP", "Break Even", "Трейлинг-стоп", "Profit Lock",
+                      "Просадка / серии убытков", "Издержки", "Частичное закрытие"]),
+    ("Защита", ["Защитные проверки", "Новости (пороги)"]),
+    ("AI-сигнал", ["AI-сигнал"]),
+    ("Обучение", ["Автообучение", "Автообновление"]),
+]
+
+
 class App:
     def __init__(self):
         self.root = tk.Tk()
@@ -1204,9 +1219,121 @@ class App:
         режиме (не прячется), чтобы настройки было невозможно "не найти".
         Сверху — быстрые переключатели (профиль/режим/пауза/звук), ниже —
         полный список input-параметров (как в MQL5-советнике) с прокруткой."""
+        sub = ttk.Notebook(parent)
+        sub.pack(fill="both", expand=True, padx=4, pady=4)
+
+        quick = ttk.Frame(sub)
+        sub.add(quick, text="Быстрый старт")
+        self._build_quick_setup(quick)
+
+        # Точная настройка: каждый раздел — своя подвкладка
+        self.param_vars = {}
+        for title, groups in CONFIG_SECTIONS:
+            frame = ttk.Frame(sub)
+            sub.add(frame, text=title)
+            self._build_tab_params(frame, only_groups=groups)
+
+        extra = ttk.Frame(sub)
+        sub.add(extra, text="Профили")
+        self._build_tab_profiles_and_context(extra)
+
+    # ---- Быстрая настройка: выбрал режим и торгуешь ------------------------
+    QUICK_PRESETS = [
+        ("Осторожный", "conservative", "scalping",
+         "Меньше сделок, но каждая тщательно отобрана.",
+         "риск 0.3% · 1 сделка · дневной лимит 2% · порог сигнала высокий"),
+        ("Сбалансированный", "balanced", "scalping",
+         "Золотая середина. С него стоит начинать.",
+         "риск 0.7% · до 2 сделок · дневной лимит 3% · порог сигнала средний"),
+        ("Активный", "aggressive", "both",
+         "Больше сделок и больше риск. Только на демо, пока не проверите.",
+         "риск 1.2% · до 5 сделок · дневной лимит 5% · ловит и новостные пробои"),
+    ]
+
+    def _build_quick_setup(self, parent):
+        """Три карточки-режима: один щелчок вместо 118 параметров."""
+        ttk.Label(parent, text="Выберите режим торговли",
+                  font=("Segoe UI", 13, "bold")).pack(anchor="w", padx=12, pady=(14, 2))
+        ttk.Label(parent, foreground="#888", wraplength=820, justify="left",
+                  text="Режим задаёт сразу всё: риск на сделку, число одновременных "
+                       "сделок, дневной лимит убытка и строгость отбора сигналов. "
+                       "Точная настройка каждого параметра — на соседних вкладках, "
+                       "но начинать с неё не обязательно."
+                  ).pack(anchor="w", padx=12, pady=(0, 12))
+
+        cards = ttk.Frame(parent)
+        cards.pack(fill="x", padx=8)
+
+        self.quick_choice = tk.StringVar(value="balanced")
+        current = (control.get_risk_profile() or cfg.RISK_PROFILE).value
+        for _, value, _, _, _ in self.QUICK_PRESETS:
+            if value == current:
+                self.quick_choice.set(value)
+
+        for title, value, mode, summary, details in self.QUICK_PRESETS:
+            card = ttk.LabelFrame(cards, text=title)
+            card.pack(side="left", fill="both", expand=True, padx=6, pady=4)
+            ttk.Radiobutton(card, text="Выбрать", value=value,
+                            variable=self.quick_choice).pack(anchor="w", padx=8, pady=(6, 2))
+            ttk.Label(card, text=summary, wraplength=230, justify="left").pack(
+                anchor="w", padx=8, pady=(0, 4))
+            ttk.Label(card, text=details, wraplength=230, justify="left",
+                      foreground="#888", font=("Segoe UI", 8)).pack(
+                anchor="w", padx=8, pady=(0, 8))
+
+        actions = ttk.Frame(parent)
+        actions.pack(fill="x", padx=12, pady=(14, 6))
+        ttk.Button(actions, text="Применить режим",
+                   command=self._apply_quick_preset).pack(side="left")
+        ttk.Button(actions, text="Применить и запустить бота",
+                   command=self._apply_quick_and_start).pack(side="left", padx=8)
+
+        self.quick_status = ttk.Label(parent, text="", foreground="#3fb950",
+                                      wraplength=820, justify="left")
+        self.quick_status.pack(anchor="w", padx=12, pady=(4, 10))
+
+        ttk.Separator(parent, orient="horizontal").pack(fill="x", padx=10, pady=8)
+
+        # Ниже — прежние быстрые переключатели (профиль, режим, пауза, звук)
         self._build_tab_settings(parent)
-        ttk.Separator(parent, orient="horizontal").pack(fill="x", padx=10, pady=(4, 8))
-        self._build_tab_params(parent)
+
+    def _quick_preset_by_value(self, value):
+        for preset in self.QUICK_PRESETS:
+            if preset[1] == value:
+                return preset
+        return self.QUICK_PRESETS[1]
+
+    def _apply_quick_preset(self):
+        """Ставит профиль риска и режим торговли одним действием."""
+        title, value, mode, _, details = self._quick_preset_by_value(self.quick_choice.get())
+        try:
+            for label, pv in PROFILE_OPTIONS:
+                if pv == value:
+                    self.profile_combo.set(label)
+            self._apply_profile()
+            for label, mv in MODE_OPTIONS:
+                if mv == mode:
+                    self.mode_combo.set(label)
+            self._apply_mode()
+        except Exception as e:  # noqa: BLE001
+            log.exception("Не удалось применить быстрый режим")
+            messagebox.showerror(APP_TITLE, f"Не удалось применить режим: {e}")
+            return False
+        self.quick_status.configure(
+            text=f"Режим «{title}» применён: {details}", foreground="#3fb950")
+        return True
+
+    def _apply_quick_and_start(self):
+        if not self._apply_quick_preset():
+            return
+        try:
+            self.start_bot()
+            self.quick_status.configure(
+                text=self.quick_status.cget("text") + "  ·  бот запущен",
+                foreground="#3fb950")
+        except Exception as e:  # noqa: BLE001
+            log.exception("Не удалось запустить бота из быстрой настройки")
+            messagebox.showerror(APP_TITLE, f"Режим применён, но бот не запустился: {e}")
 
     def _build_tab_settings(self, parent):
         pad = {"padx": 10, "pady": 8}
@@ -1263,16 +1390,14 @@ class App:
         control.set_paused(not control.is_paused())
 
     # ---- вкладка "Параметры" (продвинутый режим — все input-параметры, как в советнике) ----
-    def _build_tab_params(self, parent):
-        ttk.Label(parent, text="Расширенные параметры (как input-параметры в советнике)",
-                  font=("Segoe UI", 12, "bold")).pack(padx=10, pady=(10, 2), anchor="w")
-        ttk.Label(parent, foreground="#888", wraplength=800, justify="left", text=
-                  "Здесь можно вручную выставить КАЖДЫЙ параметр торговой логики — так же, "
-                  "как input-параметры MQL5-советника. «Сохранить» применяет изменения сразу, "
-                  "бот подхватит их на лету, без перезапуска. Единственное, что сюда не входит — "
-                  "корреляции MARKET_CONTEXT редактируются отдельно ниже, а брокер/новости/AI-ключи "
-                  "— на своих вкладках."
-                  ).pack(padx=10, pady=(0, 8), anchor="w")
+    def _build_tab_profiles_and_context(self, parent):
+        """Редакторы профилей риска и корреляций — на отдельной подвкладке.
+
+        Раньше они были внутри списка параметров. После разбивки настроек на
+        разделы список строится несколько раз, и редакторы задваивались бы.
+        """
+        ttk.Label(parent, text="Профили риска и связи между инструментами",
+                  font=("Segoe UI", 12, "bold")).pack(padx=10, pady=(10, 6), anchor="w")
 
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True, padx=6, pady=4)
@@ -1337,11 +1462,46 @@ class App:
             anchor="w", padx=6, pady=(4, 10))
 
         # ---- Плоские параметры, сгруппированные по разделам (как в config.py) ----
+
+    def _build_tab_params(self, parent, only_groups=None):
+        """only_groups=None — все параметры; список — только эти группы."""
+        title = "Точная настройка" if only_groups is None else "Параметры раздела"
+        ttk.Label(parent, text=title,
+                  font=("Segoe UI", 12, "bold")).pack(padx=10, pady=(10, 2), anchor="w")
+        ttk.Label(parent, foreground="#888", wraplength=800, justify="left", text=
+                  "Здесь можно вручную выставить КАЖДЫЙ параметр торговой логики — так же, "
+                  "как input-параметры MQL5-советника. «Сохранить» применяет изменения сразу, "
+                  "бот подхватит их на лету, без перезапуска. Единственное, что сюда не входит — "
+                  "корреляции MARKET_CONTEXT редактируются отдельно ниже, а брокер/новости/AI-ключи "
+                  "— на своих вкладках."
+                  ).pack(padx=10, pady=(0, 8), anchor="w")
+
+        outer = ttk.Frame(parent)
+        outer.pack(fill="both", expand=True, padx=6, pady=4)
+        canvas = tk.Canvas(outer, bg="#1b1b1b", highlightthickness=0)
+        vscroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=vscroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vscroll.pack(side="right", fill="y")
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
         groups = {}
         for key, ptype, group, label, choices in ADVANCED_PARAMS:
+            if only_groups is not None and group not in only_groups:
+                continue
             groups.setdefault(group, []).append((key, ptype, label, choices))
 
-        self.param_vars = {}
+        # param_vars общий на все подвкладки: кнопка "Сохранить" на любой из
+        # них записывает ВСЕ изменённые поля, а не только своего раздела
+        if not hasattr(self, "param_vars"):
+            self.param_vars = {}
         for group, items in groups.items():
             box = ttk.LabelFrame(inner, text=group)
             box.pack(fill="x", padx=6, pady=4)
