@@ -2358,6 +2358,31 @@ def _show_login() -> bool:
     return ok_holder["ok"]
 
 
+def _skip_login_unlock() -> bool:
+    """Вход без пароля: пробуем открыть секреты запомненным паролем.
+
+    Секреты (ключи AI, пароль MT5) зашифрованы паролем входа. Если экран
+    входа пропущен, расшифровать их можно только сохранённым паролем
+    («Запомнить пароль» на экране входа, хранится через Windows DPAPI).
+    Если его нет — программа откроется, но зашифрованные ключи останутся
+    недоступны, о чём честно пишем в журнал.
+    """
+    remembered = _load_remembered_password()
+    if not remembered:
+        log.warning("Вход без пароля: сохранённого пароля нет, зашифрованные "
+                    "ключи (AI, пароль MT5) останутся недоступны. Введите их "
+                    "заново в настройках или включите REQUIRE_LOGIN.")
+        return False
+    try:
+        secure_store.unlock_config(cfg, remembered)
+        control.set_session_password(remembered)
+        log.info("Вход без пароля: секреты открыты сохранённым паролем.")
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("Вход без пароля: сохранённый пароль не подошёл (%s)", e)
+        return False
+
+
 def main():
     # КРИТИЧНО для собранного .exe: процессы счетов используют multiprocessing,
     # а на Windows дочерний процесс запускается повторным вызовом этого же
@@ -2368,8 +2393,14 @@ def main():
 
     _migrate_legacy_secrets()
     _harden_files()
-    if not _show_login():
-        return
+    # REQUIRE_LOGIN=False — программа открывается без экрана входа.
+    # Удобно, но защита паролем при этом не работает: любой, кто получил
+    # доступ к компьютеру, откроет программу и увидит счета.
+    if getattr(cfg, "REQUIRE_LOGIN", True):
+        if not _show_login():
+            return
+    else:
+        _skip_login_unlock()
     app = App()
     app.run()
 

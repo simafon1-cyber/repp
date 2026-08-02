@@ -13,7 +13,7 @@ state.py — рантайм-состояние программы.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 @dataclass

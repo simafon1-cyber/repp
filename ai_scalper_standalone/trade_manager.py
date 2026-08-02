@@ -12,7 +12,6 @@ import csv
 import logging
 import math
 import os
-import time
 from datetime import datetime
 
 import config as cfg

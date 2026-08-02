@@ -8,7 +8,7 @@ risk_manager.py — сколько и можно ли торговать: про
 """
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import config as cfg
 import mt5_connector as mt5c

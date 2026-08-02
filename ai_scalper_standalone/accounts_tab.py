@@ -16,7 +16,7 @@ from tkinter import messagebox, ttk
 import config as cfg
 from control import control  # объект, а не модуль: см. control.py
 from account_supervisor import AccountSupervisor
-from accounts import (MIN_POLL_MS, Account, AccountStore, migrate_from_config,
+from accounts import (Account, AccountStore, migrate_from_config,
                       resolve_symbols)
 
 # Оформление в тон остальному окну программы
@@ -30,7 +30,10 @@ PROFIT = "#3fb950"
 LOSS = "#f0574a"
 WARNING = "#d9a441"
 
-REFRESH_MS = 500  # как часто перерисовывать вкладку
+REFRESH_MS = 250  # как часто забирать состояние из процессов счетов
+
+# Таблицу позиций перерисовываем ТОЛЬКО когда данные изменились: полная
+# перестройка на каждом такте — это и нагрузка, и мигание строк.
 
 STATUS_COLORS = {
     "подключён": PROFIT,
@@ -225,6 +228,8 @@ class AccountsTab:
         self.store = AccountStore()
         self.supervisor = AccountSupervisor()
         self.selected_login: int | None = None
+        self._positions_signature = None   # что уже нарисовано в таблице
+        self._parent = parent
 
         self._load_accounts()
         self._build(parent)
@@ -540,27 +545,42 @@ class AccountsTab:
                             f"Команда закрытия отправлена на счетов: {sent}")
 
     # ---------- обновление ----------
+    def _is_visible(self) -> bool:
+        """Видна ли вкладка сейчас. Рисовать скрытое — пустая трата времени."""
+        try:
+            return bool(self._parent.winfo_ismapped())
+        except Exception:  # noqa: BLE001
+            return True
+
     def _tick(self):
         try:
+            # Очередь забираем ВСЕГДА: иначе состояние счетов устареет и
+            # накопится в очереди, пока вкладка закрыта
             self.supervisor.pump()
-            self._refresh_rows()
-            self._refresh_details()
-            self._refresh_summary()
+            if self._is_visible():
+                self._refresh_rows()
+                self._refresh_details()
+                self._refresh_summary()
         except Exception:  # noqa: BLE001
             pass  # сбой отрисовки не должен ронять всё окно программы
         self.root.after(REFRESH_MS, self._tick)
 
     def _refresh_rows(self):
+        existing = set(self.tree.get_children())
         for account in self.store.accounts:
             iid = str(account.login)
-            if iid not in self.tree.get_children():
+            if iid not in existing:
                 continue
             state = self.supervisor.state(account.login)
             status = state.status
             if self.supervisor.is_running(account.login) and self.supervisor.is_stale(account.login):
                 status = "нет ответа"
-            self.tree.item(iid, values=(account.name or f"Счёт {account.login}", status,
-                                        money(state.profit) if state.connected else "—"))
+            values = (account.name or f"Счёт {account.login}", status,
+                      money(state.profit) if state.connected else "—")
+            # Пишем только если значения реально изменились: лишний вызов
+            # item() перерисовывает строку и сбрасывает выделение
+            if tuple(self.tree.item(iid, "values")) != values:
+                self.tree.item(iid, values=values)
 
     def _refresh_summary(self):
         totals = self.supervisor.totals()
@@ -620,6 +640,17 @@ class AccountsTab:
         self._refresh_positions(state)
 
     def _refresh_positions(self, state):
+        # Подпись данных: если ничего не изменилось, таблицу не трогаем.
+        # Раньше она полностью перестраивалась 2 раза в секунду — это
+        # заметная нагрузка и мигание выделенной строки.
+        signature = (self.selected_login,
+                     tuple((p["ticket"], p["price_current"], p["profit"],
+                            p["sl"], p["tp"], p["volume"])
+                           for p in state.positions))
+        if signature == self._positions_signature:
+            return
+        self._positions_signature = signature
+
         self.positions.delete(*self.positions.get_children())
         for p in state.positions:
             tag = "profit" if p["profit"] > 0 else "loss" if p["profit"] < 0 else ""
