@@ -186,3 +186,61 @@ def migrate_from_config(cfg_module, store: AccountStore, password: str, salt: st
     )
     store.add(account, password, salt)
     return True
+
+
+# ===========================================================================
+# СОПОСТАВЛЕНИЕ ПАР С ИМЕНАМИ БРОКЕРА
+#
+# Одна и та же пара у разных брокеров называется по-разному: EURUSD,
+# EURUSDs, EURUSD.a, EURUSDm, EURUSD_i. Поэтому список пар берётся у самого
+# брокера (см. account_supervisor.refresh_symbols), а желаемые имена
+# сопоставляются с ним здесь.
+# ===========================================================================
+
+
+def _normalize(name: str) -> str:
+    """EURUSD.a -> EURUSDA, eur/usd -> EURUSD. Для сравнения имён."""
+    return "".join(ch for ch in name.upper() if ch.isalnum())
+
+
+def resolve_symbol(wanted: str, available: list) -> str | None:
+    """Находит имя пары у брокера по желаемому имени.
+
+    Порядок: точное совпадение, затем совпадение без учёта регистра и
+    разделителей, затем имя брокера, начинающееся с желаемого (суффикс).
+    Из нескольких подходящих берётся самое короткое — у него минимальный
+    суффикс, то есть это базовая пара, а не производная.
+    """
+    if not wanted or not available:
+        return None
+
+    if wanted in available:
+        return wanted
+
+    target = _normalize(wanted)
+    if not target:
+        return None
+
+    exact = [a for a in available if _normalize(a) == target]
+    if exact:
+        return min(exact, key=len)
+
+    # EURUSD -> EURUSDs / EURUSD.a: имя брокера начинается с желаемого
+    prefixed = [a for a in available if _normalize(a).startswith(target)]
+    if prefixed:
+        return min(prefixed, key=len)
+
+    return None
+
+
+def resolve_symbols(wanted: list, available: list) -> tuple:
+    """Сопоставляет список пар. Возвращает (соответствия, ненайденные)."""
+    mapping = {}
+    missing = []
+    for name in wanted or []:
+        found = resolve_symbol(name, available)
+        if found:
+            mapping[name] = found
+        else:
+            missing.append(name)
+    return mapping, missing

@@ -16,7 +16,8 @@ from tkinter import messagebox, ttk
 import config as cfg
 from control import control  # объект, а не модуль: см. control.py
 from account_supervisor import AccountSupervisor
-from accounts import MIN_POLL_MS, Account, AccountStore, migrate_from_config
+from accounts import (MIN_POLL_MS, Account, AccountStore, migrate_from_config,
+                      resolve_symbols)
 
 # Оформление в тон остальному окну программы
 BG = "#1b1b1b"
@@ -73,10 +74,12 @@ class AccountDialog(tk.Toplevel):
         ("poll_interval_ms", "Интервал опроса, мс", "100"),
     ]
 
-    def __init__(self, master, account: Account | None = None):
+    def __init__(self, master, account: Account | None = None,
+                 broker_symbols: list | None = None):
         super().__init__(master)
         self.result: Account | None = None
         self.account = account or Account()
+        self.broker_symbols = list(broker_symbols or [])
 
         self.title("Изменить счёт" if account else "Добавить счёт")
         self.configure(bg=BG)
@@ -112,6 +115,30 @@ class AccountDialog(tk.Toplevel):
                 entry.insert(0, str(value))
 
         row = len(self.FIELDS) + 2
+
+        # Пары подтягиваются от самого брокера: у разных брокеров одна и та же
+        # пара называется по-разному (EURUSD, EURUSDs, EURUSD.a)
+        picker = tk.Frame(self, bg=BG)
+        picker.grid(row=row, column=0, columnspan=2, sticky="ew", padx=18, pady=(2, 0))
+        if self.broker_symbols:
+            tk.Label(picker, text=f"Пары брокера ({len(self.broker_symbols)}):",
+                     bg=BG, fg=FG_MUTED, font=("Segoe UI", 8)).pack(side="left")
+            self.symbol_pick = ttk.Combobox(picker, values=self.broker_symbols,
+                                            width=18, state="readonly")
+            self.symbol_pick.pack(side="left", padx=6)
+            tk.Button(picker, text="Добавить", command=self._add_picked, bg=BG_CARD,
+                      fg=FG, relief="flat", font=("Segoe UI", 8), padx=8, pady=2,
+                      activebackground="#2e2e2e", activeforeground=FG).pack(side="left")
+        else:
+            self.symbol_pick = None
+            tk.Label(picker, wraplength=430, justify="left", bg=BG, fg=FG_DIM,
+                     font=("Segoe UI", 8),
+                     text="Список пар брокера появится здесь, когда счёт будет "
+                          "запущен хотя бы раз: программа спрашивает его у "
+                          "терминала. Пока можно вписать имена вручную."
+                     ).pack(side="left")
+
+        row += 1
         tk.Label(self, text="Пусто в поле «Свой terminal64.exe» — счёт будет "
                             "опрашиваться по очереди с другими такими же: один "
                             "терминал MT5 держит только один счёт одновременно.",
@@ -136,6 +163,21 @@ class AccountDialog(tk.Toplevel):
         self.columnconfigure(1, weight=1)
         self.entries["name"].focus_set()
 
+    def _add_picked(self):
+        """Добавляет выбранную пару брокера в поле инструментов."""
+        if self.symbol_pick is None:
+            return
+        chosen = self.symbol_pick.get().strip()
+        if not chosen:
+            return
+        entry = self.entries["symbols"]
+        current = [s.strip() for s in entry.get().split(",") if s.strip()]
+        if chosen in current:
+            return
+        current.append(chosen)
+        entry.delete(0, "end")
+        entry.insert(0, ", ".join(current))
+
     def _save(self):
         acc = Account()
         try:
@@ -157,6 +199,17 @@ class AccountDialog(tk.Toplevel):
         if problems:
             self.error.configure(text="Не хватает данных: " + ", ".join(problems))
             return
+
+        # Пользователь мог вписать EURUSD, а у брокера пара зовётся EURUSDs —
+        # подставляем настоящее имя, иначе сделок по ней не будет
+        if self.broker_symbols and acc.symbols:
+            mapping, missing = resolve_symbols(acc.symbols, self.broker_symbols)
+            acc.symbols = [mapping.get(name, name) for name in acc.symbols]
+            if missing:
+                self.error.configure(
+                    text="У брокера нет таких пар: " + ", ".join(missing) +
+                         ". Проверьте написание или выберите из списка выше.")
+                return
 
         acc.enabled = self.account.enabled
         acc.magic = self.account.magic
@@ -355,8 +408,21 @@ class AccountsTab:
         return self.store.find(self.selected_login)
 
     # ---------- действия со счётом ----------
+    def _broker_symbols(self, login: int | None) -> list:
+        """Пары, которые ЭТОТ счёт подтянул от своего брокера."""
+        if login is None:
+            return []
+        return list(self.supervisor.state(login).available_symbols or [])
+
     def _add(self):
-        dialog = AccountDialog(self.root)
+        # При добавлении нового счёта брокер ещё неизвестен: показываем пары
+        # запущенного счёта, если такой есть — чаще всего брокер тот же
+        known = []
+        for account in self.store.accounts:
+            known = self._broker_symbols(account.login)
+            if known:
+                break
+        dialog = AccountDialog(self.root, broker_symbols=known)
         self.root.wait_window(dialog)
         if dialog.result is None:
             return
@@ -376,7 +442,8 @@ class AccountsTab:
         if self.supervisor.is_running(account.login):
             messagebox.showwarning("Счёт запущен", "Сначала остановите счёт.")
             return
-        dialog = AccountDialog(self.root, account)
+        dialog = AccountDialog(self.root, account,
+                               broker_symbols=self._broker_symbols(account.login))
         self.root.wait_window(dialog)
         if dialog.result is None:
             return
@@ -526,6 +593,8 @@ class AccountsTab:
             text += " · счёт выключен"
         if not account.runs_in_parallel():
             text += " · общий терминал (опрос по очереди)"
+        if state.available_symbols:
+            text += f" · пар у брокера: {len(state.available_symbols)}"
         if state.error:
             text += f"\n{state.error}"
         if state.trading_blocked:

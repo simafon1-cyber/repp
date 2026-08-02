@@ -31,6 +31,12 @@ except ImportError:  # не Windows или пакет не установлен
 # Если от процесса нет вестей дольше этого времени — считаем его зависшим
 STALE_SECONDS = 10.0
 
+# Список пар брокера обновляем редко: он почти не меняется, а запрос тяжёлый
+SYMBOLS_REFRESH_SECONDS = 300.0
+# У некоторых брокеров больше тысячи пар — столько гонять через очередь
+# в интерфейс незачем, берём торгуемые и ограничиваем список
+MAX_SYMBOLS = 600
+
 # Команды из интерфейса в процесс
 CMD_STOP = "stop"
 CMD_CLOSE_ALL = "close_all"
@@ -53,6 +59,7 @@ class AccountState:
     margin_free: float = 0.0
     profit: float = 0.0
     positions: list = field(default_factory=list)
+    available_symbols: list = field(default_factory=list)   # пары, доступные у брокера
     day_start_equity: float = 0.0
     daily_pct: float = 0.0
     trading_blocked: bool = False
@@ -95,6 +102,7 @@ class AccountRunner:
         self.day_start: dict[int, float] = {}
         self.day_serial = 0
         self.current_login = 0
+        self.symbols_fetched_at: dict = {}
 
     # ---------- связь с интерфейсом ----------
     def publish(self, login: int) -> None:
@@ -188,6 +196,33 @@ class AccountRunner:
             self.close_where(lambda p: True)
             self.publish(login)
 
+    # ---------- список пар брокера ----------
+    def refresh_symbols(self, login: int) -> None:
+        """Спрашивает у терминала, какие пары доступны на ЭТОМ счёте.
+
+        У разных брокеров разные имена одной и той же пары (EURUSD, EURUSDs,
+        EURUSD.a), поэтому список нужно брать у самого брокера, а не угадывать.
+        """
+        last = self.symbols_fetched_at.get(login, 0.0)
+        if time.time() - last < SYMBOLS_REFRESH_SECONDS:
+            return
+        self.symbols_fetched_at[login] = time.time()
+        try:
+            symbols = mt5.symbols_get()
+        except Exception:  # noqa: BLE001
+            return
+        if not symbols:
+            return
+        names = []
+        for item in symbols:
+            # Пары, по которым торговать нельзя, в списке не нужны
+            if getattr(item, "trade_mode", 1) == 0:
+                continue
+            names.append(item.name)
+            if len(names) >= MAX_SYMBOLS:
+                break
+        self.states[login].available_symbols = sorted(names)
+
     # ---------- чтение состояния ----------
     def refresh(self, account: dict) -> None:
         login = int(account["login"])
@@ -207,6 +242,7 @@ class AccountRunner:
         state.positions = rows
         state.profit = sum(r["profit"] for r in rows)
 
+        self.refresh_symbols(login)
         self.update_day(login, state.equity)
         self.check_daily_limit(login, account)
         self.publish(login)

@@ -18,7 +18,8 @@ sys.path.insert(0, str(BASE.parent / "ai_scalper_standalone"))
 
 import accounts as acc_mod  # noqa: E402
 from account_supervisor import AccountState, AccountSupervisor  # noqa: E402
-from accounts import MIN_POLL_MS, Account, AccountStore, migrate_from_config  # noqa: E402
+from accounts import (MIN_POLL_MS, Account, AccountStore, migrate_from_config,  # noqa: E402
+                      resolve_symbol, resolve_symbols)
 
 PASSWORD = "пароль-входа"
 SALT = "a0d1491a207ae9ecb87b775e065f2fba"
@@ -273,6 +274,67 @@ def test_commands_and_totals() -> None:
     check(sup.totals()["running"] == 0, "остановлены все счета")
 
 
+
+
+def test_symbol_resolution() -> None:
+    print("\n=== 10. Пары подтягиваются от брокера ===")
+    # Одна и та же пара у разных брокеров называется по-разному
+    switch = ["EURUSDs", "XAUUSDs", "GBPUSDs", "BTCUSDs"]
+    exness = ["EURUSD", "XAUUSD", "GBPUSD", "EURUSDm"]
+    icm = ["EURUSD.a", "XAUUSD.a", "GBPUSD.a"]
+
+    check(resolve_symbol("EURUSD", switch) == "EURUSDs",
+          "суффикс s: EURUSD -> EURUSDs", str(resolve_symbol("EURUSD", switch)))
+    check(resolve_symbol("EURUSD", icm) == "EURUSD.a",
+          "суффикс .a: EURUSD -> EURUSD.a", str(resolve_symbol("EURUSD", icm)))
+    check(resolve_symbol("EURUSD", exness) == "EURUSD",
+          "точное имя выигрывает у похожего (EURUSD, а не EURUSDm)",
+          str(resolve_symbol("EURUSD", exness)))
+    check(resolve_symbol("XAUUSDs", switch) == "XAUUSDs",
+          "имя уже правильное — возвращается как есть")
+
+    check(resolve_symbol("eurusds", switch) == "EURUSDs",
+          "регистр не важен", str(resolve_symbol("eurusds", switch)))
+    check(resolve_symbol("EUR/USD", exness) == "EURUSD",
+          "разделители игнорируются", str(resolve_symbol("EUR/USD", exness)))
+
+    check(resolve_symbol("НЕТТАКОЙ", switch) is None, "несуществующая пара -> None")
+    check(resolve_symbol("", switch) is None, "пустое имя -> None")
+    check(resolve_symbol("EURUSD", []) is None, "пустой список брокера -> None")
+
+    # Из нескольких подходящих берём самое короткое: это базовая пара,
+    # а не производная вроде EURUSDs.raw
+    many = ["EURUSDs.raw", "EURUSDs", "EURUSDs.pro"]
+    check(resolve_symbol("EURUSD", many) == "EURUSDs",
+          "из нескольких вариантов берётся базовая пара",
+          str(resolve_symbol("EURUSD", many)))
+
+    print("\n=== 11. Сопоставление списка пар ===")
+    mapping, missing = resolve_symbols(["EURUSD", "XAUUSD", "ЧЕГОНЕТ"], switch)
+    check(mapping == {"EURUSD": "EURUSDs", "XAUUSD": "XAUUSDs"},
+          "найденные пары сопоставлены", str(mapping))
+    check(missing == ["ЧЕГОНЕТ"], "ненайденные возвращаются отдельно", str(missing))
+
+    mapping, missing = resolve_symbols([], switch)
+    check(mapping == {} and missing == [], "пустой запрос -> пустой ответ")
+
+    # Один и тот же список на трёх брокерах даёт три разных результата
+    wanted = ["EURUSD", "XAUUSD"]
+    results = [tuple(resolve_symbols(wanted, b)[0].values()) for b in (switch, exness, icm)]
+    check(len(set(results)) == 3,
+          "один список пар на трёх брокерах даёт три разных набора имён",
+          str(results))
+
+
+def test_symbols_in_state() -> None:
+    print("\n=== 12. Список пар доходит до интерфейса ===")
+    state = AccountState(login=1)
+    check(state.available_symbols == [],
+          "у нового счёта список пар пуст (счёт ещё не запускался)")
+    state.available_symbols = ["EURUSDs", "XAUUSDs"]
+    check(len(state.available_symbols) == 2, "список пар хранится в состоянии счёта")
+
+
 def main_run() -> int:
     test_validation()
     test_parallel_flag()
@@ -281,6 +343,8 @@ def main_run() -> int:
     test_migration()
     test_grouping()
     test_commands_and_totals()
+    test_symbol_resolution()
+    test_symbols_in_state()
 
     print("\n===========================================")
     print(f"Пройдено: {passed}, провалено: {failed}")
