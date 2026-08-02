@@ -92,6 +92,7 @@ def process_closed_deals(acc_state: AccountState, sym_states: dict):
     if deals is None:
         return
 
+    learning_changed = False
     for d in deals:
         if d.magic != cfg.MAGIC_NUMBER:
             continue
@@ -113,6 +114,14 @@ def process_closed_deals(acc_state: AccountState, sym_states: dict):
         # Автообучение: копим окно последних результатов ПО ЭТОМУ символу —
         # см. auto_learning.py (адаптивный вес AI / порог входа по винрейту).
         al.record_trade_result(sym_state, profit)
+
+        # И отдельно — пик прибыли этой сделки в пунктах: сколько рынок
+        # РЕАЛЬНО дал, прежде чем развернуться. По медиане таких пиков бот сам
+        # подбирает, куда ставить тейк-профит (learned_profit_points).
+        peak = tm.pop_closed_peak(d.position_id)
+        if peak is not None:
+            al.record_trade_peak(sym_state, peak)
+        learning_changed = True
 
         acc_state.total_trades += 1
         if profit >= 0:
@@ -140,6 +149,13 @@ def process_closed_deals(acc_state: AccountState, sym_states: dict):
             sym_state.consecutive_losses = 0
 
         tm.log_trade_csv("CLOSE", d.symbol, "CLOSE", d.price, 0, 0, d.volume, 0, profit)
+
+    # Выученное сохраняем сразу после закрытия сделки, а не при выходе из
+    # программы: аварийное завершение (сбой питания, "снять задачу") не должно
+    # стирать накопленную статистику — иначе бот вечно остаётся в фазе
+    # "копит данные". Файл маленький, закрытия сделок редкие.
+    if learning_changed:
+        al.save_learning_state(sym_states)
 
 
 def _refresh_mt5_history_cache():
@@ -254,7 +270,8 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     sym_state.last_atr_value = atr_value  # кэш для _fast_position_monitor()
 
     # Ведём уже открытые позиции на КАЖДОМ опросе, не только на новый бар
-    tm.manage_open_positions(symbol, atr_value, point, positions=all_positions)
+    tm.manage_open_positions(symbol, atr_value, point, positions=all_positions,
+                             learned_tp_points=al.learned_profit_points(sym_state, 0.0))
 
     last_bar_time = df_raw.iloc[-1]["time"]
     is_new_bar = sym_state.last_bar_time is None or last_bar_time != sym_state.last_bar_time
@@ -757,6 +774,9 @@ def reload_config_if_changed(sym_states: dict):
         if sym not in sym_states:
             if mt5c.ensure_symbol(sym):
                 sym_states[sym] = SymbolState(symbol=sym)
+                # Если по этому символу уже торговали раньше — поднимаем его
+                # статистику обучения из файла, а не начинаем с нуля.
+                al.load_learning_state({sym: sym_states[sym]})
                 log.info("Новый символ %s подключен на лету (добавлен в config.py).", sym)
             else:
                 log.warning("Новый символ %s из config.py недоступен у брокера — пропущен.", sym)
@@ -859,7 +879,8 @@ def _fast_position_monitor(sym_states, stop_event, total_seconds: float):
                 if atr_value <= 0:
                     continue  # ещё не было ни одного полного прохода по этому символу
                 point = mt5c.get_symbol_point(sym)
-                tm.manage_open_positions(sym, atr_value, point, positions=sym_positions)
+                tm.manage_open_positions(sym, atr_value, point, positions=sym_positions,
+                                         learned_tp_points=al.learned_profit_points(st, 0.0))
         except Exception as e:
             log.exception("Ошибка быстрого мониторинга позиций: %s", e)
 
@@ -893,6 +914,11 @@ def main(stop_event=None, start_dashboard: bool = True):
         log.error("Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.")
         mt5c.disconnect()
         return
+
+    # Возвращаем статистику обучения с прошлого запуска — без этого окно
+    # результатов обнулялось при каждом старте и бот никогда не доходил до
+    # AUTO_LEARNING_MIN_TRADES (см. auto_learning.load_learning_state).
+    al.load_learning_state(sym_states)
 
     if cfg.USE_WEB_DASHBOARD:
         if start_dashboard:
@@ -963,6 +989,14 @@ def main(stop_event=None, start_dashboard: bool = True):
     except KeyboardInterrupt:
         log.info("Остановлено пользователем (Ctrl+C).")
     finally:
+        # Штатное завершение — сохраняем выученное ещё раз. Основное
+        # сохранение идёт по факту каждой закрытой сделки (см.
+        # process_closed_deals), это добор на случай правок в окнах обучения
+        # без закрытия сделок.
+        try:
+            al.save_learning_state(sym_states)
+        except Exception as e:
+            log.warning("Не удалось сохранить статистику обучения при выходе: %s", e)
         mt5c.disconnect()
 
 
