@@ -235,3 +235,215 @@ def describe(strategy: Strategy) -> str:
             f"Когда уместна: {strategy.when}.\n"
             f"Осторожно: {strategy.caution}.\n"
             f"Меняет параметров: {len(safe_params(strategy))}.")
+
+
+# ===========================================================================
+# СИГНАЛЬНЫЕ ФУНКЦИИ СТРАТЕГИЙ
+#
+# Раньше стратегия была только набором настроек. Теперь у каждой есть своя
+# оценка сигнала: она смотрит на те же посчитанные индикаторы, но по своей
+# логике, и добавляет баллы к общему score — так же, как это делают
+# custom_strategy.py и AI-сигнал.
+#
+# Оценка ограничена диапазоном 0..25 и только ДОБАВЛЯЕТ баллы, поэтому
+# стратегия не может протолкнуть сделку в обход остальных фильтров: порог
+# входа, режим рынка, спред, новости и лимиты риска проверяются как обычно.
+# ===========================================================================
+
+SCORE_MAX = 25.0
+
+
+def _clamp(value: float, lo: float = 0.0, hi: float = SCORE_MAX) -> float:
+    return max(lo, min(hi, value))
+
+
+def _last(df, column: str, default: float = 0.0) -> float:
+    """Последнее значение колонки; 0, если колонки нет или данных мало."""
+    try:
+        if column not in df.columns or len(df) == 0:
+            return default
+        value = float(df[column].iloc[-1])
+        return default if value != value else value  # отсекаем NaN
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def score_trend_follow(direction: int, df, atr_value: float) -> float:
+    """По тренду: EMA выстроены по направлению, ADX подтверждает силу.
+
+    Чем дальше цена ушла от медленной EMA в сторону сделки и чем выше ADX,
+    тем больше баллов. Против направления EMA баллов не даём вовсе.
+    """
+    ema_fast = _last(df, "ema_fast")
+    ema_slow = _last(df, "ema_slow")
+    close = _last(df, "close")
+    adx_value = _last(df, "adx")
+    if not (ema_fast and ema_slow and close and atr_value > 0):
+        return 0.0
+
+    aligned = (ema_fast > ema_slow) if direction > 0 else (ema_fast < ema_slow)
+    if not aligned:
+        return 0.0  # сделка против тренда — эта стратегия её не поддерживает
+
+    beyond = (close - ema_slow) if direction > 0 else (ema_slow - close)
+    if beyond <= 0:
+        return 0.0
+
+    distance_score = _clamp(beyond / atr_value * 8.0, 0, 14)
+    strength_score = _clamp((adx_value - 20.0) * 0.8, 0, 11)
+    return _clamp(distance_score + strength_score)
+
+
+def score_mean_reversion(direction: int, df, atr_value: float) -> float:
+    """Возврат к среднему: входим ПРОТИВ перегретого движения.
+
+    Покупка ждёт цену у нижней полосы Боллинджера с перепроданным RSI,
+    продажа — у верхней с перекупленным. Сильный тренд гасит оценку:
+    в тренде «перегретость» может длиться очень долго.
+    """
+    close = _last(df, "close")
+    bb_mid = _last(df, "bb_mid")
+    bb_upper = _last(df, "bb_upper")
+    bb_lower = _last(df, "bb_lower")
+    rsi_value = _last(df, "rsi", 50.0)
+    stoch_k = _last(df, "stoch_k", 50.0)
+    adx_value = _last(df, "adx")
+    if not (close and bb_mid and bb_upper and bb_lower):
+        return 0.0
+
+    half_width = (bb_upper - bb_lower) / 2.0
+    if half_width <= 0:
+        return 0.0
+
+    # Насколько цена отклонилась от середины в НУЖНУЮ для входа сторону
+    if direction > 0:
+        deviation = (bb_mid - close) / half_width      # цена ниже середины
+        oversold = _clamp((35.0 - rsi_value) * 0.5, 0, 7)
+        stoch_extreme = _clamp((25.0 - stoch_k) * 0.2, 0, 4)
+    else:
+        deviation = (close - bb_mid) / half_width      # цена выше середины
+        oversold = _clamp((rsi_value - 65.0) * 0.5, 0, 7)
+        stoch_extreme = _clamp((stoch_k - 75.0) * 0.2, 0, 4)
+
+    if deviation <= 0:
+        return 0.0
+
+    deviation_score = _clamp(deviation * 14.0, 0, 14)
+    raw = deviation_score + oversold + stoch_extreme
+
+    # Сильный тренд — главная опасность этой стратегии: гасим оценку
+    if adx_value > 30:
+        raw *= 0.4
+    elif adx_value > 25:
+        raw *= 0.7
+    return _clamp(raw)
+
+
+def score_breakout(direction: int, df, atr_value: float) -> float:
+    """Пробой: цена вышла за границу недавнего диапазона сильной свечой.
+
+    Смотрим на максимум/минимум последних баров (без текущего), силу тела
+    свечи и расширение диапазона — вялый выход за границу не считается.
+    """
+    lookback = 20
+    try:
+        if len(df) < lookback + 2 or atr_value <= 0:
+            return 0.0
+        window = df.iloc[-(lookback + 1):-1]
+        close = float(df["close"].iloc[-1])
+        open_ = float(df["open"].iloc[-1]) if "open" in df.columns else close
+        high = float(df["high"].iloc[-1])
+        low = float(df["low"].iloc[-1])
+        prior_high = float(window["high"].max())
+        prior_low = float(window["low"].min())
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+    if direction > 0:
+        beyond = close - prior_high
+    else:
+        beyond = prior_low - close
+    if beyond <= 0:
+        return 0.0  # границу не пробили
+
+    breakout_score = _clamp(beyond / atr_value * 12.0, 0, 13)
+
+    # Свеча пробоя должна быть уверенной: крупное тело, небольшие тени
+    candle_range = high - low
+    body = abs(close - open_)
+    body_score = _clamp((body / candle_range) * 8.0, 0, 8) if candle_range > 0 else 0.0
+
+    # Расширение диапазона: интерес к движению, а не вялое сползание
+    try:
+        ranges = (df["high"] - df["low"]).iloc[-(lookback + 1):]
+        avg_range = float(ranges.iloc[:-1].mean())
+        expansion = _clamp((candle_range / avg_range - 1.0) * 6.0, 0, 4) if avg_range > 0 else 0.0
+    except Exception:  # noqa: BLE001
+        expansion = 0.0
+
+    return _clamp(breakout_score + body_score + expansion)
+
+
+def score_careful_scalp(direction: int, df, atr_value: float) -> float:
+    """Осторожный скальп: баллы только при совпадении ТРЁХ условий сразу.
+
+    Тренд по EMA, подтверждение MACD и RSI не в зоне разворота. Если хотя бы
+    одно не выполнено — ноль. Отсюда и малое число сделок.
+    """
+    ema_fast = _last(df, "ema_fast")
+    ema_slow = _last(df, "ema_slow")
+    macd_hist = _last(df, "macd_hist")
+    rsi_value = _last(df, "rsi", 50.0)
+    adx_value = _last(df, "adx")
+    if not (ema_fast and ema_slow):
+        return 0.0
+
+    if direction > 0:
+        conditions = (ema_fast > ema_slow, macd_hist > 0, 45 <= rsi_value <= 68)
+    else:
+        conditions = (ema_fast < ema_slow, macd_hist < 0, 32 <= rsi_value <= 55)
+
+    if not all(conditions):
+        return 0.0
+    return _clamp(10.0 + _clamp((adx_value - 22.0) * 0.9, 0, 15))
+
+
+def score_balanced_hybrid(direction: int, df, atr_value: float) -> float:
+    """Универсальная: своей оценки не добавляет.
+
+    Логика программы уже сбалансирована, дополнительное мнение только
+    сместило бы её. Возвращаем 0 — работает штатный скоринг.
+    """
+    return 0.0
+
+
+SIGNAL_FUNCTIONS = {
+    "balanced_hybrid": score_balanced_hybrid,
+    "trend_follow": score_trend_follow,
+    "mean_reversion": score_mean_reversion,
+    "breakout": score_breakout,
+    "careful_scalp": score_careful_scalp,
+}
+
+
+def calc_strategy_score(key: str, direction: int, df, atr_value: float) -> float:
+    """Оценка активной стратегии. Неизвестный ключ = 0, без ошибки."""
+    fn = SIGNAL_FUNCTIONS.get(key)
+    if fn is None:
+        return 0.0
+    try:
+        return _clamp(float(fn(direction, df, atr_value)))
+    except Exception:  # noqa: BLE001
+        return 0.0  # сбой в стратегии не должен ронять торговый цикл
+
+
+def apply_strategy_score(score: float, contribution: float, weight: float) -> float:
+    """Добавляет вклад стратегии к общему score, не выходя за 0..100.
+
+    Только ДОБАВЛЯЕТ: стратегия не может обнулить сигнал, посчитанный
+    остальной логикой, и не может протолкнуть вход в обход фильтров.
+    """
+    if contribution <= 0 or weight <= 0:
+        return score
+    bonus = contribution / SCORE_MAX * weight
+    return max(0.0, min(100.0, score + bonus))

@@ -65,8 +65,13 @@ jobs:
           --collect-all cryptography
           desktop_app.py
 
-      - name: Положить config.py рядом с .exe
-        run: copy config.py dist\config.py
+      - name: Подготовить config.py
+        # В репозитории лежит только config.py.example (настоящий содержит
+        # ключи и в git не хранится) — установщику нужен обычный config.py
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "config.py")) { Copy-Item "config.py.example" "config.py" }
+          Copy-Item "config.py" "dist\config.py" -Force
 
       - name: Проверить, что файл собрался
         shell: pwsh
@@ -77,6 +82,23 @@ jobs:
           Write-Host "Размер AI_Scalper_Pro.exe: $mb МБ"
           if ($mb -lt 5) { throw "Файл подозрительно маленький ($mb МБ) — сборка неполная" }
 
+      - name: Собрать установщик AI_Scalper_Setup.exe
+        # Inno Setup предустановлен на образах windows-latest.
+        # Если его не окажется — не валим сборку: сам .exe уже готов.
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Inno Setup не найден — установщик пропущен, .exe собран"
+            exit 0
+          }
+          & $iscc "installer.iss"
+          if (Test-Path "installer_output\AI_Scalper_Setup.exe") {
+            $mb = [math]::Round((Get-Item "installer_output\AI_Scalper_Setup.exe").Length / 1MB, 1)
+            Write-Host "Установщик собран: $mb МБ"
+          }
+
       - name: Приложить сборку к запуску
         uses: actions/upload-artifact@v4
         with:
@@ -84,7 +106,9 @@ jobs:
           path: |
             ai_scalper_standalone/dist/AI_Scalper_Pro.exe
             ai_scalper_standalone/dist/config.py
+            ai_scalper_standalone/installer_output/AI_Scalper_Setup.exe
           retention-days: 90
+          if-no-files-found: warn
 
       - name: Опубликовать в Releases (только для тегов v*)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -93,8 +117,14 @@ jobs:
           files: |
             ai_scalper_standalone/dist/AI_Scalper_Pro.exe
             ai_scalper_standalone/dist/config.py
+            ai_scalper_standalone/installer_output/AI_Scalper_Setup.exe
           body: |
             Сборка программы AI Scalper Pro для Windows.
 
-            Скачайте `AI_Scalper_Pro.exe` и положите рядом `config.py`.
-            Python на компьютере не нужен.
+            **AI_Scalper_Setup.exe** — установщик: запустите, программа
+            встанет с ярлыками в меню «Пуск» и на рабочем столе.
+
+            **AI_Scalper_Pro.exe** — то же самое без установки. Скачайте
+            и положите рядом `config.py`.
+
+            Python на компьютере не нужен ни в том, ни в другом случае.

@@ -32,6 +32,7 @@ import market_regime as mr
 import ai_signal as ai
 import auto_learning as al
 import custom_strategy as cs
+import strategies as strat
 import multi_indicator as mi
 import news_calendar
 import dashboard_state as ds
@@ -366,6 +367,17 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         # пользователя "добавить в программу, не в советник") — второе,
         # независимое мнение (momentum/ускорение/согласованность/расширение
         # диапазона), подмешивается с ограниченным весом, как AI-сигнал выше.
+        # Мнение выбранной готовой стратегии (strategies.py): у каждой своя
+        # логика оценки — тренд, возврат к среднему, пробой. Только добавляет
+        # баллы, поэтому фильтры и лимиты риска остаются в силе.
+        if getattr(cfg, "USE_STRATEGY_SIGNAL", False):
+            key = getattr(cfg, "ACTIVE_STRATEGY", "balanced_hybrid")
+            weight = float(getattr(cfg, "STRATEGY_SIGNAL_WEIGHT", 12))
+            strat_buy = strat.calc_strategy_score(key, 1, df_ind, atr_value)
+            strat_sell = strat.calc_strategy_score(key, -1, df_ind, atr_value)
+            buy_score = strat.apply_strategy_score(buy_score, strat_buy, weight)
+            sell_score = strat.apply_strategy_score(sell_score, strat_sell, weight)
+
         if cfg.USE_CUSTOM_STRATEGY:
             custom_buy = cs.calc_custom_score(1, df_ind, atr_value)
             custom_sell = cs.calc_custom_score(-1, df_ind, atr_value)

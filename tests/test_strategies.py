@@ -168,11 +168,126 @@ def main_run() -> int:
     test_risk_is_protected()
     test_values_sane()
     test_strategies_differ()
+    test_signal_functions()
 
     print("\n===========================================")
     print(f"Пройдено: {passed}, провалено: {failed}")
     print("===========================================")
     return 1 if failed else 0
+
+
+
+# ===========================================================================
+# Тесты сигнальных функций: у каждой стратегии своя логика оценки
+# ===========================================================================
+
+def _frame(rows):
+    """Мини-таблица свечей с индикаторами (как df_ind в торговом цикле)."""
+    import pandas as pd
+    return pd.DataFrame(rows)
+
+
+def _trending_up(n=40):
+    """Растущий рынок: EMA выстроены вверх, ADX высокий."""
+    rows = []
+    for i in range(n):
+        price = 100 + i * 0.5
+        rows.append({"open": price - 0.2, "high": price + 0.3, "low": price - 0.3,
+                     "close": price, "ema_fast": price - 0.5, "ema_slow": price - 2.0,
+                     "adx": 35.0, "rsi": 62.0, "macd_hist": 0.4,
+                     "bb_mid": price - 1.0, "bb_upper": price + 1.0,
+                     "bb_lower": price - 3.0, "stoch_k": 70.0, "stoch_d": 65.0})
+    return _frame(rows)
+
+
+def _oversold_range(n=40):
+    """Флэт, цена у нижней полосы: родная среда возврата к среднему."""
+    rows = []
+    for i in range(n):
+        price = 100 + (i % 3) * 0.1
+        rows.append({"open": price, "high": price + 0.2, "low": price - 0.2,
+                     "close": price, "ema_fast": price, "ema_slow": price,
+                     "adx": 14.0, "rsi": 22.0, "macd_hist": -0.01,
+                     "bb_mid": price + 2.0, "bb_upper": price + 4.0,
+                     "bb_lower": price - 0.2, "stoch_k": 12.0, "stoch_d": 15.0})
+    return _frame(rows)
+
+
+def _breakout_up(n=40):
+    """Долгий узкий диапазон и резкий выход вверх сильной свечой."""
+    rows = []
+    for i in range(n - 1):
+        rows.append({"open": 100, "high": 100.4, "low": 99.6, "close": 100,
+                     "ema_fast": 100, "ema_slow": 100, "adx": 15.0, "rsi": 50.0,
+                     "macd_hist": 0.0, "bb_mid": 100, "bb_upper": 100.5,
+                     "bb_lower": 99.5, "stoch_k": 50.0, "stoch_d": 50.0})
+    rows.append({"open": 100.1, "high": 102.6, "low": 100.0, "close": 102.5,
+                 "ema_fast": 100.8, "ema_slow": 100.2, "adx": 22.0, "rsi": 68.0,
+                 "macd_hist": 0.5, "bb_mid": 100.2, "bb_upper": 100.8,
+                 "bb_lower": 99.6, "stoch_k": 85.0, "stoch_d": 70.0})
+    return _frame(rows)
+
+
+def test_signal_functions():
+    print("\n=== 7. Сигнальные функции реагируют на «свой» рынок ===")
+    up, flat, brk = _trending_up(), _oversold_range(), _breakout_up()
+
+    # По тренду
+    t_buy = S.calc_strategy_score("trend_follow", 1, up, 1.0)
+    t_sell = S.calc_strategy_score("trend_follow", -1, up, 1.0)
+    check(t_buy > 0, "по тренду: растущий рынок даёт баллы на покупку", str(t_buy))
+    check(t_sell == 0, "по тренду: против тренда баллов НЕТ", str(t_sell))
+    check(t_buy <= S.SCORE_MAX, "оценка не выходит за предел", str(t_buy))
+
+    # Возврат к среднему
+    m_buy = S.calc_strategy_score("mean_reversion", 1, flat, 1.0)
+    m_sell = S.calc_strategy_score("mean_reversion", -1, flat, 1.0)
+    check(m_buy > 0, "возврат к среднему: перепроданность даёт покупку", str(m_buy))
+    check(m_sell == 0, "возврат к среднему: продавать на дне не предлагает", str(m_sell))
+
+    m_in_trend = S.calc_strategy_score("mean_reversion", 1, up, 1.0)
+    check(m_in_trend < m_buy,
+          "возврат к среднему: в сильном тренде оценка ГАСИТСЯ (главная защита)",
+          f"{m_in_trend} против {m_buy}")
+
+    # Пробой
+    b_buy = S.calc_strategy_score("breakout", 1, brk, 1.0)
+    b_flat = S.calc_strategy_score("breakout", 1, flat, 1.0)
+    check(b_buy > 0, "пробой: выход из диапазона даёт баллы", str(b_buy))
+    check(b_flat == 0, "пробой: внутри диапазона баллов нет", str(b_flat))
+
+    # Осторожный скальп — требует ВСЕ условия
+    c_ok = S.calc_strategy_score("careful_scalp", 1, up, 1.0)
+    check(c_ok > 0, "осторожный: все условия совпали — есть баллы", str(c_ok))
+    broken = up.copy()
+    broken.loc[broken.index[-1], "macd_hist"] = -1.0   # ломаем одно условие
+    c_broken = S.calc_strategy_score("careful_scalp", 1, broken, 1.0)
+    check(c_broken == 0, "осторожный: одно условие не выполнено — ноль", str(c_broken))
+
+    # Универсальная не вмешивается
+    check(S.calc_strategy_score("balanced_hybrid", 1, up, 1.0) == 0,
+          "универсальная: своей оценки не добавляет")
+
+    print("\n=== 8. Устойчивость и границы ===")
+    check(S.calc_strategy_score("нет-такой", 1, up, 1.0) == 0,
+          "неизвестная стратегия -> 0, без ошибки")
+    check(S.calc_strategy_score("trend_follow", 1, _frame([]), 1.0) == 0,
+          "пустые данные -> 0, без ошибки")
+    check(S.calc_strategy_score("trend_follow", 1, up, 0) == 0,
+          "нулевой ATR -> 0, без деления на ноль")
+
+    for key in S.SIGNAL_FUNCTIONS:
+        for df in (up, flat, brk):
+            for d in (1, -1):
+                v = S.calc_strategy_score(key, d, df, 1.0)
+                check(0 <= v <= S.SCORE_MAX, f"{key}: оценка в границах 0..25", str(v))
+
+    print("\n=== 9. Стратегия только ДОБАВЛЯЕТ баллы ===")
+    check(S.apply_strategy_score(50.0, 0, 12) == 50.0, "нулевой вклад ничего не меняет")
+    check(S.apply_strategy_score(50.0, 25, 12) == 62.0, "полный вклад добавляет вес")
+    check(S.apply_strategy_score(50.0, 25, 0) == 50.0, "нулевой вес ничего не меняет")
+    check(S.apply_strategy_score(95.0, 25, 30) <= 100.0, "score не превышает 100")
+    check(S.apply_strategy_score(10.0, 25, 12) > 10.0, "оценка никогда не уменьшается")
 
 
 if __name__ == "__main__":

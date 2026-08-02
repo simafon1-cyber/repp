@@ -1296,7 +1296,9 @@ class App:
         strat_row.pack(fill="x", padx=12)
         self.strategy_combo = ttk.Combobox(strat_row, values=strategies_mod.titles(),
                                            state="readonly", width=28)
-        self.strategy_combo.set(strategies_mod.STRATEGIES[0].title)
+        current_key = getattr(cfg, "ACTIVE_STRATEGY", "") or ""
+        current_strategy = strategies_mod.by_key(current_key) or strategies_mod.STRATEGIES[0]
+        self.strategy_combo.set(current_strategy.title)
         self.strategy_combo.pack(side="left")
         self.strategy_combo.bind("<<ComboboxSelected>>", self._on_strategy_pick)
         ttk.Button(strat_row, text="Применить стратегию",
@@ -1345,6 +1347,10 @@ class App:
             for key, value in params.items():
                 literal = str(value) if isinstance(value, bool) else repr(value)
                 _write_config_value(key, literal)
+            # Ключ активной стратегии: по нему торговый цикл выбирает,
+            # чьё мнение подмешивать к оценке сигнала
+            _write_config_value("ACTIVE_STRATEGY", repr(strategy.key))
+            _write_config_value("USE_STRATEGY_SIGNAL", "True")
             _reload_cfg()
         except Exception as e:  # noqa: BLE001
             log.exception("Не удалось применить стратегию")
