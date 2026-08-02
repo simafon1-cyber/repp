@@ -1,0 +1,92 @@
+# Автоматическая сборка AI_Scalper_Pro.exe на серверах GitHub.
+#
+# Зачем: .exe весит ~55 МБ, и если класть его в репозиторий, каждая
+# пересборка добавляет ещё 55 МБ в историю НАВСЕГДА — git хранит все версии.
+# Здесь файл собирается на чистой Windows-машине и прикладывается отдельно:
+# история репозитория остаётся лёгкой.
+#
+# Как забрать готовый .exe:
+#   1. Вкладка Actions -> последний запуск -> раздел Artifacts (хранится 90 дней).
+#   2. Или создайте тег вида v1.0 — тогда .exe попадёт в Releases навсегда.
+
+name: Сборка AI_Scalper_Pro.exe
+
+on:
+  # Кнопка "Run workflow" на вкладке Actions
+  workflow_dispatch:
+  # Тег вида v1.0 -> сборка попадёт в Releases
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    # PyInstaller не умеет собирать exe для Windows из Linux —
+    # нужна именно Windows-машина
+    runs-on: windows-latest
+
+    steps:
+      - name: Забрать исходники
+        uses: actions/checkout@v4
+
+      - name: Установить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Установить зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-build.txt
+
+      - name: Собрать .exe
+        # Команда повторяет build_exe.bat. --exclude-module config: config.py
+        # остаётся обычным файлом рядом с программой, чтобы настройки можно
+        # было менять без пересборки.
+        run: >
+          python -m PyInstaller --noconfirm --onefile --windowed
+          --name "AI_Scalper_Pro"
+          --exclude-module config
+          --collect-all MetaTrader5
+          --collect-all anthropic
+          --collect-all openai
+          --collect-all pystray
+          --collect-all certifi
+          --collect-all cryptography
+          desktop_app.py
+
+      - name: Положить config.py рядом с .exe
+        run: copy config.py dist\config.py
+
+      - name: Проверить, что файл собрался
+        shell: pwsh
+        run: |
+          $exe = "dist\AI_Scalper_Pro.exe"
+          if (-not (Test-Path $exe)) { throw "Сборка не создала $exe" }
+          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "Размер AI_Scalper_Pro.exe: $mb МБ"
+          if ($mb -lt 5) { throw "Файл подозрительно маленький ($mb МБ) — сборка неполная" }
+
+      - name: Приложить сборку к запуску
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI_Scalper_Pro-windows
+          path: |
+            dist/AI_Scalper_Pro.exe
+            dist/config.py
+          retention-days: 90
+
+      - name: Опубликовать в Releases (только для тегов v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/AI_Scalper_Pro.exe
+            dist/config.py
+          body: |
+            Сборка программы AI Scalper Pro для Windows.
+
+            Скачайте `AI_Scalper_Pro.exe` и положите рядом `config.py`.
+            Python на компьютере не нужен.
