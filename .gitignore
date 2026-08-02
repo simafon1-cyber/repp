@@ -38,3 +38,8 @@ tests/generated_scalper.h
 # Счета и пароли — НИКОГДА не в git
 accounts.json
 accounts.tmp
+
+# Артефакты сборки .exe (PyInstaller) — не хранятся в репозитории
+build/
+dist/
+*.spec.bak
