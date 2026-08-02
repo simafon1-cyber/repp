@@ -34,3 +34,7 @@ ai_scalper_pro/bridge/bridge.log
 # Артефакты тестов AI Scalper Pro
 tests/test_ai_scalper
 tests/generated_scalper.h
+
+# Счета и пароли программы Trader — НИКОГДА не в git
+trader_app/accounts.json
+trader_app/*.tmp
