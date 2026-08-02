@@ -1,0 +1,22 @@
+MetaTrader5>=5.0.45
+pandas>=2.0.0
+numpy>=1.24.0
+anthropic>=0.30.0
+openai>=1.30.0
+Flask>=3.0.0
+
+# Для desktop_app.py (окно + значок в трее). Tkinter идёт вместе с Python
+# (ничего доустанавливать не нужно), pystray/Pillow — только для трея;
+# если их не будет, desktop_app.py всё равно запустится, просто без трея.
+pystray>=0.19.0
+Pillow>=10.0.0
+
+# Для вкладки "Новости" (запрос к API календаря, например Finnhub)
+requests>=2.31.0
+
+# Для кнопки "Экспорт в Excel"
+openpyxl>=3.1.0
+
+# Для шифрования секретов в config.py (MT5-пароль, ключи AI/новостей) —
+# см. secure_store.py
+cryptography>=42.0.0
