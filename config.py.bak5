@@ -450,7 +450,7 @@ DASHBOARD_PORT = 5000
 # телефоне спросит их один раз при первом заходе на страницу (стандартное
 # окно авторизации), дальше сам не будет спрашивать до закрытия браузера.
 DASHBOARD_LOGIN = "simafon1@gmail.com"
-DASHBOARD_PASSWORD = ""
+DASHBOARD_PASSWORD = "Diesel343735@"
 
 
 # =====================================================================
@@ -464,5 +464,3 @@ UI_MODE = "simple"
 
 # Звук + всплывающее уведомление при открытии/закрытии сделки, серии убытков и т.д.
 USE_SOUND_NOTIFICATIONS = True
-SECURITY_SALT = 'fc693fc4505cf80d9ed15fd02a3a27ee'
-DASHBOARD_PASSWORD_HASH = '0c1fe42fd7327266e5b68502dd0d6a7a5cc2b0277a99bdf2ced540e4e0ba183f'
