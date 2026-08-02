@@ -302,13 +302,68 @@ def test_wiring() -> None:
     check(fn is not None and "log.warning(\"Telegram" in fn,
           "Отказ подключения только пишется в журнал, торговля продолжается")
 
-    # Секрет api_hash шифруется, как пароль MT5 и ключи AI
+    # Секреты (api_hash, ключ Finnhub) шифруются, как пароль MT5
     gui = (APP / "desktop_app.py").read_text(encoding="utf-8")
-    check("secure_store.encrypt_value(api_hash" in gui, "api_hash шифруется перед записью")
+    gui_tree = ast.parse(gui)
+    saver = None
+    for node in ast.walk(gui_tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "save_sources":
+            saver = ast.get_source_segment(gui, node)
+    check(saver is not None, "Сохранение источников — одной функцией")
+    if saver:
+        check("secure_store.encrypt_value" in saver, "Секреты шифруются перед записью")
+        check("protect(self.tg_api_hash_var" in saver, "api_hash проходит через шифрование")
+        check('_write_config_value("TELEGRAM_ENABLED"' in saver,
+              "Выключатель Telegram сохраняется")
+        check('_write_config_value("NEWS_PROVIDER_CHAIN"' in saver,
+              "Выбор источников календаря сохраняется той же кнопкой")
+        check("tgr.stop()" in saver,
+              "Снятая галочка Telegram останавливает чтение сразу, а не до перезапуска")
     check("TELEGRAM_SESSION_PATH" in (APP / "config.py.example").read_text(encoding="utf-8"),
           "Путь к файлу сессии вынесен в настройки")
     gitignore = (APP.parent / ".gitignore").read_text(encoding="utf-8")
     check("telegram_session" in gitignore, "Файл сессии Telegram не попадает в git")
+
+
+def test_sources_tab() -> None:
+    print("\n[Вкладка «Источники» — одно место для выключателей]")
+
+    gui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    tree = ast.parse(gui)
+    funcs = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+    check("_build_tab_sources" in funcs, "Вкладка собирается")
+    check("save_sources" in funcs, "Есть общая кнопка сохранения")
+    check("refresh_sources_tab" in funcs, "Есть проверка состояния источников")
+    check('"Источники": tab_sources' in gui, "Вкладка зарегистрирована")
+
+    # Настройки НЕ должны остаться продублированными на старых вкладках —
+    # иначе человек поменяет их в одном месте, а действовать будет другое.
+    check("save_news_settings" not in funcs,
+          "Старое сохранение настроек новостей удалено, а не оставлено дублем")
+    check("save_telegram_settings" not in funcs,
+          "Старое сохранение настроек Telegram удалено")
+
+    for name in ("_build_tab_news", "_build_tab_telegram"):
+        body = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                body = ast.get_source_segment(gui, node)
+        check(body is not None, f"{name} найдена")
+        if body:
+            check("news_chain_vars" not in body and "tg_api_hash_var" not in body,
+                  f"{name}: полей настройки больше нет — только показ данных")
+            check("Источник" in body or "«Источники»" in body,
+                  f"{name}: сказано, где искать настройки")
+
+    # Вкладка видна всегда, а не только в продвинутом режиме: спрятать
+    # единственное место выключения источников нельзя.
+    advanced = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "ADVANCED_TAB_NAMES":
+            advanced = ast.literal_eval(node.value)
+    check(advanced is not None and "Источники" not in advanced,
+          "Вкладка «Источники» не спрятана в продвинутый режим", str(advanced))
 
 
 def test_reader_preflight() -> None:
@@ -352,6 +407,7 @@ def main() -> int:
     test_disabled()
     test_no_dangerous_code()
     test_wiring()
+    test_sources_tab()
     test_reader_preflight()
 
     print("\n" + "=" * 62)

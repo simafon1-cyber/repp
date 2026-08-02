@@ -57,6 +57,7 @@ import logging
 import multiprocessing
 import re
 import threading
+import time
 import webbrowser
 from datetime import datetime, timedelta
 import tkinter as tk
@@ -106,6 +107,8 @@ MODE_OPTIONS = [
     ("Оба", "both"),
 ]
 ADVANCED_TAB_NAMES = ["Брокер", "Equity", "Новости", "Сигналы TG", "Chat AI"]
+# "Источники" видна всегда: это единственное место, где источники данных
+# включаются и выключаются — прятать его в продвинутый режим нельзя.
 # График календаря на вкладке "Новости": на сколько часов вперёд смотрим и
 # какой высоты полоса. Больше 24 ч смысла нет — засечки сливаются.
 NEWS_CHART_HOURS = 12
@@ -629,6 +632,7 @@ class App:
         tab_news = ttk.Frame(self.notebook)
         tab_schedule = ttk.Frame(self.notebook)
         tab_tg = ttk.Frame(self.notebook)
+        tab_sources = ttk.Frame(self.notebook)
         tab_chat = ttk.Frame(self.notebook)
         tab_help = ttk.Frame(self.notebook)
 
@@ -637,7 +641,7 @@ class App:
             "Счета": tab_accounts, "Сделки": tab_positions, "Лог": tab_log, "Equity": tab_equity,
             "Настройка": tab_config,
             "Календарь": tab_schedule, "Новости": tab_news,
-            "Сигналы TG": tab_tg, "Chat AI": tab_chat,
+            "Источники": tab_sources, "Сигналы TG": tab_tg, "Chat AI": tab_chat,
             "Как пользоваться": tab_help,
         }
         for name, frame in self.tab_frames.items():
@@ -651,6 +655,7 @@ class App:
         self._build_tab_equity(tab_equity)
         self._build_tab_config(tab_config)
         self._build_tab_schedule(tab_schedule)
+        self._build_tab_sources(tab_sources)
         self._build_tab_telegram(tab_tg)
         self._build_tab_news(tab_news)
         self._build_tab_chat(tab_chat)
@@ -1782,45 +1787,20 @@ class App:
     def _build_tab_news(self, parent):
         pad = {"padx": 10, "pady": 6}
 
-        ttk.Label(parent, text="Источники календаря", font=("Segoe UI", 12, "bold")).pack(**pad)
-        ttk.Label(parent, foreground="#888", wraplength=780, justify="left", text=
-                  "Расписание работы бота — на вкладке «Календарь». Здесь только "
-                  "настройка источников и полный список событий."
+        ttk.Label(parent, text="Предстоящие события", font=("Segoe UI", 12, "bold")).pack(**pad)
+        ttk.Label(parent, foreground="#888", wraplength=800, justify="left", text=
+                  "Полный список новостей. Включить и выключить источники — на вкладке "
+                  "«Источники». Расписание работы бота — на вкладке «Календарь»."
                   ).pack(anchor="w", padx=10)
-        ttk.Label(parent, foreground="#888", wraplength=780, justify="left", text=
-                  "Источники опрашиваются по порядку — берётся первый, который ответил. "
-                  "Календарь MetaTrader 5 бесплатен и без лимитов, но требует запущенного "
-                  "сервиса CalendarExport в терминале. Finnhub работает даже при закрытом "
-                  "терминале, но нужен бесплатный ключ."
-                  ).pack(**pad)
-
-        form = ttk.Frame(parent)
-        form.pack(fill="x", **pad)
-
-        ttk.Label(form, text="Порядок источников:").grid(row=0, column=0, sticky="w", pady=4)
-        self.news_chain_vars = {}
-        chain_frame = ttk.Frame(form)
-        chain_frame.grid(row=0, column=1, sticky="w", pady=4)
-        current_chain = list(news_calendar.news_source_chain())
-        for i, name in enumerate(news_providers.PROVIDERS.keys()):
-            var = tk.BooleanVar(value=name in current_chain)
-            self.news_chain_vars[name] = var
-            title = news_providers.PROVIDER_TITLES.get(name, name)
-            ttk.Checkbutton(chain_frame, text=title, variable=var).grid(row=i, column=0, sticky="w")
-
-        ttk.Label(form, text="Ключ Finnhub:").grid(row=1, column=0, sticky="w", pady=4)
-        keys = getattr(cfg, "NEWS_API_KEYS", {}) or {}
-        self.news_api_key_var = tk.StringVar(value=keys.get("finnhub", ""))
-        ttk.Entry(form, textvariable=self.news_api_key_var, width=40, show="*").grid(row=1, column=1, sticky="w", pady=4)
 
         btn_frame = ttk.Frame(parent)
-        btn_frame.pack(**pad)
-        ttk.Button(btn_frame, text="Сохранить", command=self.save_news_settings).grid(row=0, column=0, padx=5)
-        ttk.Button(btn_frame, text="Обновить календарь", command=self.refresh_news_tab).grid(row=0, column=1, padx=5)
+        btn_frame.pack(anchor="w", **pad)
+        ttk.Button(btn_frame, text="Обновить календарь",
+                   command=self.refresh_news_tab).grid(row=0, column=0)
 
         self.news_status_var = tk.StringVar(value="")
-        ttk.Label(parent, textvariable=self.news_status_var, foreground="#888", wraplength=780,
-                  justify="left").pack(**pad)
+        ttk.Label(parent, textvariable=self.news_status_var, foreground="#888", wraplength=800,
+                  justify="left").pack(anchor="w", **pad)
 
         cols = ("time", "left", "currency", "event", "impact", "actual", "estimate", "prev")
         headings = ("Время", "Осталось", "Валюта", "Событие", "Важность", "Факт", "Прогноз", "Пред.")
@@ -1831,66 +1811,225 @@ class App:
         self.news_tree.column("event", width=220, anchor="w")
         self.news_tree.pack(fill="both", expand=True, padx=10, pady=6)
 
+    # ---- вкладка "Источники" ---------------------------------------------------------
+    def _build_tab_sources(self, parent):
+        """Одно место, где всё включается и выключается.
+
+        Раньше настройки календаря жили на вкладке «Новости», а Telegram — на
+        «Сигналы TG», и чтобы что-то отключить, надо было помнить, где именно
+        оно лежит. Теперь выключатели собраны здесь, а те вкладки показывают
+        только данные."""
+        pad = {"padx": 12, "pady": 4}
+
+        ttk.Label(parent, text="Откуда брать данные",
+                  font=("Segoe UI", 12, "bold")).pack(anchor="w", **pad)
+        ttk.Label(parent, foreground="#888", wraplength=820, justify="left", text=
+                  "Снимите галочку — источник перестанет использоваться. Календарь и "
+                  "сигналы Telegram независимы: выключение одного не трогает другое."
+                  ).pack(anchor="w", **pad)
+
+        # ---------- Календарь новостей ----------
+        cal = ttk.LabelFrame(parent, text=" Календарь новостей ")
+        cal.pack(fill="x", padx=12, pady=(8, 4))
+
+        ttk.Label(cal, foreground="#888", wraplength=780, justify="left", text=
+                  "Опрашиваются по порядку — берётся первый, который ответил."
+                  ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 2))
+
+        self.news_chain_vars = {}
+        self.src_status_vars = {}
+        current_chain = list(news_calendar.news_source_chain())
+        row = 1
+        for name in news_providers.PROVIDERS.keys():
+            var = tk.BooleanVar(value=name in current_chain)
+            self.news_chain_vars[name] = var
+            title = news_providers.PROVIDER_TITLES.get(name, name)
+            ttk.Checkbutton(cal, text=title, variable=var).grid(
+                row=row, column=0, sticky="w", padx=8, pady=2)
+            status = tk.StringVar(value="")
+            self.src_status_vars[name] = status
+            ttk.Label(cal, textvariable=status, foreground="#888").grid(
+                row=row, column=1, sticky="w", padx=8)
+            row += 1
+
+        ttk.Label(cal, text="Ключ Finnhub:").grid(row=row, column=0, sticky="w", padx=8, pady=4)
+        keys = getattr(cfg, "NEWS_API_KEYS", {}) or {}
+        self.news_api_key_var = tk.StringVar(value=keys.get("finnhub", ""))
+        ttk.Entry(cal, textvariable=self.news_api_key_var, width=44, show="*").grid(
+            row=row, column=1, sticky="w", padx=8, pady=4)
+
+        # ---------- Сигналы Telegram ----------
+        tg = ttk.LabelFrame(parent, text=" Сигналы из Telegram ")
+        tg.pack(fill="x", padx=12, pady=(8, 4))
+
+        self.tg_enabled_var = tk.BooleanVar(value=getattr(cfg, "TELEGRAM_ENABLED", False))
+        ttk.Checkbutton(tg, text="Читать сигналы из Telegram", variable=self.tg_enabled_var).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 2))
+
+        ttk.Label(tg, foreground="#888", wraplength=780, justify="left", text=
+                  "Читается входом под ВАШИМ аккаунтом: Telegram запрещает ботам видеть "
+                  "сообщения других ботов. Каналы читаются так же, как боты, но на "
+                  "закрытый канал нужно быть подписанным."
+                  ).grid(row=1, column=0, columnspan=2, sticky="w", padx=8, pady=2)
+
+        ttk.Label(tg, text="Каналы и боты:").grid(row=2, column=0, sticky="w", padx=8, pady=3)
+        self.tg_sources_var = tk.StringVar(
+            value=", ".join(str(x) for x in (getattr(cfg, "TELEGRAM_SOURCES", []) or [])))
+        ttk.Entry(tg, textvariable=self.tg_sources_var, width=54).grid(
+            row=2, column=1, sticky="w", padx=8, pady=3)
+        ttk.Label(tg, foreground="#666", text="через запятую, например:  @signals_channel, @my_crypto_signalsbot"
+                  ).grid(row=3, column=1, sticky="w", padx=8)
+
+        ttk.Label(tg, text="api_id:").grid(row=4, column=0, sticky="w", padx=8, pady=3)
+        self.tg_api_id_var = tk.StringVar(value=str(getattr(cfg, "TELEGRAM_API_ID", 0) or ""))
+        ttk.Entry(tg, textvariable=self.tg_api_id_var, width=22).grid(
+            row=4, column=1, sticky="w", padx=8, pady=3)
+
+        ttk.Label(tg, text="api_hash:").grid(row=5, column=0, sticky="w", padx=8, pady=3)
+        self.tg_api_hash_var = tk.StringVar(value=getattr(cfg, "TELEGRAM_API_HASH", ""))
+        ttk.Entry(tg, textvariable=self.tg_api_hash_var, width=54, show="*").grid(
+            row=5, column=1, sticky="w", padx=8, pady=3)
+        ttk.Label(tg, foreground="#666", text="бесплатно на my.telegram.org -> API development tools"
+                  ).grid(row=6, column=1, sticky="w", padx=8)
+
+        ttk.Label(tg, text="Что сигнал может:").grid(row=7, column=0, sticky="nw", padx=8, pady=(6, 3))
+        self.tg_role_var = tk.StringVar(value=tgs.role())
+        role_box = ttk.Frame(tg)
+        role_box.grid(row=7, column=1, sticky="w", padx=8, pady=(6, 3))
+        for i, (value, title) in enumerate((
+                (tgs.ROLE_SHOW, "Только показывать — на торговлю не влияет"),
+                (tgs.ROLE_VETO, "Может запретить вход"),
+                (tgs.ROLE_SCORE, "Может запретить вход и добавить баллы"))):
+            ttk.Radiobutton(role_box, text=title, value=value,
+                            variable=self.tg_role_var).grid(row=i, column=0, sticky="w")
+
+        ttk.Label(tg, foreground="#e0a355", wraplength=780, justify="left", text=
+                  "Ни в одном режиме чужой сигнал не может открыть сделку, увеличить лот "
+                  "или риск, отодвинуть стоп-лосс и отменить дневной лимит."
+                  ).grid(row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 6))
+
+        self.tg_src_status_var = tk.StringVar(value="")
+        ttk.Label(tg, textvariable=self.tg_src_status_var, foreground="#888",
+                  wraplength=780, justify="left").grid(
+            row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
+
+        # ---------- Кнопки ----------
+        btns = ttk.Frame(parent)
+        btns.pack(anchor="w", **pad)
+        ttk.Button(btns, text="Сохранить всё", command=self.save_sources).grid(row=0, column=0)
+        ttk.Button(btns, text="Войти в Telegram",
+                   command=self.telegram_login).grid(row=0, column=1, padx=6)
+        ttk.Button(btns, text="Проверить источники",
+                   command=self.refresh_sources_tab).grid(row=0, column=2)
+
+        self.refresh_sources_tab()
+
+    def save_sources(self):
+        """Сохраняет обе группы разом — это одна кнопка на всю вкладку."""
+        chain = [name for name, var in self.news_chain_vars.items() if var.get()]
+        tg_on = bool(self.tg_enabled_var.get())
+        sources = [s.strip() for s in self.tg_sources_var.get().split(",") if s.strip()]
+
+        if not chain and not tg_on:
+            if not messagebox.askyesno(
+                    APP_TITLE,
+                    "Выключены ВСЕ источники: и календарь новостей, и Telegram.\n\n"
+                    "Бот продолжит торговать, но перестанет останавливаться перед "
+                    "выходом важных новостей.\n\nВсё равно сохранить?"):
+                return
+
+        try:
+            api_id = int(self.tg_api_id_var.get().strip() or 0)
+        except ValueError:
+            messagebox.showwarning(APP_TITLE, "api_id должен быть числом.")
+            return
+
+        pw = control.get_session_password()
+        salt = getattr(cfg, "SECURITY_SALT", "")
+
+        def protect(value):
+            """Секреты шифруются перед записью в config.py — как пароль MT5."""
+            return secure_store.encrypt_value(value, pw, salt) if (pw and salt and value) else value
+
+        keys = dict(getattr(cfg, "NEWS_API_KEYS", {}) or {})
+        keys["finnhub"] = protect(self.news_api_key_var.get().strip())
+
+        _write_config_value("NEWS_PROVIDER_CHAIN", repr(chain))
+        _write_config_value("NEWS_API_KEYS", repr(keys))
+        _write_config_value("TELEGRAM_ENABLED", repr(tg_on))
+        _write_config_value("TELEGRAM_API_ID", repr(api_id))
+        _write_config_value("TELEGRAM_API_HASH", repr(protect(self.tg_api_hash_var.get().strip())))
+        _write_config_value("TELEGRAM_SOURCES", repr(sources))
+        _write_config_value("TELEGRAM_ROLE", repr(self.tg_role_var.get()))
+        try:
+            _reload_cfg()
+        except Exception:
+            pass
+
+        # Выключили Telegram — останавливаем чтение сразу, а не до перезапуска
+        if not tg_on:
+            tgr.stop()
+
+        messagebox.showinfo(APP_TITLE, "Источники сохранены.")
+        self.refresh_sources_tab()
+        self.refresh_news_tab()
+
+    def refresh_sources_tab(self):
+        """Показывает по каждому источнику, работает он или нет и почему."""
+        chain = list(news_calendar.news_source_chain())
+        keys = getattr(cfg, "NEWS_API_KEYS", {}) or {}
+        for name, var in self.src_status_vars.items():
+            if name not in chain:
+                var.set("выключен")
+                continue
+            if name == "mt5":
+                try:
+                    path = news_providers.mt5_calendar_path()
+                    if os.path.exists(path):
+                        age = (time.time() - os.path.getmtime(path)) / 60.0
+                        var.set(f"файл обновлён {age:.0f} мин назад"
+                                if age <= news_providers.MT5_CALENDAR_MAX_AGE_SECONDS / 60
+                                else f"файл устарел ({age:.0f} мин) — сервис остановлен?")
+                    else:
+                        var.set("файла нет — запустите сервис CalendarExport")
+                except Exception:
+                    # Текст исключения тут не нужен: он повторяет то же самое
+                    # своими словами и вылезает за край окна.
+                    var.set("нет связи с терминалом MT5")
+            elif name == "finnhub":
+                var.set("готов" if keys.get("finnhub") else "нужен ключ")
+            else:
+                var.set("включён")
+
+        if not tgs.enabled():
+            self.tg_src_status_var.set("Выключено.")
+        else:
+            problem = tgr.preflight()
+            if problem:
+                self.tg_src_status_var.set(problem)
+            else:
+                if not tgr.is_running():
+                    tgr.start()
+                st = tgs.status()
+                last = st.get("last_message")
+                tail = f" Последнее сообщение: {last.strftime('%H:%M:%S')}." if last else ""
+                self.tg_src_status_var.set(st.get("detail", "") + tail)
+
     # ---- вкладка "Сигналы TG" --------------------------------------------------------
     def _build_tab_telegram(self, parent):
         pad = {"padx": 10, "pady": 4}
 
         ttk.Label(parent, text="Сигналы из Telegram",
                   font=("Segoe UI", 12, "bold")).pack(anchor="w", **pad)
-
         ttk.Label(parent, foreground="#888", wraplength=800, justify="left", text=
-                  "Telegram запрещает ботам читать сообщения других ботов, поэтому чужой "
-                  "бот-сигнальщик читается входом под ВАШИМ аккаунтом. Нужны api_id и "
-                  "api_hash — их выдают бесплатно на my.telegram.org, раздел "
-                  "«API development tools»."
+                  "Что распознано из каналов и ботов. Подключение и выключатель — "
+                  "на вкладке «Источники»."
                   ).pack(anchor="w", **pad)
-
-        warn = ttk.Label(parent, foreground="#e0a355", wraplength=800, justify="left", text=
-                         "Чужой сигнал НЕ МОЖЕТ: открыть сделку, увеличить лот или риск, "
-                         "отодвинуть стоп-лосс, отменить дневной лимит. Он может только "
-                         "добавить баллы к оценке (с потолком) и запретить вход. "
-                         "Автор сигнала не знает ни вашего депозита, ни ваших лимитов.")
-        warn.pack(anchor="w", **pad)
-
-        form = ttk.Frame(parent)
-        form.pack(fill="x", **pad)
-
-        ttk.Label(form, text="Включить чтение:").grid(row=0, column=0, sticky="w", pady=3)
-        self.tg_enabled_var = tk.BooleanVar(value=getattr(cfg, "TELEGRAM_ENABLED", False))
-        ttk.Checkbutton(form, variable=self.tg_enabled_var).grid(row=0, column=1, sticky="w")
-
-        ttk.Label(form, text="api_id:").grid(row=1, column=0, sticky="w", pady=3)
-        self.tg_api_id_var = tk.StringVar(value=str(getattr(cfg, "TELEGRAM_API_ID", 0) or ""))
-        ttk.Entry(form, textvariable=self.tg_api_id_var, width=20).grid(row=1, column=1, sticky="w")
-
-        ttk.Label(form, text="api_hash:").grid(row=2, column=0, sticky="w", pady=3)
-        self.tg_api_hash_var = tk.StringVar(value=getattr(cfg, "TELEGRAM_API_HASH", ""))
-        ttk.Entry(form, textvariable=self.tg_api_hash_var, width=44,
-                  show="*").grid(row=2, column=1, sticky="w")
-
-        ttk.Label(form, text="Источники (через запятую):").grid(row=3, column=0, sticky="w", pady=3)
-        self.tg_sources_var = tk.StringVar(
-            value=", ".join(str(x) for x in (getattr(cfg, "TELEGRAM_SOURCES", []) or [])))
-        ttk.Entry(form, textvariable=self.tg_sources_var, width=44).grid(row=3, column=1, sticky="w")
-
-        ttk.Label(form, text="Роль сигнала:").grid(row=4, column=0, sticky="w", pady=3)
-        self.tg_role_var = tk.StringVar(value=tgs.role())
-        role_box = ttk.Frame(form)
-        role_box.grid(row=4, column=1, sticky="w")
-        for i, (value, title) in enumerate((
-                (tgs.ROLE_SHOW, "Только показывать (на торговлю не влияет)"),
-                (tgs.ROLE_VETO, "Может запретить вход"),
-                (tgs.ROLE_SCORE, "Может запретить вход и добавить баллы"))):
-            ttk.Radiobutton(role_box, text=title, value=value,
-                            variable=self.tg_role_var).grid(row=i, column=0, sticky="w")
 
         btns = ttk.Frame(parent)
         btns.pack(anchor="w", **pad)
-        ttk.Button(btns, text="Сохранить", command=self.save_telegram_settings).grid(row=0, column=0)
-        ttk.Button(btns, text="Войти в Telegram",
-                   command=self.telegram_login).grid(row=0, column=1, padx=6)
-        ttk.Button(btns, text="Проверить связь",
-                   command=self.refresh_telegram_tab).grid(row=0, column=2)
+        ttk.Button(btns, text="Обновить",
+                   command=self.refresh_telegram_tab).grid(row=0, column=0)
 
         self.tg_status_var = tk.StringVar(value="")
         ttk.Label(parent, textvariable=self.tg_status_var, foreground="#888",
@@ -1900,7 +2039,7 @@ class App:
                   font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10)
         cols = ("time", "instrument", "direction", "text")
         headings = ("Время", "Инструмент", "Направление", "Сообщение")
-        self.tg_tree = ttk.Treeview(parent, columns=cols, show="headings", height=10)
+        self.tg_tree = ttk.Treeview(parent, columns=cols, show="headings", height=12)
         widths = {"time": 80, "instrument": 100, "direction": 110, "text": 430}
         for col, head in zip(cols, headings):
             self.tg_tree.heading(col, text=head)
@@ -1908,34 +2047,6 @@ class App:
                                 anchor="w" if col == "text" else "center")
         self.tg_tree.pack(fill="both", expand=True, padx=10, pady=(2, 8))
 
-        self.refresh_telegram_tab()
-
-    def save_telegram_settings(self):
-        sources = [s.strip() for s in self.tg_sources_var.get().split(",") if s.strip()]
-        try:
-            api_id = int(self.tg_api_id_var.get().strip() or 0)
-        except ValueError:
-            messagebox.showwarning(APP_TITLE, "api_id должен быть числом.")
-            return
-
-        api_hash = self.tg_api_hash_var.get().strip()
-        # api_hash — секрет того же класса, что пароль MT5 и ключи AI:
-        # шифруем перед записью в config.py (см. secure_store.py).
-        pw = control.get_session_password()
-        salt = getattr(cfg, "SECURITY_SALT", "")
-        stored = secure_store.encrypt_value(api_hash, pw, salt) if (pw and salt and api_hash) \
-            else api_hash
-
-        _write_config_value("TELEGRAM_ENABLED", repr(bool(self.tg_enabled_var.get())))
-        _write_config_value("TELEGRAM_API_ID", repr(api_id))
-        _write_config_value("TELEGRAM_API_HASH", repr(stored))
-        _write_config_value("TELEGRAM_SOURCES", repr(sources))
-        _write_config_value("TELEGRAM_ROLE", repr(self.tg_role_var.get()))
-        try:
-            _reload_cfg()
-        except Exception:
-            pass
-        messagebox.showinfo(APP_TITLE, "Настройки Telegram сохранены.")
         self.refresh_telegram_tab()
 
     def telegram_login(self):
@@ -2220,30 +2331,6 @@ class App:
             canvas.create_text(width - right_pad, 8, anchor="ne",
                                text="красное — торговля заблокирована",
                                fill="#8a5560", font=("Segoe UI", 7))
-
-    def save_news_settings(self):
-        chain = [name for name, var in self.news_chain_vars.items() if var.get()]
-        if not chain:
-            messagebox.showwarning(APP_TITLE,
-                                   "Нужен хотя бы один источник календаря, иначе фильтр "
-                                   "новостей работать не сможет.")
-            return
-
-        api_key = self.news_api_key_var.get().strip()
-        keys = dict(getattr(cfg, "NEWS_API_KEYS", {}) or {})
-        # Ключ новостного API тоже шифруется паролем входа перед записью на
-        # диск (см. secure_store.py) — как и пароль MT5.
-        pw = control.get_session_password()
-        salt = getattr(cfg, "SECURITY_SALT", "")
-        keys["finnhub"] = secure_store.encrypt_value(api_key, pw, salt) if (pw and salt) else api_key
-        _write_config_value("NEWS_PROVIDER_CHAIN", repr(chain))
-        _write_config_value("NEWS_API_KEYS", repr(keys))
-        try:
-            _reload_cfg()
-        except Exception:
-            pass
-        messagebox.showinfo(APP_TITLE, "Настройки новостей сохранены.")
-        self.refresh_news_tab()
 
     def refresh_news_tab(self):
         self.news_status_var.set("Загружаю...")
