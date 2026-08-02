@@ -1,1 +1,927 @@
-2026-07-07 22:55:43,700 [INFO] desktop_app: config.py мигрирован на шифрование секретов (первый запуск новой версии программы).
+2026-07-05 22:46:17,551 [INFO] desktop_app: config.py мигрирован на шифрование секретов (первый запуск новой версии программы).
+2026-07-05 22:46:43,877 [INFO] main: Веб-дашборд запущен: http://172.20.11.99:5000 (с телефона — по той же Wi-Fi сети)
+2026-07-05 22:46:43,905 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.20.11.99:5000
+2026-07-05 22:46:43,906 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2026-07-05 22:46:44,299 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-05 22:46:44,315 [INFO] mt5_connector: Подключено к MT5. Счёт 40074000 (SwitchMarkets-Live), баланс 98348.74 USD
+2026-07-05 22:46:44,491 [INFO] main: config.py изменился на диске — настройки перечитаны на лету в 22:46:44, без перезапуска.
+2026-07-05 22:46:48,995 [INFO] anthropic._base_client: Retrying request to /v1/messages in 0.499298 seconds
+2026-07-05 22:46:51,647 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 22:46:51,683 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-05 22:47:22,231 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:47:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:47:22,492 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:47:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:48:22,237 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:48:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:48:22,559 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:48:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:49:22,233 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:49:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:49:22,452 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:49:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:50:06,824 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 22:50:22,255 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:50:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:50:22,458 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:50:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:51:22,234 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:51:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:51:22,446 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:51:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:52:22,227 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:52:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:52:22,430 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:52:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:53:22,230 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:53:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:53:22,427 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:53:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:54:22,230 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:54:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:54:22,448 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:54:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:55:02,473 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 22:55:22,226 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:55:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:55:22,433 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:55:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:56:22,226 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:56:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:56:22,440 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:56:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:57:22,227 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:57:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:57:22,436 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:57:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:58:22,161 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:58:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:58:22,304 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:58:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 22:59:22,235 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:59:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 22:59:22,389 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 22:59:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:00:03,541 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:00:22,228 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:00:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:00:22,437 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:00:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:01:22,234 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:01:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:01:22,458 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:01:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:02:22,228 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:02:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:02:22,438 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:02:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:03:22,335 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:03:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:03:22,571 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:03:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:04:22,217 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:04:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:04:22,455 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:04:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:05:04,451 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:05:22,236 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:05:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:05:22,491 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:05:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:06:22,219 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:06:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:06:22,429 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:06:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:07:22,215 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:07:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:07:22,425 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:07:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:08:22,217 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:08:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:08:22,447 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:08:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:09:22,227 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:09:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:09:22,423 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:09:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:10:05,150 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:10:22,221 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:10:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:10:22,413 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:10:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:11:22,233 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:11:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:11:22,446 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:11:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:12:22,236 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:12:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:12:22,473 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:12:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:13:22,227 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:13:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:13:22,446 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:13:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:14:22,218 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:14:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:14:22,436 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:14:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:15:06,426 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:15:06,430 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-05 23:15:22,229 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:15:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:15:22,445 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:15:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:16:22,228 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:16:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:16:22,438 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:16:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:17:22,229 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:17:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:17:22,445 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:17:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:18:22,172 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:18:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:18:22,320 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:18:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:19:22,216 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:19:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:19:22,375 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:19:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:20:07,211 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:20:22,213 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:20:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:20:22,431 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:20:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:21:22,208 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:21:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:21:22,377 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:21:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:22:22,225 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:22:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:22:22,384 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:22:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:23:22,229 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:23:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:23:22,392 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:23:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:24:22,230 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:24:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:24:22,456 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:24:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:25:03,974 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:25:22,231 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:25:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:25:22,449 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:25:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:26:22,221 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:26:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:26:22,411 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:26:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:27:22,228 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:27:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:27:22,443 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:27:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:28:22,224 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:28:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:28:22,386 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:28:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:29:22,176 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:29:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:29:22,321 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:29:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:30:04,908 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:30:04,912 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-05 23:30:22,220 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:30:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:30:22,398 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:30:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:31:22,171 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:31:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:31:22,320 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:31:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:32:22,225 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:32:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:32:22,386 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:32:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:33:22,218 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:33:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:33:22,449 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:33:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:34:22,238 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:34:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:34:22,449 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:34:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:35:05,662 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:35:22,223 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:35:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:35:22,382 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:35:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:36:22,227 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:36:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:36:22,440 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:36:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:37:22,222 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:37:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:37:22,417 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:37:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:38:22,162 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:38:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:38:22,311 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:38:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:39:22,230 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:39:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:39:22,395 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:39:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:40:06,610 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:40:06,614 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-05 23:40:22,200 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:40:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:40:22,419 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:40:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:41:22,230 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:41:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:41:22,397 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:41:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:42:22,222 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:42:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:42:22,388 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:42:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:43:22,233 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:43:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:43:22,398 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:43:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:44:22,225 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:44:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:44:22,432 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:44:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:45:03,535 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:45:22,223 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:45:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:45:22,430 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:45:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:46:22,220 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:46:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:46:22,437 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:46:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:47:22,228 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:47:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:47:22,388 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:47:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:48:22,213 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:48:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:48:22,381 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:48:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:49:22,230 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:49:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:49:22,394 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:49:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:50:04,604 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:50:22,223 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:50:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:50:22,386 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:50:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:51:22,226 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:51:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:51:22,424 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:51:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:52:22,232 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:52:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:52:22,428 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:52:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:53:22,214 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:53:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:53:22,378 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:53:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:54:22,218 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:54:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:54:22,426 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:54:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:55:06,897 [INFO] anthropic._base_client: Retrying request to /v1/messages in 0.420111 seconds
+2026-07-05 23:55:08,527 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-05 23:55:22,220 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:55:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:55:22,424 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:55:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:56:22,238 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:56:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:56:22,399 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:56:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:57:22,217 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:57:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:57:22,413 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:57:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:58:22,167 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:58:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:58:22,309 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:58:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-05 23:59:22,227 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:59:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-05 23:59:22,452 [INFO] werkzeug: 127.0.0.1 - - [05/Jul/2026 23:59:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:00:05,871 [INFO] anthropic._base_client: Retrying request to /v1/messages in 0.428188 seconds
+2026-07-06 00:00:09,360 [INFO] anthropic._base_client: Retrying request to /v1/messages in 0.834991 seconds
+2026-07-06 00:00:11,626 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:00:11,630 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-06 00:00:22,228 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:00:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:00:22,427 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:00:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:01:22,229 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:01:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:01:22,386 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:01:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:02:22,242 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:02:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:02:22,455 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:02:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:03:22,213 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:03:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:03:22,409 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:03:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:04:22,210 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:04:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:04:22,413 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:04:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:05:08,905 [INFO] anthropic._base_client: Retrying request to /v1/messages in 0.455952 seconds
+2026-07-06 00:05:11,118 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:05:22,252 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:05:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:05:22,515 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:05:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:06:22,247 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:06:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:06:22,441 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:06:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:07:22,228 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:07:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:07:22,431 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:07:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:08:22,256 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:08:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:08:22,458 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:08:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:09:22,208 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:09:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:09:22,414 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:09:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:10:06,659 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:10:06,663 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-06 00:10:22,228 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:10:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:10:22,427 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:10:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:11:22,210 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:11:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:11:22,372 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:11:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:12:22,239 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:12:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:12:22,452 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:12:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:13:22,220 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:13:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:13:22,387 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:13:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:14:22,226 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:14:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:14:22,439 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:14:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:15:07,928 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:15:07,933 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-06 00:15:22,224 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:15:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:15:22,403 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:15:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:16:22,227 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:16:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:16:22,418 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:16:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:17:22,235 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:17:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:17:22,443 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:17:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:18:22,168 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:18:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:18:22,315 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:18:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:19:22,217 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:19:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:19:22,421 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:19:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:20:03,587 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:20:22,223 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:20:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:20:22,431 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:20:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:21:22,228 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:21:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:21:22,392 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:21:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:22:22,228 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:22:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:22:22,439 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:22:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:23:22,211 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:23:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:23:22,401 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:23:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:24:22,212 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:24:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:24:22,430 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:24:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:25:04,548 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:25:22,229 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:25:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:25:22,450 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:25:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:26:22,217 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:26:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:26:22,392 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:26:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:27:22,228 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:27:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:27:22,441 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:27:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:28:22,222 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:28:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:28:22,462 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:28:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:29:22,243 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:29:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:29:22,438 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:29:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:30:05,201 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:30:22,205 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:30:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:30:22,415 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:30:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:31:22,172 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:31:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:31:22,323 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:31:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:32:22,261 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:32:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:32:22,421 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:32:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:33:22,233 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:33:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:33:22,403 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:33:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:34:22,212 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:34:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:34:22,402 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:34:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:35:06,277 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:35:22,235 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:35:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:35:22,397 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:35:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:36:22,225 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:36:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:36:22,442 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:36:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:37:22,217 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:37:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:37:22,384 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:37:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:38:22,167 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:38:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:38:22,313 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:38:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:39:22,229 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:39:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:39:22,439 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:39:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:40:07,260 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:40:07,264 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-06 00:40:22,229 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:40:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:40:22,429 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:40:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:41:22,237 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:41:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:41:22,400 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:41:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:42:22,229 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:42:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:42:22,389 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:42:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:43:22,222 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:43:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:43:22,426 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:43:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:44:22,224 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:44:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:44:22,425 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:44:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:45:03,044 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:45:22,217 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:45:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:45:22,427 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:45:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:46:22,235 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:46:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:46:22,429 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:46:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:47:22,227 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:47:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:47:22,443 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:47:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:48:22,228 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:48:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:48:22,394 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:48:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:49:22,216 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:49:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:49:22,432 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:49:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:50:03,550 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:50:22,226 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:50:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:50:22,396 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:50:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:51:22,224 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:51:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:51:22,432 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:51:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:52:22,218 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:52:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:52:22,387 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:52:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:53:22,225 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:53:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:53:22,429 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:53:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:54:22,256 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:54:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:54:22,471 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:54:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:55:05,632 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 00:55:05,636 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-06 00:55:22,224 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:55:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:55:22,427 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:55:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:56:22,232 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:56:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:56:22,435 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:56:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:57:22,246 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:57:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:57:22,455 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:57:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:58:22,169 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:58:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:58:22,312 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:58:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 00:59:22,234 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:59:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 00:59:22,438 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 00:59:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:00:06,403 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 01:00:22,237 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:00:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:00:22,447 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:00:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:01:22,435 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:01:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:01:22,654 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:01:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:02:22,222 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:02:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:02:22,385 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:02:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:03:22,232 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:03:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:03:22,397 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:03:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:04:22,232 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:04:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:04:22,448 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:04:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:05:07,692 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 01:05:07,696 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-06 01:05:22,222 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:05:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:05:22,455 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:05:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:06:22,233 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:06:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:06:22,439 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:06:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:07:22,217 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:07:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:07:22,419 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:07:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:08:22,230 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:08:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:08:22,440 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:08:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:09:22,217 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:09:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:09:22,383 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:09:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:10:03,494 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 01:10:03,499 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-06 01:10:22,231 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:10:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:10:22,432 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:10:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:11:22,235 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:11:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:11:22,439 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:11:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:12:22,229 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:12:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:12:22,403 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:12:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:13:22,229 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:13:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:13:22,435 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:13:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:14:22,214 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:14:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:14:22,458 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:14:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:15:04,172 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 01:15:22,227 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:15:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:15:22,431 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:15:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:16:22,230 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:16:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:16:22,443 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:16:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:17:22,223 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:17:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:17:22,443 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:17:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:18:22,182 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:18:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:18:22,349 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:18:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:19:22,228 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:19:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:19:22,433 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:19:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:20:06,013 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 01:20:22,236 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:20:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:20:22,394 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:20:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:21:22,269 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:21:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:21:22,471 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:21:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:22:22,229 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:22:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:22:22,428 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:22:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:23:22,245 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:23:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:23:22,480 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:23:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:24:22,238 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:24:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:24:22,456 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:24:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:25:06,750 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 01:25:22,224 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:25:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:25:22,434 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:25:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:26:22,248 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:26:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:26:22,458 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:26:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:27:22,241 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:27:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:27:22,465 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:27:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:28:22,256 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:28:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:28:22,474 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:28:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:29:22,247 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:29:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:29:22,445 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:29:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:30:02,306 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 01:30:22,243 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:30:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:30:22,457 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:30:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:31:22,186 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:31:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:31:22,333 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:31:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:32:22,247 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:32:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:32:22,440 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:32:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:33:22,240 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:33:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:33:22,442 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:33:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:34:22,251 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:34:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:34:22,405 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:34:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:35:22,254 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:35:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:35:22,460 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:35:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:36:22,265 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:36:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:36:22,468 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:36:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:37:22,244 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:37:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:37:22,465 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:37:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:38:22,205 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:38:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:38:22,357 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:38:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:39:22,252 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:39:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:39:22,475 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:39:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:40:22,273 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:40:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:40:22,468 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:40:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:41:22,280 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:41:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:41:22,494 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:41:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:42:22,255 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:42:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:42:22,433 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:42:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:43:22,261 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:43:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:43:22,421 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:43:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:44:22,264 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:44:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:44:22,467 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:44:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:45:22,251 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:45:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:45:22,450 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:45:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:46:22,267 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:46:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:46:22,425 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:46:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:47:22,251 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:47:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:47:22,478 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:47:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:48:22,270 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:48:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:48:22,446 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:48:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:49:22,274 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:49:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:49:22,489 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:49:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:50:22,264 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:50:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:50:22,429 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:50:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:51:22,262 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:51:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:51:22,480 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:51:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:52:22,266 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:52:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:52:22,466 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:52:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:53:22,257 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:53:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:53:22,469 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:53:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:54:22,267 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:54:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:54:22,467 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:54:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:55:05,513 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 01:55:22,266 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:55:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:55:22,466 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:55:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:56:22,256 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:56:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:56:22,474 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:56:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:57:22,276 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:57:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:57:22,508 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:57:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:58:22,218 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:58:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:58:22,367 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:58:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 01:59:22,267 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:59:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 01:59:22,472 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 01:59:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 02:00:07,864 [INFO] anthropic._base_client: Retrying request to /v1/messages in 0.441791 seconds
+2026-07-06 02:00:10,689 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 02:00:10,694 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-06 02:00:22,270 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:00:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 02:00:22,485 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:00:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 02:01:22,275 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:01:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 02:01:22,469 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:01:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 02:02:22,278 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:02:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 02:02:22,442 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:02:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 02:03:22,267 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:03:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 02:03:22,460 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:03:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 02:04:22,285 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:04:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 02:04:22,494 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:04:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 02:05:06,635 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-06 02:05:22,309 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:05:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 02:05:22,566 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:05:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-06 02:06:22,269 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:06:22] "GET /api/status HTTP/1.1" 200 -
+2026-07-06 02:06:22,465 [INFO] werkzeug: 127.0.0.1 - - [06/Jul/2026 02:06:22] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 18:52:08,186 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 18:52:08,197 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-07 18:52:57,352 [INFO] main: config.py изменился на диске — настройки перечитаны на лету в 18:52:57, без перезапуска.
+2026-07-07 18:55:07,096 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:00:04,725 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:02:14,652 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:02:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:02:14,897 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:02:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:03:14,613 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:03:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:03:14,831 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:03:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:04:14,704 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:04:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:04:15,049 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:04:15] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:05:06,522 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:05:14,695 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:05:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:05:14,958 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:05:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:06:14,662 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:06:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:06:14,916 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:06:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:07:14,673 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:07:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:07:14,950 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:07:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:08:14,678 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:08:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:08:14,935 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:08:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:09:14,655 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:09:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:09:14,900 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:09:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:10:03,958 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:10:14,646 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:10:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:10:14,932 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:10:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:11:14,716 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:11:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:11:14,930 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:11:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:12:14,666 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:12:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:12:14,999 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:12:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:13:14,597 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:13:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:13:14,810 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:13:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:14:14,635 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:14:14] "GET /api/status HTTP/1.1" 200 -
+2026-07-07 19:14:14,858 [INFO] werkzeug: 127.0.0.1 - - [07/Jul/2026 19:14:14] "GET /api/log HTTP/1.1" 200 -
+2026-07-07 19:14:33,808 [WARNING] main: Торговля разрешена не полностью: В терминале MetaTrader 5 ВЫКЛЮЧЕНА кнопка «Algo Trading» (AutoTrading) на панели инструментов — включи её, должна стать зелёной.
+2026-07-07 19:14:51,650 [INFO] main: Остановлено (запрос от десктоп-приложения).
+2026-07-07 19:20:56,228 [INFO] main: Веб-дашборд запущен: http://10.0.0.140:5000 (с телефона — по той же Wi-Fi сети)
+2026-07-07 19:20:56,253 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://10.0.0.140:5000
+2026-07-07 19:20:56,253 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2026-07-07 19:20:56,639 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 19:20:56,652 [INFO] mt5_connector: Подключено к MT5. Счёт 40074000 (SwitchMarkets-Live), баланс 97856.69 USD
+2026-07-07 19:20:59,726 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:20:59,774 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-07 19:22:31,441 [WARNING] main: Торговля разрешена не полностью: В терминале MetaTrader 5 ВЫКЛЮЧЕНА кнопка «Algo Trading» (AutoTrading) на панели инструментов — включи её, должна стать зелёной.
+2026-07-07 19:25:05,369 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:30:07,075 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:35:02,798 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:40:04,112 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:45:05,998 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:50:02,480 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 19:50:02,484 [ERROR] main: Ошибка обработки XAUUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-07 19:55:03,632 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:10:03,617 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:15:04,908 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:20:06,290 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:20:06,295 [ERROR] main: Ошибка обработки BTCUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-07 20:25:07,194 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:30:03,444 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:35:04,312 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:35:04,316 [ERROR] main: Ошибка обработки BTCUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-07 20:40:06,118 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:45:03,577 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:50:04,040 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:55:04,925 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 20:55:04,930 [ERROR] main: Ошибка обработки BTCUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-07 21:00:06,828 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 21:00:06,833 [ERROR] main: Ошибка обработки BTCUSDs: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'
+Traceback (most recent call last):
+  File "main.py", line 887, in main
+  File "main.py", line 483, in process_symbol
+  File "trade_manager.py", line 101, in execute_market_order
+  File "mt5_connector.py", line 197, in send_market_order
+AttributeError: module 'MetaTrader5' has no attribute 'SYMBOL_FILLING_FOK'. Did you mean: 'ORDER_FILLING_FOK'?
+2026-07-07 21:05:02,548 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 21:10:03,219 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 21:15:04,178 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-07-07 22:25:14,191 [INFO] main: Веб-дашборд запущен: http://10.0.0.25:5000 (с телефона — по той же Wi-Fi сети)
+2026-07-07 22:25:14,202 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://10.0.0.25:5000
+2026-07-07 22:25:14,202 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2026-07-07 22:25:14,598 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:17,480 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:17,480 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:17,480 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:17,480 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:17,480 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:17,480 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:17,480 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:17,480 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:17,480 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:17,481 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:34,491 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:34,498 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:34,498 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:34,498 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:34,498 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:34,498 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:34,498 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:34,498 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:34,498 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:34,498 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:34,498 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:36,388 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:36,395 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:36,395 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:36,395 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:36,395 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:36,395 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:36,395 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:36,395 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:36,395 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:36,395 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:36,395 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:50,007 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:50,014 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:50,014 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:50,014 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:50,015 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:50,015 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:50,015 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:50,015 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:50,015 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:50,015 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:50,015 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:56,732 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:56,739 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:56,740 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:56,740 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:56,740 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:56,740 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:56,740 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:56,740 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:56,740 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:56,740 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:56,740 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:56,771 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:56,778 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:56,778 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:56,778 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:56,778 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:56,778 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:56,779 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:56,779 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:56,779 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:56,779 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:56,779 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:57,949 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:57,954 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:57,955 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:57,955 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:57,955 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:57,955 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:57,955 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:57,955 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:57,955 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:57,955 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:57,955 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:58,951 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:58,956 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:58,956 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:58,956 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:58,956 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:58,957 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:58,957 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:58,957 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:58,957 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:58,957 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:58,957 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:59,202 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:59,208 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:59,208 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,208 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,208 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,208 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,208 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,208 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,208 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,208 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,208 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:59,400 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:59,405 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:59,405 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,405 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,405 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,405 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,406 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,406 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,406 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,406 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,406 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:59,598 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:59,603 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:59,603 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,603 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,603 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,603 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,604 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,604 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,604 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,604 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,604 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:25:59,808 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:25:59,814 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:25:59,814 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,814 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,814 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,814 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,814 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,814 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,815 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:25:59,815 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:25:59,815 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:26:00,867 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:26:00,874 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:26:00,874 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:26:00,874 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:26:00,874 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:26:00,874 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:26:00,874 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:26:00,874 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:26:00,874 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:26:00,874 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:26:00,875 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:20,300 [INFO] main: Веб-дашборд запущен: http://10.0.0.25:5000 (с телефона — по той же Wi-Fi сети)
+2026-07-07 22:52:20,313 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://10.0.0.25:5000
+2026-07-07 22:52:20,313 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2026-07-07 22:52:20,718 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:23,429 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:23,429 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:23,429 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:23,430 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:23,430 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:23,430 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:23,430 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:23,430 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:23,430 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:23,430 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:29,670 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:29,676 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:29,676 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:29,677 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:29,677 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:29,677 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:29,677 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:29,677 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:29,677 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:29,677 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:29,677 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:30,873 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:30,879 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:30,880 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:30,880 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:30,880 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:30,880 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:30,880 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:30,880 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:30,880 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:30,880 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:30,880 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:31,080 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:31,087 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:31,087 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:31,087 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:31,087 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:31,087 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:31,087 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:31,087 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:31,087 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:31,087 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:31,087 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:31,326 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:31,332 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:31,332 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:31,333 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:31,333 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:31,333 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:31,333 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:31,333 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:31,333 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:31,333 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:31,333 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:32,252 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:32,259 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:32,259 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:32,259 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:32,259 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:32,259 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:32,259 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:32,259 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:32,259 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:32,259 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:32,259 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:32,449 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:32,455 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:32,455 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:32,455 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:32,455 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:32,455 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:32,456 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:32,456 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:32,456 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:32,456 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:32,456 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:54,174 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:54,180 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:54,180 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,181 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,181 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,181 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,181 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,181 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,181 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,181 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,181 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:54,514 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:54,520 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:54,521 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,521 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,521 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,521 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,521 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,521 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,521 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,521 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,521 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:54,665 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:54,672 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:54,672 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,672 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,672 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,672 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,672 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,672 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,672 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,672 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,673 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
+2026-07-07 22:52:54,867 [INFO] main: Запуск AI Scalper Standalone | LIVE_TRADING=True | режим=scalping | профиль=hysteric | символы=['XAUUSDs', 'EURUSDs', 'GBPUSDs', 'BTCUSDs']
+2026-07-07 22:52:54,875 [INFO] mt5_connector: Подключено к MT5. Счёт 5052757935 (MetaQuotes-Demo), баланс 100000.00 USD
+2026-07-07 22:52:54,875 [WARNING] mt5_connector: Символ 'XAUUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,875 [WARNING] main: Символ XAUUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,875 [WARNING] mt5_connector: Символ 'EURUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,875 [WARNING] main: Символ EURUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,875 [WARNING] mt5_connector: Символ 'GBPUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,875 [WARNING] main: Символ GBPUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,875 [WARNING] mt5_connector: Символ 'BTCUSDs' не найден у брокера — пропускаю.
+2026-07-07 22:52:54,875 [WARNING] main: Символ BTCUSDs недоступен у брокера — исключён из торговли.
+2026-07-07 22:52:54,875 [ERROR] main: Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.
