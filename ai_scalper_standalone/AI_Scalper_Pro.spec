@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = []
+hiddenimports=['accounts_tab', 'accounts', 'account_supervisor', ]
 tmp_ret = collect_all('MetaTrader5')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('anthropic')

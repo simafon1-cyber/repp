@@ -28,7 +28,7 @@ echo [3/4] Building AI_Scalper_Pro.exe (this takes a couple of minutes)...
 REM --exclude-module config: config.py stays OUTSIDE the exe as a plain editable
 REM file next to the program (needed for hot-reload of settings and so you can
 REM change symbols/profile without rebuilding).
-python -m PyInstaller --noconfirm --onefile --windowed --name "AI_Scalper_Pro" --exclude-module config --collect-all MetaTrader5 --collect-all anthropic --collect-all openai --collect-all pystray --collect-all certifi --collect-all cryptography desktop_app.py
+python -m PyInstaller --noconfirm --onefile --windowed --name "AI_Scalper_Pro" --exclude-module config --hidden-import accounts_tab --hidden-import accounts --hidden-import account_supervisor --collect-all MetaTrader5 --collect-all anthropic --collect-all openai --collect-all pystray --collect-all certifi --collect-all cryptography desktop_app.py
 if errorlevel 1 goto :fail
 
 echo.

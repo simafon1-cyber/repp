@@ -54,6 +54,7 @@ import base64
 import csv
 import importlib
 import logging
+import multiprocessing
 import re
 import threading
 import webbrowser
@@ -107,7 +108,11 @@ ADVANCED_TAB_NAMES = ["Брокер", "Equity", "Новости", "Chat AI"]
 # Полный список "входных параметров" торговой логики — как input-параметры
 # MQL5-советника: любой из них можно выставить вручную, без правки config.py
 # руками. (key, тип, группа, подпись, варианты_для_choice).
-# тип: "int" | "float" | "bool" | "choice"
+# тип: "int" | "float" | "bool" | "choice" | "secret" (шифруется при сохранении)
+
+# Что показывается в поле секрета, когда ключ уже сохранён: сам ключ в
+# интерфейс не выводится, чтобы его нельзя было подсмотреть через плечо.
+SECRET_PLACEHOLDER = "••••••••  (ключ сохранён, впишите новый чтобы заменить)"
 ADVANCED_PARAMS = [
     ("POLL_SECONDS", "int", "Общее", "Частота опроса рынка, сек", None),
     ("TIMEFRAME", "choice", "Общее", "Рабочий таймфрейм", ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]),
@@ -151,6 +156,10 @@ ADVANCED_PARAMS = [
     ("AI_SIGNAL_WEIGHT", "int", "AI-сигнал", "Вес AI-сигнала в score", None),
     ("AI_SIGNAL_CACHE_SECONDS", "int", "AI-сигнал", "Кэш ответа AI, сек", None),
     ("AI_SIGNAL_REQUIRE_DIRECTION", "bool", "AI-сигнал", "Требовать совпадения направления с AI", None),
+    # Ключи вводятся прямо здесь и сохраняются ЗАШИФРОВАННЫМИ (тип "secret"):
+    # раньше их можно было вписать только руками в config.py
+    ("ANTHROPIC_API_KEY", "secret", "AI-сигнал", "Ключ Claude (console.anthropic.com)", None),
+    ("OPENAI_API_KEY", "secret", "AI-сигнал", "Ключ OpenAI (нужен только для провайдера openai)", None),
 
     ("USE_CUSTOM_STRATEGY", "bool", "Собственная стратегия",
      "Использовать собственную стратегию программы (custom_strategy.py)", None),
@@ -1347,6 +1356,12 @@ class App:
                     var = tk.StringVar(value=str(current))
                     ttk.Combobox(box, textvariable=var, values=choices, state="readonly", width=14).grid(
                         row=row_i, column=1, sticky="w", padx=6, pady=3)
+                elif ptype == "secret":
+                    # Ключ в интерфейс не выводим: показываем заглушку, если он
+                    # уже сохранён. Пустое поле при сохранении = не менять ключ.
+                    var = tk.StringVar(value=SECRET_PLACEHOLDER if current else "")
+                    ttk.Entry(box, textvariable=var, width=44, show="*").grid(
+                        row=row_i, column=1, sticky="w", padx=6, pady=3)
                 else:
                     var = tk.StringVar(value=str(current))
                     ttk.Entry(box, textvariable=var, width=18).grid(row=row_i, column=1, sticky="w", padx=6, pady=3)
@@ -1461,7 +1476,20 @@ class App:
             return
 
         try:
+            session_pw = control.get_session_password() or ""
+            salt = getattr(cfg, "SECURITY_SALT", "") or ""
             for key, value in new_values.items():
+                ptype = self.param_vars.get(key, ("", None))[0]
+                if ptype == "secret":
+                    text = str(value).strip()
+                    if not text:
+                        continue  # поле оставили пустым — старый ключ не трогаем
+                    if text == SECRET_PLACEHOLDER:
+                        continue  # ключ не меняли, в поле стоит заглушка
+                    if session_pw and salt:
+                        text = secure_store.encrypt_value(text, session_pw, salt)
+                    _write_config_value(key, repr(text))
+                    continue
                 literal = str(value) if isinstance(value, bool) else repr(value)
                 _write_config_value(key, literal)
             _reload_cfg()
@@ -2104,6 +2132,13 @@ def _show_login() -> bool:
 
 
 def main():
+    # КРИТИЧНО для собранного .exe: процессы счетов используют multiprocessing,
+    # а на Windows дочерний процесс запускается повторным вызовом этого же
+    # exe-файла. Без freeze_support() программа вместо запуска счёта начала бы
+    # бесконечно открывать саму себя, пока не кончится память.
+    # Вызывать нужно ПЕРВЫМ делом, до любой другой работы.
+    multiprocessing.freeze_support()
+
     _migrate_legacy_secrets()
     _harden_files()
     if not _show_login():

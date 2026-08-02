@@ -54,6 +54,9 @@ jobs:
           python -m PyInstaller --noconfirm --onefile --windowed
           --name "AI_Scalper_Pro"
           --exclude-module config
+          --hidden-import accounts_tab
+          --hidden-import accounts
+          --hidden-import account_supervisor
           --collect-all MetaTrader5
           --collect-all anthropic
           --collect-all openai

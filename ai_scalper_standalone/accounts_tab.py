@@ -14,7 +14,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 import config as cfg
-import control
+from control import control  # объект, а не модуль: см. control.py
 from account_supervisor import AccountSupervisor
 from accounts import MIN_POLL_MS, Account, AccountStore, migrate_from_config
 
