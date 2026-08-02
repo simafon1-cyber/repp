@@ -7,6 +7,17 @@ news_providers.py — универсальный реестр источнико
 вкладка "Новости" в desktop_app.py) уже умеет работать с любым
 зарегистрированным провайдером — их не нужно трогать.
 
+Готовые источники:
+  mt5      — ВСТРОЕННЫЙ календарь MetaTrader 5. Бесплатно, без ключа, без
+             лимитов. Данные приходят через файл, который пишет сервис
+             mql5/CalendarExport.mq5 (python-пакет MT5 календарь не отдаёт).
+  finnhub  — сторонний API, нужен бесплатный ключ с finnhub.io.
+
+Источники можно выстроить в цепочку (fetch_with_fallback): основной — mt5,
+запасной — finnhub. Они закрывают слабые места друг друга: календарю MT5
+нужен открытый терминал с запущенным сервисом, Finnhub упирается в лимиты
+бесплатного тарифа.
+
 Единый формат события (dict), который должна возвращать КАЖДАЯ функция fetch_*:
     {
         "time": datetime,      # время события (локальное время этого компьютера)
@@ -17,8 +28,11 @@ news_providers.py — универсальный реестр источнико
     }
 """
 
+import json
 import logging
-from datetime import datetime, timedelta
+import os
+import time
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("news_providers")
 
@@ -54,10 +68,109 @@ def fetch_finnhub(api_key: str, from_date: str, to_date: str) -> list:
     return events
 
 
+# =====================================================================
+# ВСТРОЕННЫЙ КАЛЕНДАРЬ METATRADER 5
+# =====================================================================
+# Полностью бесплатный источник: без API-ключа, без регистрации, без лимитов
+# запросов. Это те же данные, что видны во вкладке "Календарь" в терминале.
+#
+# Загвоздка: python-пакет MetaTrader5 календарь НЕ отдаёт — функции
+# CalendarValue* существуют только в MQL5. Поэтому данные приходят через
+# файл, который пишет сервис mql5/CalendarExport.mq5 (см. его шапку и
+# install/Install-CalendarExport.ps1).
+
+MT5_CALENDAR_FILENAME = "calendar_export.json"
+# Файл старше этого срока считаем несвежим: значит сервис в терминале
+# остановлен или терминал закрыт. Молча отдавать протухший календарь нельзя —
+# фильтр новостей пропустил бы реальный выход данных.
+MT5_CALENDAR_MAX_AGE_SECONDS = 3600
+
+
+def mt5_calendar_path() -> str:
+    """Путь к файлу календаря внутри папки данных терминала.
+
+    Путь спрашиваем у самого MT5 (terminal_info().data_path) — руками его
+    прописывать не нужно, и он останется верным даже для портативного
+    терминала или нескольких установок."""
+    import MetaTrader5 as mt5
+
+    info = mt5.terminal_info()
+    if info is None:
+        raise RuntimeError("Нет связи с терминалом MetaTrader 5 — путь к календарю неизвестен.")
+    return os.path.join(info.data_path, "MQL5", "Files", MT5_CALENDAR_FILENAME)
+
+
+def _parse_mt5_time(raw: str, server_utc_offset: int):
+    """Время события из файла -> местное время этого компьютера.
+
+    Календарь MT5 отдаёт время в часовом поясе ТОРГОВОГО СЕРВЕРА (у многих
+    брокеров UTC+2/+3). Без пересчёта фильтр новостей промахнулся бы на
+    несколько часов — то есть блокировал бы торговлю не тогда, когда надо."""
+    t = datetime.strptime(raw, "%Y.%m.%d %H:%M:%S")
+    utc = (t - timedelta(seconds=server_utc_offset)).replace(tzinfo=timezone.utc)
+    # .astimezone() без аргумента переводит в часовой пояс этого компьютера,
+    # .replace(tzinfo=None) возвращает "наивное" время — в таком виде живут
+    # все остальные даты в программе, смешивать наивные и осведомлённые нельзя.
+    return utc.astimezone().replace(tzinfo=None)
+
+
+def fetch_mt5(api_key: str, from_date: str, to_date: str) -> list:
+    """Встроенный календарь MT5 через файл сервиса CalendarExport.
+
+    api_key не используется — источнику ключ не нужен (см. KEYLESS_PROVIDERS)."""
+    path = mt5_calendar_path()
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Файл календаря не найден: {path}. Запусти сервис CalendarExport "
+            f"в терминале (Навигатор -> Сервисы) — см. install/Install-CalendarExport.ps1")
+
+    age = time.time() - os.path.getmtime(path)
+    if age > MT5_CALENDAR_MAX_AGE_SECONDS:
+        raise RuntimeError(
+            f"Календарь не обновлялся {int(age / 60)} мин — похоже, сервис "
+            f"CalendarExport остановлен или терминал закрыт.")
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        data = json.load(f)
+
+    offset = int(data.get("server_utc_offset_seconds", 0))
+    since = datetime.strptime(from_date, "%Y-%m-%d")
+    until = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+
+    events = []
+    for item in (data.get("events") or []):
+        try:
+            t = _parse_mt5_time(item.get("time", ""), offset)
+        except (ValueError, TypeError):
+            continue
+        if not (since <= t <= until):
+            continue
+        events.append({
+            "time": t,
+            "currency": (item.get("currency") or "").upper(),
+            "event": item.get("event", ""),
+            "impact": (item.get("impact") or "low").lower(),
+            "actual": item.get("actual", ""),
+            "estimate": item.get("estimate", ""),
+            "prev": item.get("prev", ""),
+        })
+    return events
+
+
 # Реестр провайдеров — добавляй сюда новые по образцу fetch_finnhub (например
 # fetch_tradingeconomics, fetch_fmp) и впиши их сюда одной строкой.
 PROVIDERS = {
+    "mt5": fetch_mt5,
     "finnhub": fetch_finnhub,
+}
+
+# Провайдеры, которым API-ключ не нужен вовсе.
+KEYLESS_PROVIDERS = {"mt5"}
+
+# Понятные человеку названия для интерфейса.
+PROVIDER_TITLES = {
+    "mt5": "Календарь MetaTrader 5 (бесплатно, без ключа)",
+    "finnhub": "Finnhub (нужен бесплатный ключ)",
 }
 
 
@@ -68,7 +181,7 @@ def fetch_upcoming_events(provider: str, api_key: str, days_ahead: int = 3):
     if not provider or provider not in PROVIDERS:
         return [], (f"Неизвестный провайдер новостей: '{provider}'. "
                      f"Доступные: {', '.join(PROVIDERS) or '—'}")
-    if not api_key:
+    if not api_key and provider not in KEYLESS_PROVIDERS:
         return [], "API-ключ не задан — впиши его на вкладке «Новости»."
 
     cached = _CACHE.get(provider)
@@ -89,3 +202,30 @@ def fetch_upcoming_events(provider: str, api_key: str, days_ahead: int = 3):
             # лучше отдать устаревшие данные, чем ничего (fail-soft)
             return cached["events"], f"Не удалось обновить (показаны старые данные): {e}"
         return [], f"Ошибка получения новостей: {e}"
+
+
+def fetch_with_fallback(chain, keys: dict, days_ahead: int = 3):
+    """Идёт по списку провайдеров и возвращает первый, который реально ответил.
+
+    Возвращает (events, used_provider, error_or_None).
+
+    Зачем цепочка: календарь MT5 бесплатен и не имеет лимитов, но зависит от
+    того, что терминал открыт, а сервис CalendarExport запущен. Finnhub, наоборот,
+    работает всегда, но упирается в лимиты бесплатного тарифа. Вместе они
+    закрывают слабые места друг друга.
+
+    ВАЖНО: пустой список событий НЕ считается отказом — на выходных новостей
+    действительно нет, и переключаться на следующий источник из-за этого
+    неправильно. Переход дальше по цепочке происходит только при ОШИБКЕ."""
+    problems = []
+    for provider in chain:
+        events, error = fetch_upcoming_events(provider, (keys or {}).get(provider, ""), days_ahead)
+        if error is None:
+            return events, provider, None
+        problems.append(f"{provider}: {error}")
+        if events:
+            # источник отдал устаревшие данные — берём их, но честно сообщаем
+            return events, provider, error
+    if not problems:
+        return [], "", "Список источников новостей пуст — задай его на вкладке «Новости»."
+    return [], "", "Ни один источник новостей не ответил. " + "; ".join(problems)

@@ -4,8 +4,10 @@ news_calendar.py — экономический календарь: РЕАЛЬН
 безопасная заглушка (fail-open: ничего не блокирует и не выдумывает).
 
 ЧЕСТНО ОБ ОГРАНИЧЕНИЯХ:
-  - MT5 python-пакет не даёт доступа к встроенному календарю терминала — поэтому
-    данные берутся из внешнего API (news_providers.py), не из MT5.
+  - MT5 python-пакет не даёт доступа к встроенному календарю терминала напрямую.
+    Обходится сервисом mql5/CalendarExport.mq5: он выгружает календарь в файл,
+    а провайдер "mt5" его читает. Если сервис не запущен — цепочка источников
+    (NEWS_PROVIDER_CHAIN) переключается на запасной внешний API.
   - detect_news_breakout() намеренно консервативна: направление считается по
     простой эвристике силы движения цены за последние минуты ПОСЛЕ важной
     новости (тело свечи относительно диапазона), а не "предсказывается" —
@@ -27,11 +29,30 @@ def _symbol_codes(symbol: str) -> list:
     return [c for c in _KNOWN_CODES if c in up]
 
 
+def news_source_chain() -> list:
+    """Список источников по порядку: первый ответивший и используется.
+
+    NEWS_PROVIDER_CHAIN задаёт цепочку целиком. Если её нет (конфиг с прошлых
+    версий) — работаем по-старому, с одним NEWS_API_PROVIDER."""
+    chain = getattr(cfg, "NEWS_PROVIDER_CHAIN", None)
+    if chain:
+        return [p for p in chain if p in npv.PROVIDERS]
+    single = getattr(cfg, "NEWS_API_PROVIDER", "")
+    return [single] if single else []
+
+
 def _get_events():
-    provider = getattr(cfg, "NEWS_API_PROVIDER", "")
     keys = getattr(cfg, "NEWS_API_KEYS", {}) or {}
-    api_key = keys.get(provider, "")
-    return npv.fetch_upcoming_events(provider, api_key)
+    events, _used, error = npv.fetch_with_fallback(news_source_chain(), keys)
+    return events, error
+
+
+def get_events_with_source():
+    """То же самое, но ещё и сообщает, КАКОЙ источник ответил — для вкладки
+    «Новости»: пользователь должен видеть, откуда пришли данные, особенно
+    когда основной источник отвалился и сработал запасной."""
+    keys = getattr(cfg, "NEWS_API_KEYS", {}) or {}
+    return npv.fetch_with_fallback(news_source_chain(), keys)
 
 
 def _relevant_events_near(symbol: str, window_minutes: int, min_impact: str = "high"):

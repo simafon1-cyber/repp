@@ -58,6 +58,7 @@ import multiprocessing
 import re
 import threading
 import webbrowser
+from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import messagebox, simpledialog, filedialog, ttk
 
@@ -102,6 +103,11 @@ MODE_OPTIONS = [
     ("Оба", "both"),
 ]
 ADVANCED_TAB_NAMES = ["Брокер", "Equity", "Новости", "Chat AI"]
+# График календаря на вкладке "Новости": на сколько часов вперёд смотрим и
+# какой высоты полоса. Больше 24 ч смысла нет — засечки сливаются.
+NEWS_CHART_HOURS = 12
+NEWS_CHART_HEIGHT = 96
+NEWS_LABEL_MIN_GAP_PX = 26   # ближе этого подписи валют наезжают друг на друга
 # "Настройка" (все настройки + input-параметры) и "Как пользоваться" видны ВСЕГДА,
 # в обоих режимах интерфейса — чтобы их точно не потерять в простом режиме.
 
@@ -1768,58 +1774,164 @@ class App:
     def _build_tab_news(self, parent):
         pad = {"padx": 10, "pady": 6}
 
-        ttk.Label(parent, text="Источник новостей (API)", font=("Segoe UI", 12, "bold")).pack(**pad)
+        ttk.Label(parent, text="Источники календаря", font=("Segoe UI", 12, "bold")).pack(**pad)
         ttk.Label(parent, foreground="#888", wraplength=780, justify="left", text=
-                  "MT5 не даёт свой календарь из Python, поэтому новости берутся из внешнего API. "
-                  "Список провайдеров ниже — универсальный: новые добавляются в news_providers.py, "
-                  "и появятся в этом списке сами."
+                  "Источники опрашиваются по порядку — берётся первый, который ответил. "
+                  "Календарь MetaTrader 5 бесплатен и без лимитов, но требует запущенного "
+                  "сервиса CalendarExport в терминале. Finnhub работает даже при закрытом "
+                  "терминале, но нужен бесплатный ключ."
                   ).pack(**pad)
 
         form = ttk.Frame(parent)
         form.pack(fill="x", **pad)
-        ttk.Label(form, text="Провайдер:").grid(row=0, column=0, sticky="w", pady=4)
-        providers = list(news_providers.PROVIDERS.keys())
-        self.news_provider_combo = ttk.Combobox(form, values=providers, state="readonly", width=20)
-        current_provider = getattr(cfg, "NEWS_API_PROVIDER", providers[0] if providers else "")
-        if current_provider in providers:
-            self.news_provider_combo.set(current_provider)
-        elif providers:
-            self.news_provider_combo.set(providers[0])
-        self.news_provider_combo.grid(row=0, column=1, sticky="w", pady=4)
 
-        ttk.Label(form, text="API-ключ:").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(form, text="Порядок источников:").grid(row=0, column=0, sticky="w", pady=4)
+        self.news_chain_vars = {}
+        chain_frame = ttk.Frame(form)
+        chain_frame.grid(row=0, column=1, sticky="w", pady=4)
+        current_chain = list(news_calendar.news_source_chain())
+        for i, name in enumerate(news_providers.PROVIDERS.keys()):
+            var = tk.BooleanVar(value=name in current_chain)
+            self.news_chain_vars[name] = var
+            title = news_providers.PROVIDER_TITLES.get(name, name)
+            ttk.Checkbutton(chain_frame, text=title, variable=var).grid(row=i, column=0, sticky="w")
+
+        ttk.Label(form, text="Ключ Finnhub:").grid(row=1, column=0, sticky="w", pady=4)
         keys = getattr(cfg, "NEWS_API_KEYS", {}) or {}
-        self.news_api_key_var = tk.StringVar(value=keys.get(current_provider, ""))
+        self.news_api_key_var = tk.StringVar(value=keys.get("finnhub", ""))
         ttk.Entry(form, textvariable=self.news_api_key_var, width=40, show="*").grid(row=1, column=1, sticky="w", pady=4)
 
         btn_frame = ttk.Frame(parent)
         btn_frame.pack(**pad)
         ttk.Button(btn_frame, text="Сохранить", command=self.save_news_settings).grid(row=0, column=0, padx=5)
-        ttk.Button(btn_frame, text="Обновить список новостей", command=self.refresh_news_tab).grid(row=0, column=1, padx=5)
+        ttk.Button(btn_frame, text="Обновить календарь", command=self.refresh_news_tab).grid(row=0, column=1, padx=5)
 
         self.news_status_var = tk.StringVar(value="")
         ttk.Label(parent, textvariable=self.news_status_var, foreground="#888", wraplength=780,
                   justify="left").pack(**pad)
 
-        cols = ("time", "currency", "event", "impact", "actual", "estimate", "prev")
-        headings = ("Время", "Валюта", "Событие", "Важность", "Факт", "Прогноз", "Пред.")
-        self.news_tree = ttk.Treeview(parent, columns=cols, show="headings", height=12)
+        # --- График календаря: ближайшие часы одной полосой ---
+        ttk.Label(parent, text="Ближайшие события", font=("Segoe UI", 10, "bold")).pack(
+            anchor="w", padx=10)
+        self.news_canvas = tk.Canvas(parent, height=NEWS_CHART_HEIGHT, bg="#1e1e1e",
+                                     highlightthickness=0)
+        self.news_canvas.pack(fill="x", padx=10, pady=(2, 6))
+        # Перерисовываем при изменении ширины окна: координаты считаются от
+        # фактической ширины, иначе график остался бы обрезанным.
+        self.news_canvas.bind("<Configure>", lambda e: self._draw_news_chart())
+        self._news_events_cache = []
+
+        cols = ("time", "left", "currency", "event", "impact", "actual", "estimate", "prev")
+        headings = ("Время", "Осталось", "Валюта", "Событие", "Важность", "Факт", "Прогноз", "Пред.")
+        self.news_tree = ttk.Treeview(parent, columns=cols, show="headings", height=10)
         for col, head in zip(cols, headings):
             self.news_tree.heading(col, text=head)
-            self.news_tree.column(col, width=100, anchor="center")
+            self.news_tree.column(col, width=90, anchor="center")
         self.news_tree.column("event", width=220, anchor="w")
         self.news_tree.pack(fill="both", expand=True, padx=10, pady=6)
 
+    # ---- график календаря ------------------------------------------------------------
+    def _draw_news_chart(self):
+        """Временная шкала на NEWS_CHART_HOURS часов вперёд: каждое событие —
+        засечка, важные ещё и с заштрихованной зоной, в которой торговля
+        блокируется фильтром новостей. Смысл графика именно в этих зонах:
+        видно не только "когда новость", но и "когда бот не будет входить"."""
+        canvas = getattr(self, "news_canvas", None)
+        if canvas is None:
+            return
+        canvas.delete("all")
+
+        width = canvas.winfo_width()
+        if width < 50:          # окно ещё не разложено — рисовать нечего
+            return
+        h = NEWS_CHART_HEIGHT
+        axis_y = h - 18
+        left_pad, right_pad = 8, 8
+        span = width - left_pad - right_pad
+
+        now = datetime.now()
+        horizon = timedelta(hours=NEWS_CHART_HOURS)
+
+        def x_of(t):
+            frac = (t - now).total_seconds() / horizon.total_seconds()
+            return left_pad + max(0.0, min(1.0, frac)) * span
+
+        # Ось и часовые метки
+        canvas.create_line(left_pad, axis_y, width - right_pad, axis_y, fill="#555")
+        step_hours = 1 if NEWS_CHART_HOURS <= 12 else 3
+        hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        while hour <= now + horizon:
+            x = x_of(hour)
+            canvas.create_line(x, axis_y - 4, x, axis_y + 4, fill="#555")
+            canvas.create_text(x, axis_y + 11, text=hour.strftime("%H:%M"),
+                               fill="#777", font=("Segoe UI", 7))
+            hour += timedelta(hours=step_hours)
+
+        block_minutes = getattr(cfg, "NEWS_HARD_BLOCK_WINDOW_MIN", 30)
+        colors = {"high": "#e05561", "medium": "#e0a355", "low": "#5a7a8a"}
+
+        events = [e for e in self._news_events_cache if now <= e["time"] <= now + horizon]
+        # Зоны блокировки рисуем ПЕРВЫМ проходом, чтобы прямоугольники не легли
+        # поверх засечек соседних событий.
+        for e in events:
+            if e.get("impact") == "high":
+                x1 = x_of(e["time"] - timedelta(minutes=block_minutes))
+                x2 = x_of(e["time"] + timedelta(minutes=block_minutes))
+                canvas.create_rectangle(x1, 6, x2, axis_y, fill="#3a2226", outline="")
+
+        # Последняя занятая координата на каждой высоте — чтобы подписи валют
+        # у событий, идущих подряд, не наезжали друг на друга.
+        taken = {}
+        for e in events:
+            impact = e.get("impact", "low")
+            colour = colors.get(impact, colors["low"])
+            x = x_of(e["time"])
+
+            top = 10 if impact == "high" else (20 if impact == "medium" else 30)
+            canvas.create_line(x, top, x, axis_y, fill=colour, width=2 if impact == "high" else 1)
+
+            # Ищем свободную строку выше; если её нет — подпись не рисуем вовсе.
+            # Обрезанная у края канвы подпись хуже, чем её отсутствие: засечка
+            # события в любом случае на месте, а детали видно в таблице ниже.
+            label_y = top - 4
+            while label_y >= 6:
+                if taken.get(label_y, -999) <= x - NEWS_LABEL_MIN_GAP_PX:
+                    canvas.create_text(x, label_y, text=e.get("currency", ""), fill=colour,
+                                       font=("Segoe UI", 7, "bold"))
+                    taken[label_y] = x
+                    break
+                label_y -= 9
+
+        # Отметка "сейчас"
+        canvas.create_line(left_pad, 6, left_pad, axis_y, fill="#6ab04c", width=2)
+        canvas.create_text(left_pad + 4, 8, text="сейчас", anchor="nw",
+                           fill="#6ab04c", font=("Segoe UI", 7))
+
+        if not events:
+            canvas.create_text(width / 2, h / 2 - 6,
+                               text=f"Ближайшие {NEWS_CHART_HOURS} ч — важных событий нет",
+                               fill="#666", font=("Segoe UI", 9))
+        else:
+            canvas.create_text(width - right_pad, 8, anchor="ne",
+                               text="красное — торговля заблокирована",
+                               fill="#8a5560", font=("Segoe UI", 7))
+
     def save_news_settings(self):
-        provider = self.news_provider_combo.get()
+        chain = [name for name, var in self.news_chain_vars.items() if var.get()]
+        if not chain:
+            messagebox.showwarning(APP_TITLE,
+                                   "Нужен хотя бы один источник календаря, иначе фильтр "
+                                   "новостей работать не сможет.")
+            return
+
         api_key = self.news_api_key_var.get().strip()
         keys = dict(getattr(cfg, "NEWS_API_KEYS", {}) or {})
         # Ключ новостного API тоже шифруется паролем входа перед записью на
         # диск (см. secure_store.py) — как и пароль MT5.
         pw = control.get_session_password()
         salt = getattr(cfg, "SECURITY_SALT", "")
-        keys[provider] = secure_store.encrypt_value(api_key, pw, salt) if (pw and salt) else api_key
-        _write_config_value("NEWS_API_PROVIDER", repr(provider))
+        keys["finnhub"] = secure_store.encrypt_value(api_key, pw, salt) if (pw and salt) else api_key
+        _write_config_value("NEWS_PROVIDER_CHAIN", repr(chain))
         _write_config_value("NEWS_API_KEYS", repr(keys))
         try:
             _reload_cfg()
@@ -1833,23 +1945,40 @@ class App:
         threading.Thread(target=self._refresh_news_worker, daemon=True).start()
 
     def _refresh_news_worker(self):
-        events, error = news_calendar.upcoming_events(days_ahead=3, min_impact="medium")
-        self.root.after(0, lambda: self._apply_news_result(events, error))
+        events, used, error = news_calendar.get_events_with_source()
+        now = datetime.now()
+        horizon = now + timedelta(days=3)
+        rank = {"low": 0, "medium": 1, "high": 2}
+        events = [e for e in events if rank.get(e["impact"], 0) >= 1 and now <= e["time"] <= horizon]
+        self.root.after(0, lambda: self._apply_news_result(events, used, error))
 
-    def _apply_news_result(self, events, error):
+    def _apply_news_result(self, events, used, error):
         for item in self.news_tree.get_children():
             self.news_tree.delete(item)
+
+        now = datetime.now()
+        impact_ru = {"high": "важная", "medium": "средняя", "low": "слабая"}
         for e in events:
+            left = e["time"] - now
+            hours, rem = divmod(int(left.total_seconds()), 3600)
+            left_txt = f"{hours} ч {rem // 60} мин" if hours else f"{rem // 60} мин"
             self.news_tree.insert("", "end", values=(
-                e["time"].strftime("%d.%m %H:%M"), e["currency"], e["event"], e["impact"],
+                e["time"].strftime("%d.%m %H:%M"), left_txt, e["currency"], e["event"],
+                impact_ru.get(e["impact"], e["impact"]),
                 e.get("actual", ""), e.get("estimate", ""), e.get("prev", ""),
             ))
+
+        self._news_events_cache = events
+        self._draw_news_chart()
+
+        source_txt = news_providers.PROVIDER_TITLES.get(used, used) if used else ""
         if error:
             self.news_status_var.set(error)
         elif not events:
-            self.news_status_var.set("Нет предстоящих новостей в ближайшие дни (или ключ ещё не настроен).")
+            self.news_status_var.set(
+                f"Источник: {source_txt}. Важных событий в ближайшие 3 дня нет.")
         else:
-            self.news_status_var.set(f"Событий: {len(events)}")
+            self.news_status_var.set(f"Источник: {source_txt}. Событий: {len(events)}")
 
     # ---- вкладка "Chat AI" ------------------------------------------------------------
     def _build_tab_chat(self, parent):

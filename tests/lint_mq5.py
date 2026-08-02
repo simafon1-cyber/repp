@@ -61,6 +61,7 @@ KNOWN_API = {
     "PrintFormat", "PositionSelectByTicket", "PositionClosePartial",
     "ArrayRemove", "ArrayCopy", "ArrayInitialize", "ArraySort",
     "FileOpen", "FileClose", "FileWrite", "FileSeek", "FileIsExist",
+    "FileWriteString", "FileDelete", "FileMove", "FileReadString", "FileSize",
     "ObjectCreate", "ObjectDelete", "ObjectSetInteger", "ObjectSetString",
     "ObjectsDeleteAll", "ObjectFind", "ChartRedraw", "ChartGetInteger",
     "iTime", "iBarShift", "Bars", "CopyRates", "CopyTime", "CopyClose",
