@@ -562,6 +562,7 @@ class App:
         tab_overview = ttk.Frame(self.notebook)
         tab_broker = ttk.Frame(self.notebook)
         tab_symbols = ttk.Frame(self.notebook)
+        tab_accounts = ttk.Frame(self.notebook)
         tab_positions = ttk.Frame(self.notebook)
         tab_log = ttk.Frame(self.notebook)
         tab_equity = ttk.Frame(self.notebook)
@@ -572,7 +573,7 @@ class App:
 
         self.tab_frames = {
             "Обзор": tab_overview, "Брокер": tab_broker, "Символы": tab_symbols,
-            "Сделки": tab_positions, "Лог": tab_log, "Equity": tab_equity,
+            "Счета": tab_accounts, "Сделки": tab_positions, "Лог": tab_log, "Equity": tab_equity,
             "Настройка": tab_config,
             "Новости": tab_news, "Chat AI": tab_chat,
             "Как пользоваться": tab_help,
@@ -590,8 +591,27 @@ class App:
         self._build_tab_news(tab_news)
         self._build_tab_chat(tab_chat)
         self._build_tab_help(tab_help)
+        self._build_tab_accounts(tab_accounts)
 
         self._apply_ui_mode(initial=True)
+
+    # ---- Вкладка "Счета": несколько торговых счетов MT5 ---------------------
+    def _build_tab_accounts(self, parent):
+        """Список счетов, их состояние и закрытие позиций.
+
+        Вся логика в accounts_tab.py — здесь только подключение, чтобы этот
+        файл не разрастался. Ошибка при построении не должна ронять всё окно:
+        остальные вкладки продолжат работать.
+        """
+        try:
+            from accounts_tab import AccountsTab
+            self.accounts_tab = AccountsTab(parent, self.root)
+        except Exception as e:  # noqa: BLE001
+            self.accounts_tab = None
+            log.exception("Не удалось построить вкладку «Счета»")
+            ttk.Label(parent,
+                      text=f"Вкладка «Счета» недоступна: {e}",
+                      wraplength=600, justify="left").pack(padx=16, pady=16)
 
     # ---- Простой/Продвинутый режим -----------------------------------------
     def _apply_ui_mode(self, initial: bool = False):
@@ -1926,6 +1946,13 @@ class App:
         try:
             if self.stop_event:
                 self.stop_event.set()
+        except Exception:
+            pass
+        try:
+            # Процессы счетов запущены отдельно от торгового цикла — их надо
+            # остановить явно, иначе они переживут закрытие окна
+            if getattr(self, "accounts_tab", None):
+                self.accounts_tab.shutdown()
         except Exception:
             pass
         try:
