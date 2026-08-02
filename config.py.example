@@ -42,7 +42,7 @@ POLL_SECONDS = 5      # Как часто опрашивать рынок (се�
 # заранее). Удобнее всего заполнять это через десктоп-приложение
 # (desktop_app.py, панель "Брокер") — оно само впишет сюда нужные строки.
 MT5_LOGIN = 0            # номер торгового счёта, 0 = использовать открытый терминал
-MT5_PASSWORD = ""        # пароль от торгового счёта (не пароль от сайта брокера!)
+MT5_PASSWORD = ''
 MT5_SERVER = ""          # имя сервера брокера, например "SwitchMarkets-Live" (см. письмо брокера при регистрации счёта)
 MT5_TERMINAL_PATH = ""   # путь к terminal64.exe, если MT5 установлен не в стандартную папку (обычно можно оставить пустым)
 
@@ -159,7 +159,7 @@ LOT_FALLBACK = 0.01
 # всё работает как раньше: fail-open (новости не блокируют и не влияют).
 USE_NEWS_FILTER = True
 NEWS_API_PROVIDER = "finnhub"     # см. news_providers.PROVIDERS — сюда можно вписать любой добавленный провайдер
-NEWS_API_KEYS = {"finnhub": ""}   # provider -> api key; ключ для finnhub: https://finnhub.io (бесплатный тариф)
+NEWS_API_KEYS = {"finnhub": ""}
 
 
 # =====================================================================
@@ -225,8 +225,8 @@ AI_SIGNAL_CACHE_SECONDS = 60    # не спрашивать AI чаще раза
 AI_SIGNAL_REQUIRE_DIRECTION = False
 AI_SIGNAL_TIMEOUT_MS = 3000     # таймаут запроса к Claude/OpenAI, мс
 
-ANTHROPIC_API_KEY = 'enc:gAAAAABqSzMXM-l0322F9-wm4kSXiisT9hTz2fJIhLJb-cRmQv4-bdzzqy8sgDdc5hvfKkIyv6HUW2wxRVxHCSARaJEf7WTjyqYK8DZxcMBMotdBkTE26Rk7cGJL2Ao6dUzn_Wm_hCZwUoFw7RicygS0_475CEBQGqYXVx2Y6653Tb6sjrPeW7bQAdevksDpPFWs14O5cSfTxIZOVYt2GjVd_frEjDR6RQ=='
-OPENAI_API_KEY = ""      # впиши свой ключ или задай переменной окружения OPENAI_API_KEY, если решишь переключиться на AI_PROVIDER="openai"
+ANTHROPIC_API_KEY = ''  # впишите через интерфейс программы
+OPENAI_API_KEY = ''
 
 
 # =====================================================================
@@ -450,7 +450,7 @@ DASHBOARD_PORT = 5000
 # телефоне спросит их один раз при первом заходе на страницу (стандартное
 # окно авторизации), дальше сам не будет спрашивать до закрытия браузера.
 DASHBOARD_LOGIN = "simafon1@gmail.com"
-DASHBOARD_PASSWORD = ""
+DASHBOARD_PASSWORD = ''
 
 
 # =====================================================================
@@ -460,9 +460,9 @@ DASHBOARD_PASSWORD = ""
 # "advanced" — плюс Брокер/Equity/Настройки/Новости/Chat AI (полный ручной контроль).
 # Переключается прямо в приложении (Обзор → выпадающий список) — этот файл
 # просто запоминает последний выбор.
-UI_MODE = "simple"
+UI_MODE = 'simple'
 
 # Звук + всплывающее уведомление при открытии/закрытии сделки, серии убытков и т.д.
 USE_SOUND_NOTIFICATIONS = True
-SECURITY_SALT = 'fc693fc4505cf80d9ed15fd02a3a27ee'
-DASHBOARD_PASSWORD_HASH = '0c1fe42fd7327266e5b68502dd0d6a7a5cc2b0277a99bdf2ced540e4e0ba183f'
+SECURITY_SALT = ''  # создастся автоматически при первом запуске
+DASHBOARD_PASSWORD_HASH = ''  # создастся при задании пароля входа

@@ -43,3 +43,17 @@ accounts.tmp
 build/
 dist/
 *.spec.bak
+
+# СЕКРЕТЫ И ЛИЧНЫЕ ДАННЫЕ — никогда не в репозиторий.
+# config.py содержит ключи API, соль и хэш пароля входа; журналы и CSV —
+# номера счетов и балансы. В репозитории лежит только config.py.example.
+config.py
+config.py.bak*
+config.py.sha256
+.login_remember
+scalper.log
+*.log
+trades_log.csv
+trades_log.csv.sha256
+accounts.json
+accounts.tmp
