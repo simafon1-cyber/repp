@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Запуск всех проверок проекта DualGuard EA.
+# Запуск всех проверок проекта.
 # Использование:  bash tests/run_all.sh
 set -u
 
@@ -7,13 +7,19 @@ cd "$(dirname "$0")"
 FAILED=0
 
 echo "==================================================="
-echo " 1/3  Статическая проверка советника MQL5"
+echo " 1/6  Статическая проверка DualGuard EA (MQL5)"
 echo "==================================================="
 python3 lint_mq5.py || FAILED=1
 
 echo
 echo "==================================================="
-echo " 2/3  Тесты логики советника (C++)"
+echo " 2/6  Статическая проверка AI Scalper Pro (MQL5)"
+echo "==================================================="
+python3 lint_mq5.py ../ai_scalper_pro/AI_Scalper_Pro.mq5 ../ai_scalper_pro/*.mqh || FAILED=1
+
+echo
+echo "==================================================="
+echo " 3/6  Тесты логики DualGuard EA (C++)"
 echo "==================================================="
 if python3 extract_functions.py && g++ -std=c++17 -Wall -o test_logic test_logic.cpp; then
     ./test_logic || FAILED=1
@@ -24,9 +30,28 @@ fi
 
 echo
 echo "==================================================="
-echo " 3/3  Тесты Python-моста"
+echo " 4/6  Тесты расчёта риска AI Scalper Pro (C++)"
+echo "==================================================="
+if python3 extract_functions.py ../ai_scalper_pro/RiskManager.mqh generated_scalper.h \
+        VolumeDigitsOf FloorVolumeToStep GetLossStreakRiskMultiplier CalcLot \
+   && g++ -std=c++17 -Wall -o test_ai_scalper test_ai_scalper.cpp; then
+    ./test_ai_scalper || FAILED=1
+else
+    echo "ОШИБКА: не удалось собрать тесты"
+    FAILED=1
+fi
+
+echo
+echo "==================================================="
+echo " 5/6  Тесты моста DualGuard (Python + Claude)"
 echo "==================================================="
 python3 test_bridge.py || FAILED=1
+
+echo
+echo "==================================================="
+echo " 6/6  Тесты моста AI Scalper Pro (Python)"
+echo "==================================================="
+python3 test_scalper_bridge.py || FAILED=1
 
 echo
 if [ "$FAILED" -eq 0 ]; then

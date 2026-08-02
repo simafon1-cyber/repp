@@ -124,14 +124,26 @@ def to_cpp(code: str) -> str:
 
 
 def main() -> None:
-    source = SOURCE.read_text(encoding="utf-8")
-    parts = ["// СГЕНЕРИРОВАНО автоматически из DualGuardEA.mq5 — не редактировать\n"]
-    for name in WANTED:
+    # Без аргументов — советник DualGuard (набор WANTED выше).
+    # С аргументами: extract_functions.py ИСХОДНИК ВЫХОД функция1 функция2 ...
+    if len(sys.argv) > 3:
+        source_path = Path(sys.argv[1])
+        output_path = Path(sys.argv[2])
+        wanted = sys.argv[3:]
+    else:
+        source_path, output_path, wanted = SOURCE, OUTPUT, WANTED
+
+    if not source_path.exists():
+        raise SystemExit(f"ОШИБКА: не найден файл {source_path}")
+
+    source = source_path.read_text(encoding="utf-8")
+    parts = [f"// СГЕНЕРИРОВАНО автоматически из {source_path.name} — не редактировать\n"]
+    for name in wanted:
         parts.append(f"// ---- {name} ----")
         parts.append(to_cpp(extract(source, name)))
         parts.append("")
-    OUTPUT.write_text("\n".join(parts), encoding="utf-8")
-    print(f"Извлечено функций: {len(WANTED)} -> {OUTPUT.name}")
+    output_path.write_text("\n".join(parts), encoding="utf-8")
+    print(f"Извлечено функций: {len(wanted)} -> {output_path.name}")
 
 
 if __name__ == "__main__":

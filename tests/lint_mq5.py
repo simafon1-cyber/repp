@@ -18,7 +18,7 @@ import re
 import sys
 from pathlib import Path
 
-SOURCE = Path(__file__).resolve().parent.parent / "mql5" / "DualGuardEA.mq5"
+DEFAULT_SOURCES = [Path(__file__).resolve().parent.parent / "mql5" / "DualGuardEA.mq5"]
 
 # Функции MQL5 и методы CTrade, используемые советником.
 KNOWN_API = {
@@ -57,6 +57,29 @@ KNOWN_API = {
     # Прочее
     "Print", "Comment", "WebRequest", "GetLastError", "ResetLastError",
     "MQLInfoInteger",
+    # Дополнительно используется в проекте AI_Scalper_Pro
+    "PrintFormat", "PositionSelectByTicket", "PositionClosePartial",
+    "ArrayRemove", "ArrayCopy", "ArrayInitialize", "ArraySort",
+    "FileOpen", "FileClose", "FileWrite", "FileSeek", "FileIsExist",
+    "ObjectCreate", "ObjectDelete", "ObjectSetInteger", "ObjectSetString",
+    "ObjectsDeleteAll", "ObjectFind", "ChartRedraw", "ChartGetInteger",
+    "iTime", "iBarShift", "Bars", "CopyRates", "CopyTime", "CopyClose",
+    "CopyHigh", "CopyLow", "CopyOpen", "SeriesInfoInteger",
+    "iADX", "iStochastic", "iMACD", "iCCI", "iBearsPower", "iBullsPower",
+    "iVolumes", "iStdDev", "iEnvelopes", "iForce", "iMomentum", "iOsMA",
+    "TerminalInfoInteger", "TerminalInfoString", "AccountInfoString",
+    "MathSqrt", "MathLog", "MathExp", "MathCeil", "MathMod", "MathRand",
+    "StringConcatenate", "StringReplace", "StringTrimLeft", "StringTrimRight",
+    "StringToLower", "CharToString", "ShortToString", "StringAdd",
+    "TimeLocal", "TimeDaylightSavings", "PeriodSeconds", "OrderSend",
+    "SymbolSelect", "SymbolName", "SymbolsTotal", "SymbolInfoTick",
+    "HistorySelect", "HistoryDealsTotal", "HistoryDealGetTicket",
+    "HistoryDealGetInteger", "HistoryDealGetDouble", "HistoryDealGetString",
+    "CalendarValueLast", "CalendarCountryById", "CalendarEventByCurrency",
+    "EventChartCustom", "Alert", "SendNotification", "PlaySound",
+    "ZeroMemory", "StringSubstr", "StringBufferLen", "IsStopped",
+    "CopyTickVolume", "GetTickCount64", "HistoryDealSelect",
+    "SetTypeFillingBySymbol",
 }
 
 CONTROL_KEYWORDS = {"if", "for", "while", "switch", "return", "sizeof", "else", "do"}
@@ -148,20 +171,48 @@ def check_calls(src: str, code: str) -> list[str]:
 
 
 def main() -> int:
-    src = SOURCE.read_text(encoding="utf-8")
-    code = strip_code(src)
+    # Пути можно передать аргументами: python3 lint_mq5.py файл1.mq5 файл2.mqh
+    # Все файлы разбираются как ОДНО целое — так функции из .mqh видны
+    # в главном .mq5, как это и происходит при компиляции через #include.
+    sources = [Path(p) for p in sys.argv[1:]] or DEFAULT_SOURCES
+    missing = [p for p in sources if not p.exists()]
+    if missing:
+        for p in missing:
+            print(f"ОШИБКА: файл не найден: {p}")
+        return 1
 
     all_errors: list[str] = []
-    all_errors += check_braces(code)
-    input_errors, input_count = check_input_writes(src, code)
-    all_errors += input_errors
-    all_errors += check_calls(src, code)
+    total_lines = 0
+    total_inputs = 0
+    combined_src = []
+    combined_code = []
+
+    for path in sources:
+        src = path.read_text(encoding="utf-8")
+        code = strip_code(src)
+        total_lines += src.count("\n") + 1
+        combined_src.append(src)
+        combined_code.append(code)
+
+        # Скобки и запись в input проверяем ПОФАЙЛОВО — так виден точный файл
+        for err in check_braces(code):
+            all_errors.append(f"{path.name}: {err}")
+        input_errors, input_count = check_input_writes(src, code)
+        total_inputs += input_count
+        for err in input_errors:
+            all_errors.append(f"{path.name}: {err}")
+
+    # Вызовы проверяем по всем файлам сразу
+    all_errors += check_calls("\n".join(combined_src), "\n".join(combined_code))
 
     func_pattern = r"^\s*(?:void|int|bool|double|string|long|ulong|datetime|ENUM_\w+)\s+(\w+)\s*\("
-    func_count = len(set(re.findall(func_pattern, src, re.M)))
-    print(f"Файл: {SOURCE.name}  ({src.count(chr(10)) + 1} строк)")
-    print(f"input-параметров: {input_count}")
+    func_count = len(set(re.findall(func_pattern, "\n".join(combined_src), re.M)))
+    names = ", ".join(p.name for p in sources)
+    print(f"Файлов: {len(sources)} ({names})")
+    print(f"Всего строк: {total_lines}")
+    print(f"input-параметров: {total_inputs}")
     print(f"функций определено: {func_count}")
+    input_count = total_inputs
 
     if all_errors:
         print("\nНАЙДЕНЫ ПРОБЛЕМЫ:")

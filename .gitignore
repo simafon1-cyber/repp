@@ -26,3 +26,11 @@ tests/generated_functions.h
 Thumbs.db
 .vscode/
 .idea/
+
+# Секреты и журналы моста AI Scalper Pro
+ai_scalper_pro/bridge/.env
+ai_scalper_pro/bridge/bridge.log
+
+# Артефакты тестов AI Scalper Pro
+tests/test_ai_scalper
+tests/generated_scalper.h

@@ -52,6 +52,51 @@ void CleanupPartialClosedTickets()
          ArrayRemove(g_partialClosedTickets,i,1);
 }
 
+//===================== БЫСТРАЯ ФИКСАЦИЯ: УЧЁТ СТУПЕНЕЙ (п.25) ==========
+// Отдельный учёт от IsPartialClosed выше: там один флаг "уже закрывали",
+// а здесь нужно помнить НОМЕР ступени, чтобы вторая сработала после первой.
+int GetQuickStage(ulong ticket)
+{
+   for(int i=0;i<ArraySize(g_quickStageTickets);i++)
+      if(g_quickStageTickets[i]==ticket) return g_quickStageValues[i];
+   return 0;
+}
+void SetQuickStage(ulong ticket,int stage)
+{
+   for(int i=0;i<ArraySize(g_quickStageTickets);i++)
+      if(g_quickStageTickets[i]==ticket) { g_quickStageValues[i]=stage; return; }
+   int n=ArraySize(g_quickStageTickets);
+   ArrayResize(g_quickStageTickets,n+1);
+   ArrayResize(g_quickStageValues,n+1);
+   g_quickStageTickets[n]=ticket;
+   g_quickStageValues[n]=stage;
+}
+// Иначе тикеты закрытых сделок копились бы в памяти бесконечно
+void CleanupQuickStages()
+{
+   for(int i=ArraySize(g_quickStageTickets)-1;i>=0;i--)
+      if(!PositionSelectByTicket(g_quickStageTickets[i]))
+      {
+         ArrayRemove(g_quickStageTickets,i,1);
+         ArrayRemove(g_quickStageValues,i,1);
+      }
+}
+
+// Закрывает заданный % от текущего объёма позиции с учётом шага и мин. лота.
+// Возвращает true, если частичное закрытие реально произошло.
+bool CloseVolumePercent(ulong ticket,double volume,double percent)
+{
+   if(percent<=0 || volume<=0) return false;
+   double minLot =SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   double lotStep=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
+   double closeVolume=FloorVolumeToStep(volume*percent/100.0, lotStep);
+   // Закрывать меньше минимального лота нельзя; остаток тоже должен быть
+   // не меньше минимального, иначе брокер отклонит запрос.
+   if(closeVolume<minLot) return false;
+   if(volume-closeVolume<minLot) return false;
+   return trade.PositionClosePartial(ticket,closeVolume);
+}
+
 //===================== PROFIT LOCK: ПИКОВАЯ ПРИБЫЛЬ ПО ПОЗИЦИИ (п.12) ===
 int FindPeakIndex(ulong ticket)
 {
@@ -234,6 +279,7 @@ double TieredLockPercent(double peakPoints,double unit)
 void ManageOpenPositions()
 {
    CleanupPeakProfit();
+   CleanupQuickStages(); // п.25: чистим память по ступеням быстрой фиксации
    double atr=GetATRValue(); // пересчитывается каждый тик -> трейлинг сам сужается при затухании ATR (п.4)
    for(int i=PositionsTotal()-1;i>=0;i--)
    {
@@ -305,15 +351,79 @@ void ManageOpenPositions()
       if(bestSL!=currentSL && improved && distOk && stepOk)
          trade.PositionModify(ticket,bestSL,currentTP);
 
-      // Частичное закрытие
+      // Частичное закрытие (старый механизм, по фикс. пунктам; по умолчанию выключен)
+      // п.25: объём считается через FloorVolumeToStep — прежняя формула
+      // MathFloor(v/step)*step из-за двоичной арифметики теряла шаг объёма.
       if(UsePartialClose && !IsPartialClosed(ticket) && profitPoints>=PartialCloseTriggerPoints)
       {
-         double minLot=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
-         double lotStep=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
-         double closeVolume=volume*PartialClosePercent/100.0;
-         closeVolume=MathFloor(closeVolume/lotStep)*lotStep;
-         if(closeVolume>=minLot && closeVolume<volume)
-            if(trade.PositionClosePartial(ticket,closeVolume)) MarkPartialClosed(ticket);
+         if(CloseVolumePercent(ticket,volume,PartialClosePercent))
+         {
+            MarkPartialClosed(ticket);
+            continue; // объём изменился — остальное досчитаем на следующем тике
+         }
+      }
+
+      // п.25: БЫСТРАЯ ФИКСАЦИЯ ПРИБЫЛИ ступенями по ATR.
+      // Снимаем часть прибыли рано, остаток продолжает идти под трейлингом.
+      // Пороги в ATR, поэтому одинаково работают на EURUSD и на золоте.
+      if(UseQuickProfit && atr>0)
+      {
+         int stage=GetQuickStage(ticket);
+         double qp1Pts=QuickProfit1ATR*atr/_Point;
+         double qp2Pts=QuickProfit2ATR*atr/_Point;
+
+         if(stage<1 && QuickProfit1ATR>0 && profitPoints>=qp1Pts)
+         {
+            if(CloseVolumePercent(ticket,volume,QuickProfit1Percent))
+            {
+               SetQuickStage(ticket,1);
+               PrintFormat("Быстрая фиксация 1: закрыто %.0f%% при +%.0f пт (порог %.0f)",
+                           QuickProfit1Percent, profitPoints, qp1Pts);
+               continue;
+            }
+         }
+         else if(stage<2 && QuickProfit2ATR>0 && profitPoints>=qp2Pts)
+         {
+            if(CloseVolumePercent(ticket,volume,QuickProfit2Percent))
+            {
+               SetQuickStage(ticket,2);
+               PrintFormat("Быстрая фиксация 2: закрыто %.0f%% при +%.0f пт (порог %.0f)",
+                           QuickProfit2Percent, profitPoints, qp2Pts);
+               continue;
+            }
+         }
+      }
+
+      // п.25: ВЫХОД ПО ВРЕМЕНИ — "долго не быть в сделке".
+      // Мягкий: время вышло и сделка в плюсе -> фиксируем прибыль.
+      //         Если сделка прямо сейчас на пике (ещё растёт) — не трогаем.
+      // Жёсткий: время вышло совсем -> закрываем в любом случае.
+      if(UseTimeExit)
+      {
+         datetime openTime=(datetime)PositionGetInteger(POSITION_TIME);
+         double heldMinutes=(double)(TimeCurrent()-openTime)/60.0;
+
+         if(HardExitMinutes>0 && heldMinutes>=HardExitMinutes)
+         {
+            if(trade.PositionClose(ticket))
+               PrintFormat("Жёсткий выход по времени: %.0f мин в сделке, результат %.0f пт",
+                           heldMinutes, profitPoints);
+            continue;
+         }
+
+         if(SoftExitMinutes>0 && heldMinutes>=SoftExitMinutes &&
+            profitPoints>0 && profitPoints>=SoftExitMinProfitPoints)
+         {
+            // "Сделка ещё растёт" = текущая прибыль равна пиковой
+            bool stillRunning = SoftExitKeepRunning && (profitPoints>=peakPoints-0.5);
+            if(!stillRunning)
+            {
+               if(trade.PositionClose(ticket))
+                  PrintFormat("Мягкий выход по времени: %.0f мин, зафиксировано +%.0f пт (пик был %.0f)",
+                              heldMinutes, profitPoints, peakPoints);
+               continue;
+            }
+         }
       }
    }
 }

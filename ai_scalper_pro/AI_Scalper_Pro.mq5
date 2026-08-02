@@ -300,6 +300,10 @@ void OnTick()
    // п.24: новостной вход — стоп шире, волатильность в момент выхода данных объективно выше
    double slDist=atr*g_effATRSLMultiplier*(isNewsEntry?NewsVolatilitySLBoost:1.0);
    double lot=CalcLot(slDist);
+   // п.25: CalcLot возвращает 0, когда даже минимальный лот брокера рискует
+   // больше заданного процента — раньше в этом случае сделка молча открывалась
+   // завышенным объёмом. Причина отказа уже записана внутри CalcLot.
+   if(lot<=0) return;
    double tpDist;
    if(UseMaxProfitRide)
    {
@@ -326,12 +330,16 @@ void OnTick()
 
    // п.16: совокупный риск по ВСЕМ открытым сделкам этого EA не должен превышать потолок,
    // даже если MaxOpenPositions разрешает несколько сделок сразу на одном инструменте
+   // п.25: риск новой сделки считаем точной суммой от терминала (OrderCalcProfit
+   // внутри MoneyRiskPerLot) — на золоте и кроссах tick value давал неверный риск
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
-   double tickValue=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
-   double tickSize =SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
    double newTradeRiskPct=0;
-   if(equity>0 && tickValue>0 && tickSize>0)
-      newTradeRiskPct=(slDist/tickSize)*tickValue*lot/equity*100.0;
+   if(equity>0)
+   {
+      double riskMoneyPerLot=MoneyRiskPerLot(slDist);
+      if(riskMoneyPerLot>0)
+         newTradeRiskPct=riskMoneyPerLot*lot/equity*100.0;
+   }
    // В хедже считаем риск по ОБЕИМ ногам (консервативно — реальный чистый риск
    // обычно меньше, т.к. ноги в противоположных направлениях, но так надёжнее).
    if(GetOpenRiskPercent()+newTradeRiskPct*legsToOpen > g_effMaxTotalRiskPercent)

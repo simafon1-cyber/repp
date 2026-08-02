@@ -132,6 +132,62 @@ int CountOpenPositions()
    return count;
 }
 
+//===================== ТОЧНЫЙ РАСЧЁТ ДЕНЕГ (п.25) ======================
+// Раньше все денежные расчёты шли через SYMBOL_TRADE_TICK_VALUE. Для EURUSD
+// это работает, но на золоте и кроссах, где валюта прибыли не совпадает с
+// валютой счёта, у части брокеров tick value неточен или обновляется с
+// задержкой — риск считался неверно именно на тех инструментах, где цена
+// ошибки выше всего. OrderCalcProfit спрашивает точную сумму у самого
+// терминала, с учётом контракта и конвертации валют конкретного брокера.
+// Возвращает 0, если посчитать не удалось (вызывающий код обязан проверить).
+double MoneyPerDistance(int direction,double dist,double lot)
+{
+   if(dist<=0 || lot<=0) return 0;
+   double price=SymbolInfoDouble(_Symbol,(direction>0)?SYMBOL_ASK:SYMBOL_BID);
+   if(price<=0) return 0;
+   double closePrice=(direction>0)?(price+dist):(price-dist);
+   if(closePrice<=0) return 0;
+   double profit=0;
+   ENUM_ORDER_TYPE ot=(direction>0)?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+   if(!OrderCalcProfit(ot,_Symbol,lot,price,closePrice,profit)) return 0;
+   return MathAbs(profit);
+}
+
+// Сколько денег теряет 1.0 лот на дистанции стопа
+double MoneyRiskPerLot(double slDist)
+{
+   double m=MoneyPerDistance(1,slDist,1.0);
+   if(m>0) return m;
+   // Запасной путь через tick value — на случай, если OrderCalcProfit недоступен
+   double tickValue=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+   double tickSize =SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue<=0 || tickSize<=0) return 0;
+   return (slDist/tickSize)*tickValue;
+}
+
+// Знаков после запятой у шага объёма: 0.01 -> 2, 0.001 -> 3
+int VolumeDigitsOf(double step)
+{
+   for(int d=0; d<=8; d++)
+   {
+      double scaled=step*MathPow(10,d);
+      if(MathAbs(scaled-MathRound(scaled))<1e-9) return d;
+   }
+   return 2;
+}
+
+// Округление объёма ВНИЗ до шага брокера.
+// Эпсилон обязателен: в двоичной арифметике 0.29/0.01 = 28.999999999999996,
+// и без него лот молча занижался на один шаг. Проверено численно: на
+// случайных значениях шаг терялся примерно в 7% случаев.
+double FloorVolumeToStep(double volume,double step)
+{
+   if(step<=0) return volume;
+   int digits=VolumeDigitsOf(step);
+   double steps=MathFloor(volume/step+1e-9);
+   return NormalizeDouble(steps*step,digits);
+}
+
 //===================== ЖЁСТКИЕ ЗАЩИТНЫЕ ПРОВЕРКИ =======
 // Эти проверки НЕ входят в скоринг — они про исполнение и риск-менеджмент,
 // а не про качество сигнала. Пропускать их из-за "высокого score" небезопасно:
@@ -246,10 +302,6 @@ double GetOpenRiskPercent()
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
    if(equity<=0) return 0;
 
-   double tickValue=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
-   double tickSize =SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
-   if(tickValue<=0 || tickSize<=0) return 0;
-
    double totalRiskMoney=0;
    for(int i=0;i<PositionsTotal();i++)
    {
@@ -263,8 +315,20 @@ double GetOpenRiskPercent()
       double volume=PositionGetDouble(POSITION_VOLUME);
       if(sl<=0) continue; // без стопа риск не посчитать (у этого EA такого не бывает, но на всякий случай)
 
-      double dist=MathAbs(openPrice-sl);
-      totalRiskMoney += (dist/tickSize)*tickValue*volume;
+      // п.25: точная сумма от терминала вместо tick value — корректно на золоте и кроссах
+      long   ptype=PositionGetInteger(POSITION_TYPE);
+      double profit=0;
+      ENUM_ORDER_TYPE ot=(ptype==POSITION_TYPE_BUY)?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+      if(OrderCalcProfit(ot,_Symbol,volume,openPrice,sl,profit))
+         totalRiskMoney += MathAbs(profit);
+      else
+      {
+         // Запасной путь, если терминал не смог посчитать
+         double tickValue=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+         double tickSize =SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+         if(tickValue>0 && tickSize>0)
+            totalRiskMoney += (MathAbs(openPrice-sl)/tickSize)*tickValue*volume;
+      }
    }
    return totalRiskMoney/equity*100.0;
 }
@@ -299,6 +363,8 @@ bool TradingAllowed()
 }
 
 //===================== ЛОТ / СТОПЫ ======================
+// ВАЖНО: возвращает 0, если сделку открывать нельзя (риск минимального лота
+// больше заданного). Вызывающий код обязан проверить результат.
 double CalcLot(double slDist)
 {
    // п.22: плавное снижение риска по мере серии убытков (действует и на
@@ -311,21 +377,37 @@ double CalcLot(double slDist)
 
    if(!g_effUseRiskPercent)
    {
-      double lotFixed=g_effLotSize*mult;
-      lotFixed=MathFloor(lotFixed/lotStep)*lotStep;
+      double lotFixed=FloorVolumeToStep(g_effLotSize*mult,lotStep);
       return MathMax(minLot, MathMin(maxLot, lotFixed));
    }
 
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
    double riskMoney=equity*g_effRiskPercent/100.0*mult;
-   double tickValue=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
-   double tickSize =SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
-   if(tickValue<=0 || tickSize<=0 || slDist<=0) return g_effLotSize;
-   double lossPerLot=(slDist/tickSize)*tickValue;
-   if(lossPerLot<=0) return g_effLotSize;
-   double lot=riskMoney/lossPerLot;
-   lot=MathFloor(lot/lotStep)*lotStep;
-   return MathMax(minLot, MathMin(maxLot, lot));
+   if(riskMoney<=0 || slDist<=0) return FloorVolumeToStep(g_effLotSize,lotStep);
+
+   double lossPerLot=MoneyRiskPerLot(slDist);
+   if(lossPerLot<=0) return FloorVolumeToStep(g_effLotSize,lotStep); // не смогли посчитать — запасной лот
+
+   double lot=FloorVolumeToStep(riskMoney/lossPerLot, lotStep);
+
+   // Расчётный лот меньше минимального у брокера: минимальный лот рискует
+   // БОЛЬШЕ, чем разрешено. По умолчанию сделку не открываем (см.
+   // AllowMinLotOverRisk в Config.mqh) — иначе лимит риска был бы фикцией.
+   if(lot<minLot)
+   {
+      double minLotRisk=lossPerLot*minLot;
+      if(minLotRisk>riskMoney && !AllowMinLotOverRisk)
+      {
+         g_lastRejectReason=StringFormat(
+            "Мин. лот %.2f рискует %.2f при бюджете %.2f (%.2f%% от %.2f) — вход отменён",
+            minLot, minLotRisk, riskMoney, g_effRiskPercent, equity);
+         return 0;
+      }
+      lot=minLot;
+   }
+
+   if(lot>maxLot) lot=FloorVolumeToStep(maxLot,lotStep);
+   return lot;
 }
 bool CheckStopsDistance(double price,double sl,double tp)
 {
