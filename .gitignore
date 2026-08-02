@@ -37,7 +37,9 @@ tests/generated_scalper.h
 
 # Счета и пароли — НИКОГДА не в git
 accounts.json
+ai_scalper_standalone/accounts.json
 accounts.tmp
+ai_scalper_standalone/accounts.tmp
 
 # Артефакты сборки .exe (PyInstaller) — не хранятся в репозитории
 build/
@@ -48,12 +50,21 @@ dist/
 # config.py содержит ключи API, соль и хэш пароля входа; журналы и CSV —
 # номера счетов и балансы. В репозитории лежит только config.py.example.
 config.py
+ai_scalper_standalone/config.py
 config.py.bak*
+ai_scalper_standalone/config.py.bak*
 config.py.sha256
+ai_scalper_standalone/config.py.sha256
 .login_remember
+ai_scalper_standalone/.login_remember
 scalper.log
+ai_scalper_standalone/scalper.log
 *.log
 trades_log.csv
+ai_scalper_standalone/trades_log.csv
 trades_log.csv.sha256
+ai_scalper_standalone/trades_log.csv.sha256
 accounts.json
+ai_scalper_standalone/accounts.json
 accounts.tmp
+ai_scalper_standalone/accounts.tmp

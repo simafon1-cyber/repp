@@ -25,6 +25,11 @@ jobs:
     # нужна именно Windows-машина
     runs-on: windows-latest
 
+    # Программа лежит в своей папке — все шаги выполняются оттуда
+    defaults:
+      run:
+        working-directory: ai_scalper_standalone
+
     steps:
       - name: Забрать исходники
         uses: actions/checkout@v4
@@ -74,8 +79,8 @@ jobs:
         with:
           name: AI_Scalper_Pro-windows
           path: |
-            dist/AI_Scalper_Pro.exe
-            dist/config.py
+            ai_scalper_standalone/dist/AI_Scalper_Pro.exe
+            ai_scalper_standalone/dist/config.py
           retention-days: 90
 
       - name: Опубликовать в Releases (только для тегов v*)
@@ -83,8 +88,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/AI_Scalper_Pro.exe
-            dist/config.py
+            ai_scalper_standalone/dist/AI_Scalper_Pro.exe
+            ai_scalper_standalone/dist/config.py
           body: |
             Сборка программы AI Scalper Pro для Windows.
 
