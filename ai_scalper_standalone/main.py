@@ -35,6 +35,8 @@ import custom_strategy as cs
 import strategies as strat
 import multi_indicator as mi
 import news_calendar
+import telegram_signals
+import telegram_reader
 import dashboard_state as ds
 import secure_store
 from control import control
@@ -455,6 +457,15 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
                 return
 
     directions_to_open = hedge_directions if hedge_directions is not None else [direction]
+
+    # Вето по сигналу из Telegram: чужой сигнал может ЗАПРЕТИТЬ вход, если он
+    # противоречит направлению, которое программа выбрала сама. Открыть сделку,
+    # поднять лот или отодвинуть стоп он не может — см. telegram_signals.py.
+    # Отсутствие сигнала запретом НЕ считается: молчание источника не должно
+    # останавливать торговлю. При TELEGRAM_ROLE = "show" вето отключено.
+    if any(telegram_signals.veto_entry(symbol, d) for d in directions_to_open):
+        sym_state.last_reject_reason = "Сигнал из Telegram против этого направления"
+        return
 
     # Анти-дребезг (см. reversal_cooldown_ok) не применяется в хедж-режиме — мы
     # НАМЕРЕННО открываем обе стороны сразу, а не разворачиваемся против недавно
@@ -921,6 +932,14 @@ def main(stop_event=None, start_dashboard: bool = True):
     # результатов обнулялось при каждом старте и бот никогда не доходил до
     # AUTO_LEARNING_MIN_TRADES (см. auto_learning.load_learning_state).
     al.load_learning_state(sym_states)
+
+    # Чтение сигналов из Telegram — если включено. Отказ здесь НЕ мешает
+    # торговле: без сигналов бот работает как обычно, просто пишет причину
+    # в журнал. Ставить торговлю в зависимость от стороннего источника нельзя.
+    if telegram_signals.enabled():
+        problem = telegram_reader.start()
+        if problem:
+            log.warning("Telegram: %s", problem)
 
     if cfg.USE_WEB_DASHBOARD:
         if start_dashboard:

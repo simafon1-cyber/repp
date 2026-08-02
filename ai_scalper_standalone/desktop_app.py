@@ -77,6 +77,8 @@ import dashboard_state as ds
 import news_calendar
 import news_providers
 import trading_schedule as tsched
+import telegram_signals as tgs
+import telegram_reader as tgr
 import secure_store
 import strategies as strategies_mod
 import safe_files
@@ -103,7 +105,7 @@ MODE_OPTIONS = [
     ("Новости", "news_trading"),
     ("Оба", "both"),
 ]
-ADVANCED_TAB_NAMES = ["Брокер", "Equity", "Новости", "Chat AI"]
+ADVANCED_TAB_NAMES = ["Брокер", "Equity", "Новости", "Сигналы TG", "Chat AI"]
 # График календаря на вкладке "Новости": на сколько часов вперёд смотрим и
 # какой высоты полоса. Больше 24 ч смысла нет — засечки сливаются.
 NEWS_CHART_HOURS = 12
@@ -626,6 +628,7 @@ class App:
         tab_config = ttk.Frame(self.notebook)
         tab_news = ttk.Frame(self.notebook)
         tab_schedule = ttk.Frame(self.notebook)
+        tab_tg = ttk.Frame(self.notebook)
         tab_chat = ttk.Frame(self.notebook)
         tab_help = ttk.Frame(self.notebook)
 
@@ -633,7 +636,8 @@ class App:
             "Обзор": tab_overview, "Брокер": tab_broker, "Символы": tab_symbols,
             "Счета": tab_accounts, "Сделки": tab_positions, "Лог": tab_log, "Equity": tab_equity,
             "Настройка": tab_config,
-            "Календарь": tab_schedule, "Новости": tab_news, "Chat AI": tab_chat,
+            "Календарь": tab_schedule, "Новости": tab_news,
+            "Сигналы TG": tab_tg, "Chat AI": tab_chat,
             "Как пользоваться": tab_help,
         }
         for name, frame in self.tab_frames.items():
@@ -647,6 +651,7 @@ class App:
         self._build_tab_equity(tab_equity)
         self._build_tab_config(tab_config)
         self._build_tab_schedule(tab_schedule)
+        self._build_tab_telegram(tab_tg)
         self._build_tab_news(tab_news)
         self._build_tab_chat(tab_chat)
         self._build_tab_help(tab_help)
@@ -1825,6 +1830,171 @@ class App:
             self.news_tree.column(col, width=90, anchor="center")
         self.news_tree.column("event", width=220, anchor="w")
         self.news_tree.pack(fill="both", expand=True, padx=10, pady=6)
+
+    # ---- вкладка "Сигналы TG" --------------------------------------------------------
+    def _build_tab_telegram(self, parent):
+        pad = {"padx": 10, "pady": 4}
+
+        ttk.Label(parent, text="Сигналы из Telegram",
+                  font=("Segoe UI", 12, "bold")).pack(anchor="w", **pad)
+
+        ttk.Label(parent, foreground="#888", wraplength=800, justify="left", text=
+                  "Telegram запрещает ботам читать сообщения других ботов, поэтому чужой "
+                  "бот-сигнальщик читается входом под ВАШИМ аккаунтом. Нужны api_id и "
+                  "api_hash — их выдают бесплатно на my.telegram.org, раздел "
+                  "«API development tools»."
+                  ).pack(anchor="w", **pad)
+
+        warn = ttk.Label(parent, foreground="#e0a355", wraplength=800, justify="left", text=
+                         "Чужой сигнал НЕ МОЖЕТ: открыть сделку, увеличить лот или риск, "
+                         "отодвинуть стоп-лосс, отменить дневной лимит. Он может только "
+                         "добавить баллы к оценке (с потолком) и запретить вход. "
+                         "Автор сигнала не знает ни вашего депозита, ни ваших лимитов.")
+        warn.pack(anchor="w", **pad)
+
+        form = ttk.Frame(parent)
+        form.pack(fill="x", **pad)
+
+        ttk.Label(form, text="Включить чтение:").grid(row=0, column=0, sticky="w", pady=3)
+        self.tg_enabled_var = tk.BooleanVar(value=getattr(cfg, "TELEGRAM_ENABLED", False))
+        ttk.Checkbutton(form, variable=self.tg_enabled_var).grid(row=0, column=1, sticky="w")
+
+        ttk.Label(form, text="api_id:").grid(row=1, column=0, sticky="w", pady=3)
+        self.tg_api_id_var = tk.StringVar(value=str(getattr(cfg, "TELEGRAM_API_ID", 0) or ""))
+        ttk.Entry(form, textvariable=self.tg_api_id_var, width=20).grid(row=1, column=1, sticky="w")
+
+        ttk.Label(form, text="api_hash:").grid(row=2, column=0, sticky="w", pady=3)
+        self.tg_api_hash_var = tk.StringVar(value=getattr(cfg, "TELEGRAM_API_HASH", ""))
+        ttk.Entry(form, textvariable=self.tg_api_hash_var, width=44,
+                  show="*").grid(row=2, column=1, sticky="w")
+
+        ttk.Label(form, text="Источники (через запятую):").grid(row=3, column=0, sticky="w", pady=3)
+        self.tg_sources_var = tk.StringVar(
+            value=", ".join(str(x) for x in (getattr(cfg, "TELEGRAM_SOURCES", []) or [])))
+        ttk.Entry(form, textvariable=self.tg_sources_var, width=44).grid(row=3, column=1, sticky="w")
+
+        ttk.Label(form, text="Роль сигнала:").grid(row=4, column=0, sticky="w", pady=3)
+        self.tg_role_var = tk.StringVar(value=tgs.role())
+        role_box = ttk.Frame(form)
+        role_box.grid(row=4, column=1, sticky="w")
+        for i, (value, title) in enumerate((
+                (tgs.ROLE_SHOW, "Только показывать (на торговлю не влияет)"),
+                (tgs.ROLE_VETO, "Может запретить вход"),
+                (tgs.ROLE_SCORE, "Может запретить вход и добавить баллы"))):
+            ttk.Radiobutton(role_box, text=title, value=value,
+                            variable=self.tg_role_var).grid(row=i, column=0, sticky="w")
+
+        btns = ttk.Frame(parent)
+        btns.pack(anchor="w", **pad)
+        ttk.Button(btns, text="Сохранить", command=self.save_telegram_settings).grid(row=0, column=0)
+        ttk.Button(btns, text="Войти в Telegram",
+                   command=self.telegram_login).grid(row=0, column=1, padx=6)
+        ttk.Button(btns, text="Проверить связь",
+                   command=self.refresh_telegram_tab).grid(row=0, column=2)
+
+        self.tg_status_var = tk.StringVar(value="")
+        ttk.Label(parent, textvariable=self.tg_status_var, foreground="#888",
+                  wraplength=800, justify="left").pack(anchor="w", **pad)
+
+        ttk.Label(parent, text="Последние распознанные сигналы",
+                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10)
+        cols = ("time", "instrument", "direction", "text")
+        headings = ("Время", "Инструмент", "Направление", "Сообщение")
+        self.tg_tree = ttk.Treeview(parent, columns=cols, show="headings", height=10)
+        widths = {"time": 80, "instrument": 100, "direction": 110, "text": 430}
+        for col, head in zip(cols, headings):
+            self.tg_tree.heading(col, text=head)
+            self.tg_tree.column(col, width=widths[col],
+                                anchor="w" if col == "text" else "center")
+        self.tg_tree.pack(fill="both", expand=True, padx=10, pady=(2, 8))
+
+        self.refresh_telegram_tab()
+
+    def save_telegram_settings(self):
+        sources = [s.strip() for s in self.tg_sources_var.get().split(",") if s.strip()]
+        try:
+            api_id = int(self.tg_api_id_var.get().strip() or 0)
+        except ValueError:
+            messagebox.showwarning(APP_TITLE, "api_id должен быть числом.")
+            return
+
+        api_hash = self.tg_api_hash_var.get().strip()
+        # api_hash — секрет того же класса, что пароль MT5 и ключи AI:
+        # шифруем перед записью в config.py (см. secure_store.py).
+        pw = control.get_session_password()
+        salt = getattr(cfg, "SECURITY_SALT", "")
+        stored = secure_store.encrypt_value(api_hash, pw, salt) if (pw and salt and api_hash) \
+            else api_hash
+
+        _write_config_value("TELEGRAM_ENABLED", repr(bool(self.tg_enabled_var.get())))
+        _write_config_value("TELEGRAM_API_ID", repr(api_id))
+        _write_config_value("TELEGRAM_API_HASH", repr(stored))
+        _write_config_value("TELEGRAM_SOURCES", repr(sources))
+        _write_config_value("TELEGRAM_ROLE", repr(self.tg_role_var.get()))
+        try:
+            _reload_cfg()
+        except Exception:
+            pass
+        messagebox.showinfo(APP_TITLE, "Настройки Telegram сохранены.")
+        self.refresh_telegram_tab()
+
+    def telegram_login(self):
+        """Одноразовый вход по номеру телефона. Вынесен в отдельную кнопку:
+        просить код подтверждения посреди запуска торгового цикла, где его
+        никто не увидит, — верный способ получить зависший запуск."""
+        problem = tgr.preflight()
+        if problem and "Вход" not in problem:
+            messagebox.showwarning(APP_TITLE, problem)
+            return
+
+        phone = simpledialog.askstring(
+            APP_TITLE, "Номер телефона в международном формате (например +79991234567):",
+            parent=self.root)
+        if not phone:
+            return
+
+        def ask_code():
+            return simpledialog.askstring(
+                APP_TITLE, "Код подтверждения из Telegram:", parent=self.root) or ""
+
+        def ask_password():
+            return simpledialog.askstring(
+                APP_TITLE, "Пароль двухфакторной защиты (если включён):",
+                parent=self.root, show="*") or ""
+
+        error = tgr.login(phone.strip(), ask_code, ask_password)
+        if error:
+            messagebox.showerror(APP_TITLE, error)
+        else:
+            messagebox.showinfo(APP_TITLE, "Вход выполнен. Код больше не понадобится.")
+            tgr.start()
+        self.refresh_telegram_tab()
+
+    def refresh_telegram_tab(self):
+        if not tgs.enabled():
+            self.tg_status_var.set("Чтение выключено. Поставьте галочку и нажмите «Сохранить».")
+        else:
+            problem = tgr.preflight()
+            if problem:
+                self.tg_status_var.set(problem)
+            else:
+                st = tgs.status()
+                if not tgr.is_running():
+                    tgr.start()
+                    st = tgs.status()
+                last = st.get("last_message")
+                tail = f" Последнее сообщение: {last.strftime('%H:%M:%S')}." if last else ""
+                self.tg_status_var.set(st.get("detail", "") + tail)
+
+        for item in self.tg_tree.get_children():
+            self.tg_tree.delete(item)
+        for sig in tgs.history():
+            self.tg_tree.insert("", "end", values=(
+                sig["time"].strftime("%H:%M:%S"),
+                sig["instrument"],
+                "покупка" if sig["direction"] == tgs.BUY else "продажа",
+                sig["text"].replace("\n", " ")[:120],
+            ))
 
     # ---- вкладка "Календарь" ---------------------------------------------------------
     def _build_tab_schedule(self, parent):

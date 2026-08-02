@@ -69,3 +69,4 @@ ai_scalper_standalone/accounts.json
 accounts.tmp
 ai_scalper_standalone/accounts.tmp
 learning_state.json
+telegram_session

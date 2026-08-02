@@ -10,6 +10,7 @@ import pandas as pd
 import config as cfg
 import mt5_connector as mt5c
 import news_calendar
+import telegram_signals
 from indicators import (
     pullback_breakout_ok, ema_stack_ok, is_bullish_confirmation, is_bearish_confirmation,
 )
@@ -167,5 +168,12 @@ def calc_signal_score(symbol: str, direction: int, df, trend_df, point: float,
 
     # Контекст рынка (коррелирующие инструменты)
     score += market_context_score_adjustment(symbol, direction)
+
+    # Сигнал из Telegram — ТОЛЬКО надбавка за совпадение, с жёстким потолком
+    # (см. telegram_signals.py). Чужой сигнал не может открыть сделку, поднять
+    # лот или отодвинуть стоп; направление здесь уже выбрано программой, и
+    # надбавка лишь усиливает то, что она и так собиралась сделать.
+    # При TELEGRAM_ROLE = "show" (по умолчанию) надбавка всегда 0.
+    score += telegram_signals.score_bonus(symbol, direction)
 
     return round(max(0, min(100, score)), 1)
