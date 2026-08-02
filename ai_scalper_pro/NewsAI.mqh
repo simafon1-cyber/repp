@@ -106,12 +106,14 @@ double JsonGetDouble(string json,string key)
    return StringToDouble(StringSubstr(json,start,end-start));
 }
 
-// Дёргаем источник не чаще раза в минуту — новости не меняются каждый тик,
-// а WebRequest — блокирующий вызов, злоупотреблять им нельзя.
+// Дёргаем источник не чаще раза в ExternalSignalRefreshSec секунд — новости
+// не меняются каждый тик, а WebRequest — блокирующий вызов, злоупотреблять им
+// нельзя. Интервал также определяет расход лимита запросов у поставщика данных.
 bool FetchExternalSignal()
 {
    if(!UseExternalSignal) return false;
-   if(g_extLastFetch>0 && TimeCurrent()-g_extLastFetch<60) return g_extLastOk;
+   int refreshSec=MathMax(10,ExternalSignalRefreshSec); // ниже 10 с смысла нет
+   if(g_extLastFetch>0 && TimeCurrent()-g_extLastFetch<refreshSec) return g_extLastOk;
 
    string headers="Content-Type: application/json\r\n";
    char post[]; char result[]; string resultHeaders;
