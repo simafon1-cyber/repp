@@ -76,6 +76,7 @@ import dashboard_state as ds
 import news_calendar
 import news_providers
 import secure_store
+import strategies as strategies_mod
 import safe_files
 from control import control
 
@@ -1281,6 +1282,31 @@ class App:
                       foreground="#888", font=("Segoe UI", 8)).pack(
                 anchor="w", padx=8, pady=(0, 8))
 
+        # ---- Стратегия: чем именно торгуем ----
+        ttk.Label(parent, text="Стратегия", font=("Segoe UI", 12, "bold")).pack(
+            anchor="w", padx=12, pady=(16, 2))
+        ttk.Label(parent, foreground="#888", wraplength=820, justify="left",
+                  text="Режим выше задаёт РИСК, стратегия — ЧТО считать сигналом. "
+                       "Ни одна стратегия не отключает защиты счёта: дневной лимит "
+                       "убытка, ограничение просадки и пауза после серии убытков "
+                       "работают всегда."
+                  ).pack(anchor="w", padx=12, pady=(0, 6))
+
+        strat_row = ttk.Frame(parent)
+        strat_row.pack(fill="x", padx=12)
+        self.strategy_combo = ttk.Combobox(strat_row, values=strategies_mod.titles(),
+                                           state="readonly", width=28)
+        self.strategy_combo.set(strategies_mod.STRATEGIES[0].title)
+        self.strategy_combo.pack(side="left")
+        self.strategy_combo.bind("<<ComboboxSelected>>", self._on_strategy_pick)
+        ttk.Button(strat_row, text="Применить стратегию",
+                   command=self._apply_strategy).pack(side="left", padx=8)
+
+        self.strategy_desc = ttk.Label(parent, foreground="#9a9a9a", wraplength=820,
+                                       justify="left", text="")
+        self.strategy_desc.pack(anchor="w", padx=12, pady=(6, 0))
+        self._on_strategy_pick()
+
         actions = ttk.Frame(parent)
         actions.pack(fill="x", padx=12, pady=(14, 6))
         ttk.Button(actions, text="Применить режим",
@@ -1296,6 +1322,41 @@ class App:
 
         # Ниже — прежние быстрые переключатели (профиль, режим, пауза, звук)
         self._build_tab_settings(parent)
+
+    def _on_strategy_pick(self, _event=None):
+        strategy = strategies_mod.by_title(self.strategy_combo.get())
+        if strategy is not None:
+            self.strategy_desc.configure(text=strategies_mod.describe(strategy))
+
+    def _apply_strategy(self):
+        """Записывает параметры стратегии в config.py и применяет на лету."""
+        strategy = strategies_mod.by_title(self.strategy_combo.get())
+        if strategy is None:
+            return
+        params = strategies_mod.safe_params(strategy)
+        if not messagebox.askyesno(
+            APP_TITLE,
+            f"Применить стратегию «{strategy.title}»?\n\n"
+            f"Будет изменено параметров: {len(params)}.\n"
+            "Настройки риска (размер сделки, лимиты убытка) НЕ затрагиваются."
+        ):
+            return
+        try:
+            for key, value in params.items():
+                literal = str(value) if isinstance(value, bool) else repr(value)
+                _write_config_value(key, literal)
+            _reload_cfg()
+        except Exception as e:  # noqa: BLE001
+            log.exception("Не удалось применить стратегию")
+            messagebox.showerror(APP_TITLE, f"Не удалось применить стратегию: {e}")
+            return
+        self.quick_status.configure(
+            text=f"Стратегия «{strategy.title}» применена: {strategy.idea}. "
+                 f"Изменено параметров: {len(params)}.", foreground="#3fb950")
+        messagebox.showinfo(APP_TITLE,
+                            f"Стратегия «{strategy.title}» применена.\n\n"
+                            "Значения видны на вкладках точной настройки — "
+                            "их можно донастроить вручную.")
 
     def _quick_preset_by_value(self, value):
         for preset in self.QUICK_PRESETS:
