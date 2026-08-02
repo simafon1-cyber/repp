@@ -333,8 +333,10 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     adaptive_threshold = al.adaptive_score_threshold(profile["min_score_to_trade"], sym_state)
 
     # Новостной режим (или ОБА) — сначала пробуем поймать пробой на свежей важной новости.
-    # ВНИМАНИЕ: news_calendar.py — заглушка, пока не подключишь реальный календарь (см. докстринг
-    # там), это условие всегда False, т.е. MODE_NEWS_TRADING в этой версии реально не сработает.
+    # Календарь подключён (встроенный календарь MT5 через сервис CalendarExport
+    # либо внешний API — см. NEWS_PROVIDER_CHAIN), так что этот режим рабочий.
+    # Если ни один источник не отвечает, пробоя просто не будет — вход не
+    # состоится, а не откроется вслепую.
     if trading_mode in (cfg.TradingMode.NEWS_TRADING, cfg.TradingMode.BOTH):
         has_signal, news_dir, news_conf = news_calendar.detect_news_breakout(symbol, cfg.NEWS_BREAKOUT_WINDOW_MIN)
         if has_signal and news_conf >= adaptive_threshold:
@@ -342,7 +344,7 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
             sym_state.last_buy_score = score if direction == 1 else 0
             sym_state.last_sell_score = score if direction == -1 else 0
         elif trading_mode == cfg.TradingMode.NEWS_TRADING:
-            sym_state.last_reject_reason = "Новостной режим: свежего пробоя нет (календарь не подключен)"
+            sym_state.last_reject_reason = "Новостной режим: свежего пробоя нет"
             return
 
     # Обычный скальпинг-паттерн — если новостной вход не сработал (или режим = только скальпинг)

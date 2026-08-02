@@ -76,6 +76,7 @@ import main as bot_engine
 import dashboard_state as ds
 import news_calendar
 import news_providers
+import trading_schedule as tsched
 import secure_store
 import strategies as strategies_mod
 import safe_files
@@ -624,6 +625,7 @@ class App:
         tab_equity = ttk.Frame(self.notebook)
         tab_config = ttk.Frame(self.notebook)
         tab_news = ttk.Frame(self.notebook)
+        tab_schedule = ttk.Frame(self.notebook)
         tab_chat = ttk.Frame(self.notebook)
         tab_help = ttk.Frame(self.notebook)
 
@@ -631,7 +633,7 @@ class App:
             "Обзор": tab_overview, "Брокер": tab_broker, "Символы": tab_symbols,
             "Счета": tab_accounts, "Сделки": tab_positions, "Лог": tab_log, "Equity": tab_equity,
             "Настройка": tab_config,
-            "Новости": tab_news, "Chat AI": tab_chat,
+            "Календарь": tab_schedule, "Новости": tab_news, "Chat AI": tab_chat,
             "Как пользоваться": tab_help,
         }
         for name, frame in self.tab_frames.items():
@@ -644,6 +646,7 @@ class App:
         self._build_tab_log(tab_log)
         self._build_tab_equity(tab_equity)
         self._build_tab_config(tab_config)
+        self._build_tab_schedule(tab_schedule)
         self._build_tab_news(tab_news)
         self._build_tab_chat(tab_chat)
         self._build_tab_help(tab_help)
@@ -1776,6 +1779,10 @@ class App:
 
         ttk.Label(parent, text="Источники календаря", font=("Segoe UI", 12, "bold")).pack(**pad)
         ttk.Label(parent, foreground="#888", wraplength=780, justify="left", text=
+                  "Расписание работы бота — на вкладке «Календарь». Здесь только "
+                  "настройка источников и полный список событий."
+                  ).pack(anchor="w", padx=10)
+        ttk.Label(parent, foreground="#888", wraplength=780, justify="left", text=
                   "Источники опрашиваются по порядку — берётся первый, который ответил. "
                   "Календарь MetaTrader 5 бесплатен и без лимитов, но требует запущенного "
                   "сервиса CalendarExport в терминале. Finnhub работает даже при закрытом "
@@ -1810,8 +1817,48 @@ class App:
         ttk.Label(parent, textvariable=self.news_status_var, foreground="#888", wraplength=780,
                   justify="left").pack(**pad)
 
-        # --- График календаря: ближайшие часы одной полосой ---
-        ttk.Label(parent, text="Ближайшие события", font=("Segoe UI", 10, "bold")).pack(
+        cols = ("time", "left", "currency", "event", "impact", "actual", "estimate", "prev")
+        headings = ("Время", "Осталось", "Валюта", "Событие", "Важность", "Факт", "Прогноз", "Пред.")
+        self.news_tree = ttk.Treeview(parent, columns=cols, show="headings", height=10)
+        for col, head in zip(cols, headings):
+            self.news_tree.heading(col, text=head)
+            self.news_tree.column(col, width=90, anchor="center")
+        self.news_tree.column("event", width=220, anchor="w")
+        self.news_tree.pack(fill="both", expand=True, padx=10, pady=6)
+
+    # ---- вкладка "Календарь" ---------------------------------------------------------
+    def _build_tab_schedule(self, parent):
+        """Расписание работы бота: когда войдёт, когда нет и по какой новости.
+
+        Всё, что здесь показано, считается модулем trading_schedule.py, который
+        повторяет РЕАЛЬНЫЕ фильтры входа и берёт те же настройки. Это не
+        отдельный «примерный» прогноз — если написано «не входит до 15:30»,
+        бот действительно не войдёт."""
+        pad = {"padx": 10, "pady": 4}
+
+        ttk.Label(parent, text="Расписание работы бота",
+                  font=("Segoe UI", 12, "bold")).pack(anchor="w", **pad)
+
+        # --- Карточка "прямо сейчас" ---
+        status_box = ttk.Frame(parent)
+        status_box.pack(fill="x", **pad)
+        self.sched_status_var = tk.StringVar(value="Нажмите «Обновить»")
+        self.sched_status_label = ttk.Label(status_box, textvariable=self.sched_status_var,
+                                            font=("Segoe UI", 11, "bold"))
+        self.sched_status_label.pack(anchor="w")
+        self.sched_detail_var = tk.StringVar(value="")
+        ttk.Label(status_box, textvariable=self.sched_detail_var, foreground="#888",
+                  wraplength=780, justify="left").pack(anchor="w")
+
+        btns = ttk.Frame(parent)
+        btns.pack(anchor="w", **pad)
+        ttk.Button(btns, text="Обновить", command=self.refresh_news_tab).grid(row=0, column=0)
+        self.sched_updated_var = tk.StringVar(value="")
+        ttk.Label(btns, textvariable=self.sched_updated_var, foreground="#666").grid(
+            row=0, column=1, padx=10)
+
+        # --- График ---
+        ttk.Label(parent, text="Ближайшие 12 часов", font=("Segoe UI", 10, "bold")).pack(
             anchor="w", padx=10)
         self.news_canvas = tk.Canvas(parent, height=NEWS_CHART_HEIGHT, bg="#1e1e1e",
                                      highlightthickness=0)
@@ -1821,14 +1868,96 @@ class App:
         self.news_canvas.bind("<Configure>", lambda e: self._draw_news_chart())
         self._news_events_cache = []
 
-        cols = ("time", "left", "currency", "event", "impact", "actual", "estimate", "prev")
-        headings = ("Время", "Осталось", "Валюта", "Событие", "Важность", "Факт", "Прогноз", "Пред.")
-        self.news_tree = ttk.Treeview(parent, columns=cols, show="headings", height=10)
+        # --- Таблица расписания ---
+        ttk.Label(parent, text="Что и когда остановит торговлю",
+                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10)
+        cols = ("window", "action", "event", "currency", "symbols")
+        headings = ("Окно", "Что делает бот", "Новость", "Валюта", "Затронутые пары")
+        self.sched_tree = ttk.Treeview(parent, columns=cols, show="headings", height=9)
+        widths = {"window": 120, "action": 110, "event": 240, "currency": 70, "symbols": 160}
         for col, head in zip(cols, headings):
-            self.news_tree.heading(col, text=head)
-            self.news_tree.column(col, width=90, anchor="center")
-        self.news_tree.column("event", width=220, anchor="w")
-        self.news_tree.pack(fill="both", expand=True, padx=10, pady=6)
+            self.sched_tree.heading(col, text=head)
+            self.sched_tree.column(col, width=widths[col],
+                                   anchor="w" if col in ("event", "symbols") else "center")
+        self.sched_tree.pack(fill="both", expand=True, padx=10, pady=(2, 4))
+        # Идущее прямо сейчас окно подсвечиваем — его легко не заметить в списке
+        self.sched_tree.tag_configure("now", foreground="#e05561")
+
+        self.sched_free_var = tk.StringVar(value="")
+        ttk.Label(parent, textvariable=self.sched_free_var, foreground="#6ab04c",
+                  wraplength=780, justify="left").pack(anchor="w", padx=10, pady=(0, 8))
+
+    def _watched_symbols(self) -> list:
+        """Пары, по которым бот реально работает. Список с дашборда точнее
+        конфига: там учтены отключённые вручную символы."""
+        try:
+            symbols = list(ds.get_snapshot().get("symbols", {}).keys())
+        except Exception:
+            symbols = []
+        return symbols or list(getattr(cfg, "SYMBOLS", []))
+
+    def _apply_schedule(self, events):
+        symbols = self._watched_symbols()
+        now = datetime.now()
+
+        status = tsched.current_status(symbols, events, now)
+        if status["trading"]:
+            self.sched_status_var.set("Сейчас: торгует")
+            try:
+                self.sched_status_label.configure(foreground="#6ab04c")
+            except Exception:
+                pass
+        else:
+            # Причина уже сформулирована целиком ("Выходной — рынок закрыт"),
+            # приписывать к ней ещё одно тире незачем.
+            self.sched_status_var.set(f"Сейчас: не входит. {status['reason']}")
+            try:
+                self.sched_status_label.configure(foreground="#e05561")
+            except Exception:
+                pass
+
+        detail = status["detail"]
+        nxt = tsched.next_block(symbols, events, now)
+        if nxt:
+            detail += (f"  Ближайшая пауза: {nxt['start'].strftime('%H:%M')}–"
+                       f"{nxt['end'].strftime('%H:%M')} ({nxt['event']}).")
+        elif status["trading"]:
+            detail += "  Известных пауз по новостям впереди нет."
+        self.sched_detail_var.set(detail)
+
+        for item in self.sched_tree.get_children():
+            self.sched_tree.delete(item)
+
+        rows = tsched.build_schedule(symbols, events, now, hours_ahead=48)
+        impact_ru = {"high": "важная", "medium": "средняя", "low": "слабая"}
+        for r in rows:
+            window = f"{r['start'].strftime('%d.%m %H:%M')}–{r['end'].strftime('%H:%M')}"
+            action = tsched.ACTION_TITLES.get(r["action"], r["action"])
+            if r["active_now"]:
+                action += " (идёт)"
+            self.sched_tree.insert(
+                "", "end",
+                tags=("now",) if r["active_now"] else (),
+                values=(window, action, f"{r['event']} ({impact_ru.get(r['impact'], '')})",
+                        r["currency"], ", ".join(r["symbols"])))
+
+        if not rows:
+            if not tsched.news_filter_enabled():
+                self.sched_free_var.set(
+                    "Фильтр новостей выключен (USE_NEWS_FILTER = False) — бот не будет "
+                    "останавливаться перед выходом данных.")
+            else:
+                self.sched_free_var.set(
+                    "Новостей, затрагивающих ваши пары, в ближайшие двое суток не найдено.")
+        else:
+            free = tsched.quiet_windows(symbols, events, now, hours_ahead=12)
+            if free:
+                parts = [f"{a.strftime('%H:%M')}–{b.strftime('%H:%M')}" for a, b in free[:4]]
+                self.sched_free_var.set("Спокойные окна (12 ч): " + ", ".join(parts))
+            else:
+                self.sched_free_var.set("Спокойных окон в ближайшие 12 часов нет.")
+
+        self.sched_updated_var.set("обновлено " + now.strftime("%H:%M:%S"))
 
     # ---- график календаря ------------------------------------------------------------
     def _draw_news_chart(self):
@@ -1870,7 +1999,13 @@ class App:
         block_minutes = getattr(cfg, "NEWS_HARD_BLOCK_WINDOW_MIN", 30)
         colors = {"high": "#e05561", "medium": "#e0a355", "low": "#5a7a8a"}
 
-        events = [e for e in self._news_events_cache if now <= e["time"] <= now + horizon]
+        # Показываем ТОЛЬКО события, затрагивающие ваши пары — ровно те же, что
+        # попадают в таблицу расписания. Иначе график рисовал бы красную зону
+        # блокировки, скажем, на японской статистике, а бот по EURUSD и золоту
+        # в этот момент спокойно торговал бы: график обещал бы то, чего не будет.
+        watched = self._watched_symbols()
+        events = [e for e in self._news_events_cache
+                  if now <= e["time"] <= now + horizon and tsched.affected_symbols(watched, e)]
         # Зоны блокировки рисуем ПЕРВЫМ проходом, чтобы прямоугольники не легли
         # поверх засечек соседних событий.
         for e in events:
@@ -1909,7 +2044,7 @@ class App:
 
         if not events:
             canvas.create_text(width / 2, h / 2 - 6,
-                               text=f"Ближайшие {NEWS_CHART_HOURS} ч — важных событий нет",
+                               text=f"Ближайшие {NEWS_CHART_HOURS} ч — событий по вашим парам нет",
                                fill="#666", font=("Segoe UI", 9))
         else:
             canvas.create_text(width - right_pad, 8, anchor="ne",
@@ -1949,10 +2084,20 @@ class App:
         now = datetime.now()
         horizon = now + timedelta(days=3)
         rank = {"low": 0, "medium": 1, "high": 2}
-        events = [e for e in events if rank.get(e["impact"], 0) >= 1 and now <= e["time"] <= horizon]
-        self.root.after(0, lambda: self._apply_news_result(events, used, error))
 
-    def _apply_news_result(self, events, used, error):
+        # Таблица "Новости" — только предстоящие события.
+        upcoming = [e for e in events
+                    if rank.get(e["impact"], 0) >= 1 and now <= e["time"] <= horizon]
+        # Расписание — ВСЕ события, включая только что прошедшие: окно блокировки
+        # вокруг новости, вышедшей 10 минут назад, ещё идёт, и именно его важнее
+        # всего показать. Отфильтруй мы их здесь — строка "идёт сейчас" не
+        # появилась бы никогда.
+        recent = now - timedelta(hours=6)
+        for_schedule = [e for e in events if recent <= e["time"] <= horizon]
+
+        self.root.after(0, lambda: self._apply_news_result(upcoming, for_schedule, used, error))
+
+    def _apply_news_result(self, events, for_schedule, used, error):
         for item in self.news_tree.get_children():
             self.news_tree.delete(item)
 
@@ -1968,8 +2113,14 @@ class App:
                 e.get("actual", ""), e.get("estimate", ""), e.get("prev", ""),
             ))
 
-        self._news_events_cache = events
+        self._news_events_cache = for_schedule
         self._draw_news_chart()
+        try:
+            self._apply_schedule(for_schedule)
+        except Exception as e:
+            # Расписание — справочная вкладка; её поломка не должна ронять
+            # вкладку "Новости" вместе с настройками источников.
+            log.exception("Не удалось построить расписание: %s", e)
 
         source_txt = news_providers.PROVIDER_TITLES.get(used, used) if used else ""
         if error:
