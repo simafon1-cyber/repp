@@ -78,6 +78,7 @@ import dashboard_state as ds
 import news_calendar
 import news_providers
 import trading_schedule as tsched
+import mt5_install
 import telegram_signals as tgs
 import telegram_reader as tgr
 import secure_store
@@ -582,6 +583,10 @@ class App:
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Первый запуск: сами ставим советники и сервис в MetaTrader, чтобы
+        # пользователю не приходилось запускать отдельные установщики.
+        self.root.after(1200, self._auto_install_into_mt5_once)
 
         if cfg.USE_WEB_DASHBOARD and not self._dashboard_started:
             try:
@@ -1833,6 +1838,24 @@ class App:
                   "сигналы Telegram независимы: выключение одного не трогает другое."
                   ).pack(anchor="w", **pad)
 
+        # ---------- Установка в MetaTrader ----------
+        mt = ttk.LabelFrame(parent, text=" Установка в MetaTrader 5 ")
+        mt.pack(fill="x", padx=12, pady=(8, 4))
+
+        ttk.Label(mt, foreground="#888", wraplength=780, justify="left", text=
+                  "Советники и сервис календаря копируются в терминал и собираются "
+                  "автоматически — жать F7 в MetaEditor не нужно. Делается один раз "
+                  "при первом запуске; кнопка ниже — если терминал переустановили или "
+                  "добавили новый."
+                  ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
+
+        ttk.Button(mt, text="Установить в MetaTrader",
+                   command=self.install_into_mt5).grid(row=1, column=0, sticky="w",
+                                                       padx=8, pady=4)
+        self.mt_install_var = tk.StringVar(value="")
+        ttk.Label(mt, textvariable=self.mt_install_var, foreground="#888",
+                  wraplength=600, justify="left").grid(row=1, column=1, sticky="w", padx=8)
+
         # ---------- Календарь новостей ----------
         cal = ttk.LabelFrame(parent, text=" Календарь новостей ")
         cal.pack(fill="x", padx=12, pady=(8, 4))
@@ -1928,6 +1951,57 @@ class App:
                    command=self.refresh_sources_tab).grid(row=0, column=2)
 
         self.refresh_sources_tab()
+
+    def install_into_mt5(self, silent: bool = False):
+        """Установка советников и сервиса в терминал.
+
+        Идёт в фоновом потоке: копирование и компиляция занимают секунды, но
+        MetaEditor может задуматься, и замораживать окно на это время нельзя.
+
+        silent=True — автоматический запуск при первом старте: без окошка
+        «готово», только строка состояния. Молча ставить что-то в чужую
+        программу и ещё и рапортовать об этом поверх экрана — перебор."""
+        def worker():
+            report = mt5_install.install_all(
+                progress=lambda t: self.root.after(0, lambda: self._set_mt_status(t)))
+            self.root.after(0, lambda: self._after_mt_install(report, silent))
+
+        self._set_mt_status("Устанавливаю в MetaTrader...")
+        threading.Thread(target=worker, daemon=True, name="mt5-install").start()
+
+    def _set_mt_status(self, text: str):
+        var = getattr(self, "mt_install_var", None)
+        if var is not None:
+            try:
+                var.set(text)
+            except Exception:
+                pass
+
+    def _after_mt_install(self, report: dict, silent: bool):
+        self._set_mt_status(report.get("text", ""))
+        log.info("Установка в MetaTrader: %s", report.get("text", ""))
+        if silent:
+            return
+        if report.get("terminals"):
+            messagebox.showinfo(APP_TITLE, report.get("text", "Готово."))
+        else:
+            messagebox.showwarning(APP_TITLE, report.get("text", "Не удалось."))
+
+    def _auto_install_into_mt5_once(self):
+        """Первый запуск: ставим всё сами, без вопросов.
+
+        Смысл в том, чтобы пользователю не пришлось ставить ничего отдельно.
+        Повторно не лезем: если сервис календаря уже на месте, считаем, что
+        установка была."""
+        try:
+            if not mt5_install.sources_available():
+                return
+            if mt5_install.is_installed():
+                self._set_mt_status("Уже установлено в MetaTrader.")
+                return
+            self.install_into_mt5(silent=True)
+        except Exception as e:
+            log.warning("Автоустановка в MetaTrader не выполнена: %s", e)
 
     def save_sources(self):
         """Сохраняет обе группы разом — это одна кнопка на всю вкладку."""

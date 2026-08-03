@@ -50,6 +50,10 @@ jobs:
         # Команда повторяет build_exe.bat. --exclude-module config: config.py
         # остаётся обычным файлом рядом с программой, чтобы настройки можно
         # было менять без пересборки.
+        #
+        # --add-data кладёт ВНУТРЬ .exe исходники советников (.mq5/.mqh).
+        # Программа сама копирует их в MetaTrader и вызывает компилятор при
+        # первом запуске — отдельные установщики запускать не нужно.
         run: >
           python -m PyInstaller --noconfirm --onefile --windowed
           --name "AI_Scalper_Pro"
@@ -60,6 +64,9 @@ jobs:
           --hidden-import telegram_signals
           --hidden-import telegram_reader
           --hidden-import trading_schedule
+          --hidden-import mt5_install
+          --add-data "../mql5;mql5"
+          --add-data "../ai_scalper_pro;ai_scalper_pro"
           --collect-all telethon
           --collect-all MetaTrader5
           --collect-all anthropic
