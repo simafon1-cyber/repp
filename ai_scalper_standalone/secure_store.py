@@ -74,6 +74,36 @@ def _derive_fernet_key(password: str, salt_hex: str) -> bytes:
     return base64.urlsafe_b64encode(raw)
 
 
+def private_mode() -> bool:
+    """Приватный режим: репозиторий закрытый, секреты лежат в config.py
+    открытым текстом.
+
+    Зачем он вообще нужен. Шифрование секретов держится на пароле входа: без
+    него расшифровать нечего. Как только вход отключён (REQUIRE_LOGIN = False),
+    получается тупик — ключи в файле есть, а открыть их нечем. Приватный режим
+    убирает этот тупик честно: не притворяется, что шифрует, а прямо говорит,
+    что защита теперь одна — закрытый репозиторий и ваш компьютер.
+
+    Что он НЕ отменяет: telegram_session, accounts.json, журналы и CSV сделок
+    остаются вне git при любом режиме (см. .gitignore)."""
+    try:
+        import config as cfg
+    except Exception:
+        return False
+    return bool(getattr(cfg, "PRIVATE_MODE", False))
+
+
+def protect_secret(plaintext: str, password: str, salt_hex: str) -> str:
+    """Как секрет должен лечь в config.py — единая точка на всю программу.
+
+    В приватном режиме возвращает значение как есть, иначе шифрует. Раньше
+    каждое место вызывало encrypt_value() напрямую, и добавить режим означало
+    бы править их поодиночке — забыть одно место было делом времени."""
+    if private_mode():
+        return plaintext
+    return encrypt_value(plaintext, password, salt_hex)
+
+
 def encrypt_value(plaintext: str, password: str, salt_hex: str) -> str:
     """Возвращает "enc:<токен>", готовое для записи в config.py как строковый
     литерал. Пустая строка остаётся пустой строкой (нечего шифровать)."""

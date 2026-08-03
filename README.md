@@ -11,7 +11,7 @@
 | Служебное | Где лежит | Для чего |
 |---|---|---|
 | Установщики | [`install/`](install/) | Файлы `.bat` для Windows: установка советников и сервиса календаря в MT5, автозапуск мостов |
-| Проверки | [`tests/`](tests/) | 749 автоматических тестов, запуск: `bash tests/run_all.sh` |
+| Проверки | [`tests/`](tests/) | 814 автоматических тестов, запуск: `bash tests/run_all.sh` |
 | Документация | [`docs/`](docs/) | Таблица параметров DualGuard EA |
 
 ---
@@ -48,10 +48,18 @@
 **Releases**, где вложения не входят в историю репозитория.
 
 **Файлы с секретами и личными данными:** `config.py` (ключи API, соль, хэш
-пароля), `.login_remember`, `scalper.log`, `trades_log.csv`, `accounts.json`.
-Все они в `.gitignore`. В репозитории лежит только
+пароля), `.login_remember`, `scalper.log`, `trades_log.csv`, `accounts.json`,
+`telegram_session`. Все они в `.gitignore`. В репозитории лежит только
 [`config.py.example`](ai_scalper_standalone/config.py.example) — та же
 структура с пустыми полями, которые заполняются через интерфейс программы.
+
+**Приватный режим.** Если репозиторий закрытый и вы хотите хранить свои
+настройки и ключи прямо в нём — запустите `install/enable-private-mode.bat`.
+Он включит `PRIVATE_MODE` (секреты перестанут шифроваться) и разрешит git
+сохранять `config.py`. При этом `telegram_session`, `accounts.json`, журналы и
+CSV сделок остаются вне git **всегда**: закрытый репозиторий не повод класть
+туда действующие пропуска. Подробнее — в
+[`ai_scalper_standalone/README.md`](ai_scalper_standalone/README.md).
 
 ---
 

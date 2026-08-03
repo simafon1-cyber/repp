@@ -311,7 +311,10 @@ def test_wiring() -> None:
             saver = ast.get_source_segment(gui, node)
     check(saver is not None, "Сохранение источников — одной функцией")
     if saver:
-        check("secure_store.encrypt_value" in saver, "Секреты шифруются перед записью")
+        # protect_secret — единая точка: шифрует или кладёт открытым текстом
+        # в приватном режиме (см. secure_store.private_mode)
+        check("secure_store.protect_secret" in saver,
+              "Секреты пишутся через единую защищённую точку")
         check("protect(self.tg_api_hash_var" in saver, "api_hash проходит через шифрование")
         check('_write_config_value("TELEGRAM_ENABLED"' in saver,
               "Выключатель Telegram сохраняется")

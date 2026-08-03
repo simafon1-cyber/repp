@@ -446,6 +446,12 @@ def _migrate_legacy_secrets():
     действий пользователя. Best-effort: если что-то пойдёт не так — оставляем
     всё как было (старый открытый режим), программа не ломается."""
     try:
+        if secure_store.private_mode():
+            # В приватном режиме секреты намеренно лежат открытым текстом.
+            # Зашифровать их «на всякий случай» значило бы вернуть тот самый
+            # тупик, ради выхода из которого режим и сделан: вход отключён,
+            # пароля нет, расшифровать нечем.
+            return
         if getattr(cfg, "DASHBOARD_PASSWORD_HASH", ""):
             return  # уже мигрировано
         legacy_password = getattr(cfg, "DASHBOARD_PASSWORD", "")
@@ -846,9 +852,9 @@ class App:
                 raw_password = self.password_var.get()
                 pw = control.get_session_password()
                 salt = getattr(cfg, "SECURITY_SALT", "")
-                stored_password = (
-                    secure_store.encrypt_value(raw_password, pw, salt) if (pw and salt) else raw_password
-                )
+                # protect_secret сам решает, шифровать или класть открытым
+                # текстом (приватный режим) — см. secure_store.private_mode()
+                stored_password = secure_store.protect_secret(raw_password, pw, salt)
                 _write_config_value("MT5_PASSWORD", repr(stored_password))
                 _write_config_value("MT5_SERVER", repr(server_text))
             _write_config_value("MT5_TERMINAL_PATH", repr(self.term_path_var.get().strip()))
@@ -1757,8 +1763,7 @@ class App:
                         continue  # поле оставили пустым — старый ключ не трогаем
                     if text == SECRET_PLACEHOLDER:
                         continue  # ключ не меняли, в поле стоит заглушка
-                    if session_pw and salt:
-                        text = secure_store.encrypt_value(text, session_pw, salt)
+                    text = secure_store.protect_secret(text, session_pw, salt)
                     _write_config_value(key, repr(text))
                     continue
                 literal = str(value) if isinstance(value, bool) else repr(value)
@@ -1948,8 +1953,9 @@ class App:
         salt = getattr(cfg, "SECURITY_SALT", "")
 
         def protect(value):
-            """Секреты шифруются перед записью в config.py — как пароль MT5."""
-            return secure_store.encrypt_value(value, pw, salt) if (pw and salt and value) else value
+            """Как секрет ляжет в config.py: зашифрованным или открытым
+            текстом в приватном режиме — решает secure_store."""
+            return secure_store.protect_secret(value, pw, salt)
 
         keys = dict(getattr(cfg, "NEWS_API_KEYS", {}) or {})
         keys["finnhub"] = protect(self.news_api_key_var.get().strip())
