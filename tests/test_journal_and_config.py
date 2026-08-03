@@ -388,6 +388,189 @@ def test_loss_counter_not_reset_without_pause() -> None:
           "В советнике то же правило")
 
 
+def test_no_pauses_left() -> None:
+    """Владелец: «Без паузы, убери все».
+
+    Проверяем каждое место, где бот раньше ЖДАЛ, а не отказывал по существу
+    сделки. Значения читаем из шаблона заново: тесты выше подменяют настройки
+    в памяти, и включённая пауза в поставляемом конфиге прошла бы незамеченной."""
+    print("\n[Пауз не осталось ни одной]")
+    from state import SymbolState
+
+    fresh = types.ModuleType("fresh_pauses")
+    exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
+
+    check(int(fresh.PAUSE_MINUTES_AFTER_LOSS_STREAK) == 0,
+          "Пауза после серии убытков", str(fresh.PAUSE_MINUTES_AFTER_LOSS_STREAK))
+    check(int(fresh.MIN_BARS_BETWEEN_REVERSAL) == 0,
+          "Ожидание перед разворотом", str(fresh.MIN_BARS_BETWEEN_REVERSAL))
+    check(fresh.USE_ROLLOVER_GUARD is False,
+          "Пауза вокруг полуночи брокера", str(fresh.USE_ROLLOVER_GUARD))
+    check(int(fresh.NEWS_HARD_BLOCK_WINDOW_MIN) == 0,
+          "Пауза рядом с важной новостью", str(fresh.NEWS_HARD_BLOCK_WINDOW_MIN))
+    check(fresh.USE_TRADING_HOURS is False,
+          "Ограничение часов торговли", str(fresh.USE_TRADING_HOURS))
+
+    # А теперь то же самое через сам код, а не через значения настроек
+    saved = {name: getattr(CFG, name, None) for name in
+             ("MIN_BARS_BETWEEN_REVERSAL", "USE_ROLLOVER_GUARD",
+              "ROLLOVER_GUARD_MINUTES", "USE_TRADING_HOURS",
+              "USE_NEWS_FILTER")}
+    CFG.MIN_BARS_BETWEEN_REVERSAL = 0
+    CFG.USE_ROLLOVER_GUARD = False
+    CFG.USE_TRADING_HOURS = False
+    try:
+        sym = SymbolState("XAUUSD")
+        sym.last_close_direction = 1     # только что закрыли покупку
+        sym.last_close_bar_index = 100
+        sym.bar_counter = 100            # тот же самый бар
+        check(rm.reversal_cooldown_ok(sym, -1) is True,
+              "Разворот возможен сразу, на том же баре")
+
+        check(rm.rollover_guard_ok(False) is True,
+              "Полночь брокера торговлю не останавливает")
+        check(rm.trading_hours_ok() is True, "Часы торговли не ограничены")
+
+        # Проверяем именно ту минуту, в которую пауза срабатывала бы. Через
+        # rollover_guard_ok это выпало бы на реальные часы и проверялось раз в
+        # сутки по случайности — то есть не проверялось бы вовсе.
+        check(rm.rollover_blocked(0, 0, 0) is False,
+              "0 минут роллoвера = паузы нет даже ровно в полночь")
+        check(rm.rollover_blocked(5, 0, 0) is False, "И рядом с ней тоже")
+        # А если паузу вернуть — она обязана работать как раньше
+        check(rm.rollover_blocked(0, 0, 15) is True,
+              "Включённая пауза ловит саму минуту смены дня")
+        check(rm.rollover_blocked(10, 0, 15) is True, "И 10 минут после")
+        check(rm.rollover_blocked(1435, 0, 15) is True,
+              "И 5 минут до, через полночь")
+        check(rm.rollover_blocked(60, 0, 15) is False,
+              "Через час после — уже не пауза")
+    finally:
+        for name, value in saved.items():
+            if value is not None:
+                setattr(CFG, name, value)
+
+
+def test_news_no_longer_pauses() -> None:
+    """Новостная пауза снята, но мягкий штраф — не пауза и остаётся."""
+    print("\n[Новости больше не останавливают торговлю]")
+    import news_calendar as nc
+    import trading_schedule as tsched
+
+    saved_filter = getattr(CFG, "USE_NEWS_FILTER", True)
+    saved_events = nc._get_events
+    # Важная новость ПРЯМО СЕЙЧАС: без неё проверка ничего не проверяет —
+    # пустой календарь и так не блокирует.
+    from datetime import datetime as dtm
+    nc._get_events = lambda: ([{"time": dtm.now(), "currency": "USD",
+                                "event": "Nonfarm Payrolls", "impact": "high"}], "")
+    CFG.USE_NEWS_FILTER = True
+    try:
+        check(nc.is_high_impact_event_near("XAUUSD", 30) is True,
+              "Проверка вообще работает: с окном 30 новость найдена")
+
+        # Самый жёсткий случай: подбор событий ВСЕГДА что-то находит. Если бы
+        # нулевое окно опиралось только на сравнение времён, оно зависело бы
+        # от микросекунд — то есть не проверялось бы вовсе.
+        saved_near = nc._relevant_events_near
+        nc._relevant_events_near = lambda *a, **k: [{"impact": "high"}]
+        try:
+            check(nc.is_high_impact_event_near("XAUUSD", 0) is False,
+                  "Нулевое окно не блокирует, даже когда событие найдено")
+            check(nc.is_high_impact_event_near("XAUUSD", -5) is False,
+                  "Отрицательное окно тоже не блокирует")
+            check(nc.is_high_impact_event_near("XAUUSD", 30) is True,
+                  "А ненулевое — блокирует, проверка не сломана насовсем")
+        finally:
+            nc._relevant_events_near = saved_near
+    finally:
+        CFG.USE_NEWS_FILTER = saved_filter
+        nc._get_events = saved_events
+
+    # Расписание не должно рисовать «паузу», которой нет
+    saved_hard = getattr(CFG, "NEWS_HARD_BLOCK_WINDOW_MIN", 30)
+    saved_soft = getattr(CFG, "NEWS_SOFT_PENALTY_WINDOW_MIN", 30)
+    from datetime import datetime as dt
+    high = {"time": dt(2026, 8, 3, 15, 30), "currency": "USD",
+            "event": "Nonfarm Payrolls", "impact": "high"}
+    medium = {"time": dt(2026, 8, 3, 16, 0), "currency": "USD",
+              "event": "Индекс PMI", "impact": "medium"}
+    try:
+        CFG.NEWS_HARD_BLOCK_WINDOW_MIN = 0
+        CFG.NEWS_SOFT_PENALTY_WINDOW_MIN = 30
+        check(tsched.event_window(high) is None,
+              "Важная новость больше не создаёт окно остановки")
+
+        window = tsched.event_window(medium)
+        check(window is not None, "Мягкий штраф остался — он не пауза")
+        if window:
+            start, end, action = window
+            check(action == tsched.ACTION_PENALTY,
+                  "И это именно штраф к оценке, а не блокировка", str(action))
+            check((end - start).total_seconds() == 60 * 60,
+                  "Окно штрафа берётся из своей настройки, а не из снятой",
+                  str(end - start))
+
+        # Штраф можно убрать отдельно, не трогая блокировку
+        CFG.NEWS_SOFT_PENALTY_WINDOW_MIN = 0
+        check(tsched.event_window(medium) is None,
+              "Ноль в окне штрафа выключает и его")
+    finally:
+        CFG.NEWS_HARD_BLOCK_WINDOW_MIN = saved_hard
+        CFG.NEWS_SOFT_PENALTY_WINDOW_MIN = saved_soft
+
+    # Штраф и блокировка должны читать РАЗНЫЕ настройки: иначе снятие паузы
+    # заодно выключило бы штраф, а это разные вещи.
+    engine = code_only((APP / "signal_engine.py").read_text(encoding="utf-8"))
+    penalty = engine.split("soft_news_penalty", 1)[0][-400:]
+    check("NEWS_SOFT_PENALTY_WINDOW_MIN" in penalty,
+          "Штраф берёт своё окно")
+    check("NEWS_HARD_BLOCK_WINDOW_MIN" not in penalty,
+          "И не зависит от снятой паузы")
+
+
+def test_per_trade_guards_remain() -> None:
+    """Пауз нет — значит всё держится на проверках КОНКРЕТНОЙ сделки.
+    Если исчезнут и они, бот останется вообще без тормозов."""
+    print("\n[Вместо пауз — проверки каждой сделки]")
+    fresh = types.ModuleType("fresh_guards")
+    exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
+
+    check(fresh.USE_SPREAD_FILTER is True,
+          "Фильтр спреда остался — он заменяет паузу роллoвера")
+    check(fresh.USE_VOLATILITY_SPIKE_GUARD is True,
+          "Защита от скачка волатильности осталась — она заменяет паузу на новостях")
+    check(float(fresh.MIN_SL_SPREAD_MULTIPLE) > 0,
+          "Стоп не может оказаться внутри спреда")
+    check(float(fresh.NEWS_SOFT_PENALTY_WINDOW_MIN) > 0,
+          "Рядом с новостью отбор сигнала по-прежнему строже")
+
+
+def test_advisor_has_no_pauses_either() -> None:
+    print("\n[В советнике пауз тоже не осталось]")
+    text = (ROOT / "ai_scalper_pro" / "Config.mqh").read_text(encoding="utf-8")
+    code = re.sub(r"//.*", "", text)
+
+    def input_value(name: str):
+        m = re.search(rf"input\s+\w+\s+{re.escape(name)}\s*=\s*([^;]+);", code)
+        return m.group(1).strip() if m else None
+
+    check(input_value("MinBarsBetweenReversal") == "0",
+          "Ожидание перед разворотом снято",
+          str(input_value("MinBarsBetweenReversal")))
+    check(input_value("UseRolloverGuard") == "false",
+          "Пауза вокруг полуночи снята", str(input_value("UseRolloverGuard")))
+    check(input_value("UseNewsFilter") == "false",
+          "Жёсткого блока по новостям нет", str(input_value("UseNewsFilter")))
+    check(input_value("UseTimeFilter") == "false",
+          "Часы торговли не ограничены", str(input_value("UseTimeFilter")))
+
+    check(input_value("UseSpreadFilter") == "true",
+          "Фильтр спреда в советнике остался")
+    check(input_value("UseVolatilitySpikeGuard") == "true",
+          "Защита от скачка волатильности в советнике осталась")
+
+
 def test_advisor_defaults_match_program() -> None:
     """Советник и программа должны вести себя одинаково. Если снять остановки
     только в программе, советник на графике продолжит выключаться сам — и
@@ -785,6 +968,10 @@ def main() -> int:
     test_nothing_halts_trading()
     test_risk_is_capped_per_trade()
     test_loss_counter_not_reset_without_pause()
+    test_no_pauses_left()
+    test_news_no_longer_pauses()
+    test_per_trade_guards_remain()
+    test_advisor_has_no_pauses_either()
     test_advisor_defaults_match_program()
 
     test_calendar_writes_utf8()

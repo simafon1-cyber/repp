@@ -45,6 +45,13 @@ def hard_block_minutes() -> int:
                    getattr(cfg, "NEWS_BREAKOUT_WINDOW_MIN", 15))
 
 
+def soft_penalty_minutes() -> int:
+    """Окно мягкого штрафа score — ровно то же значение, что читает
+    signal_engine. Оно отдельное от окна блокировки: блокировка это пауза, а
+    штраф — нет, и снятие пауз не должно отключать штраф заодно."""
+    return int(getattr(cfg, "NEWS_SOFT_PENALTY_WINDOW_MIN", 30) or 0)
+
+
 def symbol_codes(symbol: str) -> list:
     """Какие валюты/металлы затрагивает этот символ. Берём функцию из
     news_calendar, чтобы сопоставление было ОДНО на всю программу."""
@@ -67,10 +74,21 @@ def event_window(event: dict):
     impact = event.get("impact", "low")
     if impact not in ("high", "medium"):
         return None
-    minutes = hard_block_minutes()
+    if impact == "high":
+        minutes = hard_block_minutes()
+        action = ACTION_BLOCK
+    else:
+        minutes = soft_penalty_minutes()
+        action = ACTION_PENALTY
+    if minutes <= 0:
+        # Окно нулевой ширины — это не окно. Иначе вкладка «Календарь» рисовала
+        # бы «паузу» точкой на графике и строкой в таблице, хотя торговля в это
+        # время не прерывается: расписание обязано показывать то, что
+        # происходит на самом деле, иначе ему нельзя верить вообще.
+        return None
     start = event["time"] - timedelta(minutes=minutes)
     end = event["time"] + timedelta(minutes=minutes)
-    return start, end, (ACTION_BLOCK if impact == "high" else ACTION_PENALTY)
+    return start, end, action
 
 
 def news_filter_enabled() -> bool:

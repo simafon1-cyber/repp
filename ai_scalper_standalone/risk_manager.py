@@ -69,17 +69,35 @@ def volatility_ok(atr_series, ignore_soft_filters: bool) -> bool:
     return (window.iloc[-1] / avg) <= cfg.VOLATILITY_SPIKE_MULTIPLIER
 
 
+def rollover_blocked(now_minutes: int, rollover_hour: int, guard_minutes: int) -> bool:
+    """Попадает ли текущая минута в паузу вокруг смены дня у брокера.
+
+    Вынесено отдельно от часов, чтобы это можно было проверить: иначе
+    поведение ровно В МИНУТУ роллoвера проверялось бы только раз в сутки и по
+    случайности.
+
+    Ноль минут означает «паузы нет». Без явной проверки нулевая пауза всё
+    равно блокировала бы вход ровно в эту минуту (расстояние 0 не больше 0),
+    а человек, поставивший ноль, ждёт ровно обратного."""
+    guard_minutes = int(guard_minutes or 0)
+    if guard_minutes <= 0:
+        return False
+    diff = abs(int(now_minutes) - int(rollover_hour) * 60)
+    diff = min(diff, 1440 - diff)
+    return diff <= guard_minutes
+
+
 def rollover_guard_ok(ignore_soft_filters: bool) -> bool:
+    """Пауза вокруг полуночи брокера. По умолчанию ВЫКЛЮЧЕНА: пауз в системе
+    не осталось ни одной."""
     if ignore_soft_filters:
         return True
-    if not cfg.USE_ROLLOVER_GUARD:
+    if not getattr(cfg, "USE_ROLLOVER_GUARD", False):
         return True
     now = datetime.now()
-    now_minutes = now.hour * 60 + now.minute
-    rollover_minutes = cfg.ROLLOVER_HOUR_SERVER * 60
-    diff = abs(now_minutes - rollover_minutes)
-    diff = min(diff, 1440 - diff)
-    return diff > cfg.ROLLOVER_GUARD_MINUTES
+    return not rollover_blocked(now.hour * 60 + now.minute,
+                                getattr(cfg, "ROLLOVER_HOUR_SERVER", 0),
+                                getattr(cfg, "ROLLOVER_GUARD_MINUTES", 0))
 
 
 def trading_hours_ok() -> bool:
@@ -99,11 +117,17 @@ def trading_hours_ok() -> bool:
 
 
 def reversal_cooldown_ok(sym_state: SymbolState, direction: int) -> bool:
+    """Ожидание перед входом в СТОРОНУ, ПРОТИВОПОЛОЖНУЮ только что закрытой
+    сделке («анти-дребезг»). По умолчанию 0 — ожидания нет, разворот возможен
+    сразу: владелец попросил убрать все паузы."""
+    bars = int(getattr(cfg, "MIN_BARS_BETWEEN_REVERSAL", 0) or 0)
+    if bars <= 0:
+        return True
     if sym_state.last_close_direction == 0:
         return True
     if direction != -sym_state.last_close_direction:
         return True
-    return (sym_state.bar_counter - sym_state.last_close_bar_index) >= cfg.MIN_BARS_BETWEEN_REVERSAL
+    return (sym_state.bar_counter - sym_state.last_close_bar_index) >= bars
 
 
 # =====================================================================

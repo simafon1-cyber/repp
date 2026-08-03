@@ -158,10 +158,12 @@ def calc_signal_score(symbol: str, direction: int, df, trend_df, point: float,
     room = (cfg.RSI_OVERBOUGHT - rsi_val) if direction == 1 else (rsi_val - cfg.RSI_OVERSOLD)
     score += max(0, min(5, room / 10.0 * 5)) * _adaptive_multiplier(sym_state, "mean_reversion")
 
-    # Мягкий штраф за новость рядом (не блокирует, просто немного снижает score)
-    hard_block_window = getattr(cfg, "NEWS_HARD_BLOCK_WINDOW_MIN", cfg.NEWS_BREAKOUT_WINDOW_MIN)
+    # Мягкий штраф за новость рядом (не блокирует, просто немного снижает score).
+    # Окно у него СВОЁ, а не общее с жёсткой блокировкой: блокировка — это
+    # пауза, её сняли; штраф паузой не является и продолжает работать.
+    penalty_window = getattr(cfg, "NEWS_SOFT_PENALTY_WINDOW_MIN", 30)
     penalty_points = getattr(cfg, "NEWS_SOFT_PENALTY_POINTS", 8)
-    score -= news_calendar.soft_news_penalty(symbol, hard_block_window, penalty_points)
+    score -= news_calendar.soft_news_penalty(symbol, penalty_window, penalty_points)
 
     # Адаптация под режим рынка
     score += regime_score_adjustment(sym_state)

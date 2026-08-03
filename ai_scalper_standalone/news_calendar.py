@@ -78,7 +78,14 @@ def _relevant_events_near(symbol: str, window_minutes: int, min_impact: str = "h
 
 
 def is_high_impact_event_near(symbol: str, window_minutes: int) -> bool:
+    """Есть ли рядом важная новость, из-за которой вход блокируется.
+
+    Ноль минут означает «блокировки нет». Без этой проверки нулевое окно всё
+    равно ловило бы событие, попавшее ровно в текущую минуту: разница времён
+    в пределах одной минуты не больше нуля секунд только формально."""
     if not getattr(cfg, "USE_NEWS_FILTER", True):
+        return False
+    if int(window_minutes or 0) <= 0:
         return False
     return len(_relevant_events_near(symbol, window_minutes, min_impact="high")) > 0
 
