@@ -7,6 +7,7 @@ risk_manager.py — сколько и можно ли торговать: про
 (см. комментарий в state.py).
 """
 
+import logging
 import math
 from datetime import datetime
 
@@ -14,6 +15,8 @@ import config as cfg
 import mt5_connector as mt5c
 from control import control
 from state import AccountState, SymbolState, pause_active
+
+log = logging.getLogger("risk_manager")
 
 
 def get_profile():
@@ -269,7 +272,74 @@ def calc_lot(symbol: str, sl_dist: float, equity: float, sym_state: SymbolState)
         return min_lot
     lot = risk_money / loss_per_lot
     lot = math.floor(lot / lot_step) * lot_step
+
+    # Минимальный лот брокера может рисковать БОЛЬШЕ, чем разрешает профиль.
+    # Раньше здесь стоял просто max(min_lot, ...) — расчёт молча заменялся
+    # минимальным лотом, и сделка шла с риском в разы выше настроенного.
+    # На счёте $100 с минимальным лотом 0.01 по золоту это давало ~1.8% риска
+    # вместо 0.1% — в 18 раз больше. Теперь такое либо запрещается, либо
+    # проходит, но громко пишется в журнал.
+    if lot < min_lot:
+        min_lot_risk = min_lot * loss_per_lot
+        if min_lot_risk > risk_money and equity > 0:
+            over = min_lot_risk / risk_money if risk_money > 0 else 0
+            if not getattr(cfg, "ALLOW_MIN_LOT_OVER_RISK", True):
+                log.warning(
+                    "%s: минимальный лот %.2f рискует %.2f (%.2f%% счёта) при бюджете "
+                    "%.2f (%.2f%%) — сделка отменена. Инструмент слишком «дорогой» "
+                    "для этого депозита.",
+                    symbol, min_lot, min_lot_risk, min_lot_risk / equity * 100.0,
+                    risk_money, profile["risk_percent"] * mult)
+                return 0.0
+            log.warning(
+                "%s: минимальный лот %.2f рискует %.2f (%.2f%% счёта) — это в %.1f раза "
+                "больше настроенного риска. Торгуем, потому что ALLOW_MIN_LOT_OVER_RISK=True.",
+                symbol, min_lot, min_lot_risk, min_lot_risk / equity * 100.0, over)
+
     return max(min_lot, min(max_lot, lot))
+
+
+def min_stop_distance(symbol: str, atr_value: float, point: float) -> float:
+    """Минимально допустимая дистанция стоп-лосса, в цене.
+
+    ЗАЧЕМ ЭТО ЕСТЬ. Стоп считался как ATR × множитель профиля, и всё. У
+    профиля «Истеричка» множитель 0.5, что на золоте M5 давало стоп около
+    1.8 пункта. При спреде 0.2-0.4 и обычном шуме в несколько пунктов такой
+    стоп находится ВНУТРИ шума: сделки закрывались за 8-11 секунд, ни одна
+    не доходила до цели. Здесь задаётся пол, ниже которого стоп не опускается
+    ни при каком профиле:
+
+      * не ближе MIN_SL_SPREAD_MULTIPLE спредов — иначе платим за вход
+        больше, чем рискуем;
+      * не ближе MIN_SL_ATR_FRACTION от ATR — иначе стоп внутри обычного
+        колебания инструмента;
+      * не ближе минимальной дистанции, которую разрешает брокер."""
+    floors = [0.0]
+
+    mult = float(getattr(cfg, "MIN_SL_SPREAD_MULTIPLE", 4.0) or 0)
+    if mult > 0 and point > 0:
+        spread_points = mt5c.get_spread_points(symbol)
+        if spread_points and spread_points > 0:
+            floors.append(spread_points * point * mult)
+
+    fraction = float(getattr(cfg, "MIN_SL_ATR_FRACTION", 0.8) or 0)
+    if fraction > 0 and atr_value > 0:
+        floors.append(atr_value * fraction)
+
+    info = _symbol_info(symbol)
+    if info is not None and info.trade_stops_level > 0:
+        floors.append(info.trade_stops_level * info.point)
+
+    return max(floors)
+
+
+def apply_min_stop_floor(symbol: str, sl_dist: float, atr_value: float, point: float) -> float:
+    """Расширяет стоп до минимально осмысленного. Сузить не может никогда.
+
+    Побочный эффект намеренный и правильный: чем шире стоп, тем МЕНЬШЕ лот
+    при том же риске в деньгах (см. calc_lot). То есть защита не увеличивает
+    риск, а перераспределяет его."""
+    return max(sl_dist, min_stop_distance(symbol, atr_value, point))
 
 
 def check_stops_distance(symbol: str, price: float, sl: float, tp: float) -> bool:

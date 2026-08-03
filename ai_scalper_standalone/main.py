@@ -492,7 +492,17 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
             return
 
     sl_dist = atr_value * profile["atr_sl_multiplier"] * (cfg.NEWS_VOLATILITY_SL_BOOST if is_news_entry else 1.0)
+    # Стоп не может оказаться внутри спреда и обычного шума инструмента —
+    # такие сделки закрываются за секунды и до цели не доходят никогда.
+    # Расширение стопа автоматически уменьшает лот (calc_lot считает объём от
+    # риска в деньгах), поэтому риск не растёт.
+    sl_dist = rm.apply_min_stop_floor(symbol, sl_dist, atr_value, point)
     lot = rm.calc_lot(symbol, sl_dist, equity, sym_state)
+    if lot <= 0:
+        sym_state.last_reject_reason = (
+            "Минимальный лот брокера рискует больше разрешённого — депозит мал "
+            "для этого инструмента")
+        return
     if getattr(cfg, "USE_MAX_PROFIT_RIDE", False):
         # "Тянуть максимальную прибыль" — без фиксированного TP, сделку от сих
         # пор ведёт ТОЛЬКО BE/ATR-трейлинг/Profit Lock (см. tm.manage_open_positions),

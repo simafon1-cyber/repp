@@ -741,6 +741,22 @@ class App:
         self.status_var = tk.StringVar(value="Остановлен")
         ttk.Label(parent, textvariable=self.status_var, font=("Segoe UI", 11)).pack(**pad)
 
+        # --- Синхронизация с облаком: проверить, что изменилось ---
+        sync = ttk.LabelFrame(parent, text=" Синхронизация с облаком ")
+        sync.pack(fill="x", padx=10, pady=(4, 6))
+
+        sync_row = ttk.Frame(sync)
+        sync_row.pack(fill="x", padx=8, pady=6)
+        ttk.Button(sync_row, text="Проверить изменения",
+                   command=self.sync_from_cloud).grid(row=0, column=0)
+        ttk.Button(sync_row, text="Что нового",
+                   command=self.show_changes).grid(row=0, column=1, padx=6)
+
+        self.sync_status_var = tk.StringVar(value="")
+        ttk.Label(sync, textvariable=self.sync_status_var, foreground="#888",
+                  wraplength=780, justify="left").pack(anchor="w", padx=8, pady=(0, 6))
+        self._refresh_sync_status()
+
         # Предупреждение "почему сделки не открываются" — видно, только если
         # реально есть проблема с разрешением на торговлю (AutoTrading и т.п.).
         self.trade_warning_var = tk.StringVar(value="")
@@ -1831,6 +1847,88 @@ class App:
             self.news_tree.column(col, width=90, anchor="center")
         self.news_tree.column("event", width=220, anchor="w")
         self.news_tree.pack(fill="both", expand=True, padx=10, pady=6)
+
+    # ---- синхронизация с облаком (главная страница) ----------------------------------
+    def _refresh_sync_status(self):
+        """Что стоит сейчас — до всякого обращения к сети."""
+        if not updater.enabled():
+            self.sync_status_var.set(
+                "Выключено. Включить и указать репозиторий — на вкладке «Система».")
+            return
+        installed = updater.current_version()
+        repo = updater.repo() or "репозиторий не задан"
+        self.sync_status_var.set(
+            f"Источник: {repo}. Установленная версия: {installed or 'ещё не отмечена'}.")
+
+    def sync_from_cloud(self):
+        """Кнопка на главной: проверить, что изменилось, и предложить обновить.
+
+        Отдельная от вкладки «Система» только точкой входа — работу делает тот
+        же updater. Дублировать логику ради второй кнопки нельзя: разошлись бы
+        со временем."""
+        if not updater.enabled():
+            messagebox.showinfo(
+                APP_TITLE,
+                "Синхронизация выключена.\n\nВключите её на вкладке «Система» и "
+                "укажите репозиторий — тогда программа будет забирать изменения "
+                "сама, без переустановки.")
+            return
+        self.sync_status_var.set("Смотрю, что изменилось в облаке...")
+        self.check_updates(silent=False)
+
+    def show_changes(self):
+        """Показывает последние изменения в репозитории — просто посмотреть,
+        ничего не устанавливая."""
+        if not updater.enabled() or not updater.repo():
+            messagebox.showinfo(APP_TITLE,
+                                "Сначала укажите репозиторий на вкладке «Система».")
+            return
+
+        def worker():
+            entries, error = updater.recent_changes()
+            self.root.after(0, lambda: self._show_changes_window(entries, error))
+
+        self.sync_status_var.set("Загружаю список изменений...")
+        threading.Thread(target=worker, daemon=True, name="cloud-changes").start()
+
+    def _show_changes_window(self, entries, error):
+        if error:
+            self.sync_status_var.set(error)
+            messagebox.showwarning(APP_TITLE, error)
+            return
+
+        self._refresh_sync_status()
+        window = tk.Toplevel(self.root)
+        window.title("Что нового в облаке")
+        window.geometry("820x460")
+
+        ttk.Label(window, text="Последние изменения в коде",
+                  font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=12, pady=(10, 2))
+
+        installed = updater.current_version()
+        ttk.Label(window, foreground="#888", wraplength=780, justify="left",
+                  text=("Зелёным помечено то, что уже установлено у вас. "
+                        "Выше него — изменения, которых пока нет.")
+                  ).pack(anchor="w", padx=12, pady=(0, 6))
+
+        cols = ("when", "what", "rev")
+        tree = ttk.Treeview(window, columns=cols, show="headings", height=16)
+        for col, head, width in (("when", "Когда", 130), ("what", "Что изменилось", 560),
+                                 ("rev", "Версия", 100)):
+            tree.heading(col, text=head)
+            tree.column(col, width=width, anchor="w" if col == "what" else "center")
+        tree.pack(fill="both", expand=True, padx=12, pady=6)
+        tree.tag_configure("installed", foreground="#6ab04c")
+
+        for item in entries:
+            tag = ("installed",) if item["revision"] == installed else ()
+            tree.insert("", "end", tags=tag,
+                        values=(item["date"], item["message"], item["revision"]))
+
+        if not entries:
+            self.sync_status_var.set("Список изменений пуст.")
+
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=(0, 10))
 
     # ---- вкладка "Система" -----------------------------------------------------------
     def _build_tab_system(self, parent):

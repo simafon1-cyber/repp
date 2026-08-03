@@ -329,6 +329,58 @@ def test_bundled_everything() -> None:
     check("_start_bridge_if_enabled" in gui, "Мост поднимается сам при запуске")
 
 
+def test_main_page_sync() -> None:
+    print("\n[Синхронизация на главной странице]")
+
+    gui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    tree = ast.parse(gui)
+    funcs = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+    check("sync_from_cloud" in funcs, "Кнопка проверки изменений есть")
+    check("show_changes" in funcs, "Кнопка «Что нового» есть")
+    check("_show_changes_window" in funcs, "Окно со списком изменений есть")
+
+    overview = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_build_tab_overview":
+            overview = ast.get_source_segment(gui, node)
+    check(overview is not None and "sync_from_cloud" in overview,
+          "Кнопка стоит именно на главной странице")
+    check(overview is not None and "Синхронизация с облаком" in overview,
+          "Раздел подписан понятно")
+
+    # Логика не должна дублироваться: обе кнопки зовут один и тот же updater
+    sync = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "sync_from_cloud":
+            sync = ast.get_source_segment(gui, node)
+    check(sync is not None and "self.check_updates" in sync,
+          "Главная страница переиспользует тот же механизм, а не свою копию")
+
+    # Просмотр изменений ничего не ставит
+    src = (APP / "updater.py").read_text(encoding="utf-8")
+    changes = None
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name == "recent_changes":
+            changes = ast.get_source_segment(src, node)
+    check(changes is not None, "Функция списка изменений найдена")
+    if changes:
+        for forbidden in ("update_advisors", "download_text", "install_all", "os.replace"):
+            check(forbidden not in changes,
+                  f"Просмотр изменений ничего не устанавливает: нет {forbidden}")
+
+    # Выключенная синхронизация — понятный отказ, а не тишина
+    CFG.UPDATE_ENABLED = False
+    entries, error = up.recent_changes()
+    check(entries == [] and "выключена" in error.lower(),
+          "Выключено — сказано прямо", str(error))
+    CFG.UPDATE_ENABLED = True
+    CFG.UPDATE_REPO = ""
+    entries, error = up.recent_changes()
+    check("репозитор" in error.lower(), "Без репозитория — понятная ошибка", error)
+    CFG.UPDATE_REPO = "owner/repo"
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ СИСТЕМЫ: МОСТ, ПРОВЕРКИ, ОБНОВЛЕНИЕ")
@@ -344,6 +396,7 @@ def main() -> int:
     test_updater_does_not_mix_versions()
     test_updater_never_silent()
     test_bundled_everything()
+    test_main_page_sync()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

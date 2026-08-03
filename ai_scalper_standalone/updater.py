@@ -266,3 +266,42 @@ def remember_revision(revision: str, write_config) -> None:
         write_config("UPDATE_INSTALLED_REV", repr(revision))
     except Exception as e:
         log.warning("Не удалось записать номер версии: %s", e)
+
+
+def recent_changes(limit: int = 20):
+    """Последние изменения в репозитории — просто посмотреть, что сделано.
+
+    Возвращает (список, ошибка). Каждая запись: {"revision", "date", "message"}.
+    Ничего не скачивает и не устанавливает: это справка, а не обновление."""
+    if not enabled():
+        return [], "Синхронизация выключена в настройках."
+    if not repo() or "/" not in repo():
+        return [], ("Не задан репозиторий. Впишите его в виде владелец/название "
+                    "на вкладке «Система».")
+
+    url = f"{API}/repos/{repo()}/commits?sha={branch()}&per_page={int(limit)}"
+    try:
+        with _request(url) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as e:
+        return [], explain_error(e)
+
+    if not isinstance(data, list):
+        return [], "GitHub вернул неожиданный ответ."
+
+    entries = []
+    for item in data:
+        commit = item.get("commit") or {}
+        author = commit.get("author") or {}
+        raw_date = str(author.get("date", ""))
+        # 2026-08-03T12:34:56Z -> 03.08 12:34
+        when = raw_date
+        if len(raw_date) >= 16:
+            when = f"{raw_date[8:10]}.{raw_date[5:7]} {raw_date[11:16]}"
+        message = str(commit.get("message", "")).splitlines()
+        entries.append({
+            "revision": str(item.get("sha", ""))[:12],
+            "date": when,
+            "message": message[0][:150] if message else "",
+        })
+    return entries, ""

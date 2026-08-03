@@ -238,6 +238,83 @@ def test_money_protections_still_enforced() -> None:
     check(CFG.USE_MAX_DRAWDOWN_LIMIT is True, "Лимит просадки включён")
 
 
+def test_stop_not_inside_noise() -> None:
+    """По РЕАЛЬНЫМ сделкам пользователя: стоп на золоте был 1.78-1.87 пункта
+    при спреде ~0.2-0.4. Сделки закрывались за 8-11 секунд, ни одна не дошла
+    до цели, 12 убытков из 16. Стоп находился внутри шума инструмента."""
+    print("\n[Стоп не может оказаться внутри спреда и шума]")
+
+    import risk_manager as rm
+    import mt5_connector as mt5c
+
+    CFG.MIN_SL_SPREAD_MULTIPLE = 4.0
+    CFG.MIN_SL_ATR_FRACTION = 0.8
+
+    saved_spread = mt5c.get_spread_points
+    saved_info = rm._symbol_info
+
+    class FakeInfo:
+        trade_stops_level = 0
+        point = 0.01
+
+    rm._symbol_info = lambda s: FakeInfo()
+    mt5c.get_spread_points = lambda s: 30       # 30 пунктов = 0.30 на золоте
+    try:
+        point = 0.01
+        atr = 3.6                                # ATR золота M5 ~3.6 пункта цены
+
+        # Так считалось раньше: 0.5 * ATR = 1.8 — ровно как в журнале сделок
+        naive = atr * 0.5
+        check(abs(naive - 1.8) < 1e-9, "Старый расчёт даёт те самые 1.8", str(naive))
+
+        floored = rm.apply_min_stop_floor("XAUUSD", naive, atr, point)
+        check(floored > naive, "Стоп расширен", f"{naive} -> {floored}")
+
+        # Пол по спреду: 4 спреда = 4 * 0.30 = 1.20
+        # Пол по ATR: 0.8 * 3.6 = 2.88 -> побеждает он
+        check(abs(floored - 2.88) < 1e-9, "Стоп не ближе 0.8 ATR", str(floored))
+        check(floored >= 30 * point * 4,
+              "И заведомо шире четырёх спредов", f"{floored} против {30*point*4}")
+
+        # Широкий спред должен побеждать ATR
+        mt5c.get_spread_points = lambda s: 200   # 2.00 на золоте
+        floored = rm.apply_min_stop_floor("XAUUSD", naive, atr, point)
+        check(abs(floored - 8.0) < 1e-9,
+              "При широком спреде побеждает спредовый пол", str(floored))
+
+        # Уже широкий стоп не сужается
+        mt5c.get_spread_points = lambda s: 30
+        wide = rm.apply_min_stop_floor("XAUUSD", 50.0, atr, point)
+        check(wide == 50.0, "Широкий стоп остаётся как есть — пол только расширяет")
+
+        # Требование брокера тоже учитывается
+        class StopsLevel(FakeInfo):
+            trade_stops_level = 1000             # 10.00 на золоте
+        rm._symbol_info = lambda s: StopsLevel()
+        floored = rm.apply_min_stop_floor("XAUUSD", naive, atr, point)
+        check(abs(floored - 10.0) < 1e-9, "Учитывается минимум брокера", str(floored))
+        rm._symbol_info = lambda s: FakeInfo()
+
+        # Нет данных — не падаем и ничего не выдумываем
+        mt5c.get_spread_points = lambda s: 0
+        check(rm.apply_min_stop_floor("XAUUSD", naive, 0.0, point) == naive,
+              "Без ATR и спреда стоп остаётся прежним")
+    finally:
+        mt5c.get_spread_points = saved_spread
+        rm._symbol_info = saved_info
+
+    # Проброшено в реальный расчёт входа
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    check("rm.apply_min_stop_floor(symbol, sl_dist, atr_value, point)" in src,
+          "Пол применяется при расчёте сделки")
+    check("Минимальный лот брокера рискует больше" in src,
+          "Отказ по слишком мелкому депозиту объяснён понятным текстом")
+
+    cfg_text = (APP / "config.py.example").read_text(encoding="utf-8")
+    for name in ("MIN_SL_SPREAD_MULTIPLE", "MIN_SL_ATR_FRACTION", "ALLOW_MIN_LOT_OVER_RISK"):
+        check(name in cfg_text, f"Настройка {name} есть в шаблоне")
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ: РАБОТА ВСЮ СЕССИЮ, БЕЗ ЛИМИТА СДЕЛОК")
@@ -249,6 +326,7 @@ def main() -> int:
     test_config_defaults()
     test_mql5_matches()
     test_money_protections_still_enforced()
+    test_stop_not_inside_noise()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
