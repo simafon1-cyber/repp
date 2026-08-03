@@ -163,6 +163,195 @@ def test_config_migrate_never_overwrites() -> None:
         check(after.NEWKEY == 7, "Новый параметр добавлен")
 
 
+def test_config_migrate_clears_stale_update_branch() -> None:
+    """Раньше пустое поле «Ветка» при сохранении настроек ПРИНУДИТЕЛЬНО
+    заменялось на "main" — если такой ветки в репозитории нет (обычное дело,
+    пока не сделан ни один Pull Request), обновление отвечало «Репозиторий
+    или ветка не найдены» на каждый файл. Одноразовая миграция должна
+    очистить именно этот уже-сохранённый принудительный "main", чтобы
+    сработало автоопределение ветки (updater.repo_default_branch())."""
+    print("\n[Застрявшая ветка обновления «main» очищается один раз]")
+
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text(
+            'UPDATE_ENABLED = True\nUPDATE_REPO = "a/b"\nUPDATE_BRANCH = "main"\n',
+            encoding="utf-8")
+        applied = cm.apply_one_time(config_path)
+        check(any("Ветка" in a for a in applied),
+              "Миграция отработала и объяснила, что сделала", str(applied))
+
+        after = types.ModuleType("after")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        check(after.UPDATE_BRANCH == "",
+              "UPDATE_BRANCH очищена -> сработает автоопределение",
+              repr(after.UPDATE_BRANCH))
+        check(after.UPDATE_REPO == "a/b", "Остальные настройки не тронуты")
+
+        # Повторный запуск больше ничего не делает с этим полем
+        before = Path(config_path).read_text(encoding="utf-8")
+        cm.apply_one_time(config_path)
+        check(Path(config_path).read_text(encoding="utf-8") == before,
+              "Повторный запуск идемпотентен")
+
+    # Осознанно выбранная ветка — трогать нельзя ни в коем случае
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text('UPDATE_BRANCH = "develop"\n', encoding="utf-8")
+        cm.apply_one_time(config_path)
+        after = types.ModuleType("after2")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        check(after.UPDATE_BRANCH == "develop",
+              "Явно заданная НЕ-main ветка не трогается миграцией")
+
+    # Отсутствующая настройка (совсем старый конфиг) не должна ронять миграцию
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text('X = 1\n', encoding="utf-8")
+        applied = cm.apply_one_time(config_path)
+        check(not any("Ветка" in a for a in applied),
+              "Без UPDATE_BRANCH в файле — миграции ветки просто нечего делать")
+
+
+def test_config_migrate_widens_stale_stop_loss() -> None:
+    """Владелец: «сделай стоп лосс больше, очень много убытка».
+
+    RISK_PROFILES — многострочный словарь, обычная миграция (sync) его не
+    трогает вовсе (см. SKIP). Одноразовая миграция обязана раздвинуть
+    atr_sl_multiplier в УЖЕ существующем config.py пользователя — иначе
+    новые (широкие) значения попадут только в config.py.example и никогда не
+    доедут до работающей программы."""
+    print("\n[Стоп-лосс расширяется в уже существующем config.py]")
+
+    old_config = """from enum import Enum
+
+class RiskProfile(Enum):
+    CONSERVATIVE = "conservative"
+    BALANCED = "balanced"
+    AGGRESSIVE = "aggressive"
+    HYSTERIC = "hysteric"
+
+RISK_PROFILES = {
+    RiskProfile.CONSERVATIVE: dict(
+        risk_percent=0.3, atr_sl_multiplier=1.0, use_money_tp=True, target_profit_money=2.0,
+        min_score_to_trade=70, max_open_positions=1, max_trades_per_day=0,
+        daily_loss_limit_pct=2.0, max_drawdown_pct=6.0, max_total_risk_pct=0.5,
+        ignore_soft_filters=False, hedge_both_directions=False, name="Консервативный",
+    ),
+    RiskProfile.BALANCED: dict(
+        risk_percent=0.7, atr_sl_multiplier=1.2, use_money_tp=True, target_profit_money=4.0,
+        min_score_to_trade=62, max_open_positions=2, max_trades_per_day=0,
+        daily_loss_limit_pct=3.0, max_drawdown_pct=10.0, max_total_risk_pct=1.8,
+        ignore_soft_filters=False, hedge_both_directions=False, name="Сбалансированный",
+    ),
+    RiskProfile.AGGRESSIVE: dict(
+        risk_percent=1.2, atr_sl_multiplier=0.8, use_money_tp=True, target_profit_money=8.0,
+        min_score_to_trade=55, max_open_positions=5, max_trades_per_day=0,
+        daily_loss_limit_pct=5.0, max_drawdown_pct=15.0, max_total_risk_pct=6.5,
+        ignore_soft_filters=False, hedge_both_directions=False, name="Агрессивный",
+    ),
+    RiskProfile.HYSTERIC: dict(
+        risk_percent=0.1, atr_sl_multiplier=0.5, use_money_tp=True, target_profit_money=1.0,
+        min_score_to_trade=45, max_open_positions=10, max_trades_per_day=0,
+        daily_loss_limit_pct=8.0, max_drawdown_pct=25.0, max_total_risk_pct=3.0,
+        ignore_soft_filters=True, hedge_both_directions=False, name="Истеричка (YOLO)",
+    ),
+}
+MIN_SL_SPREAD_MULTIPLE = 4.0
+MIN_SL_ATR_FRACTION = 0.8
+MY_CUSTOM_SETTING = "не трогать"
+"""
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text(old_config, encoding="utf-8")
+        applied = cm.apply_one_time(config_path)
+        check(any("стоп-лосс расширен" in a for a in applied),
+              "Миграция профилей риска отработала", str(applied))
+        check(any("минимальная дистанция стопа" in a for a in applied),
+              "Миграция MIN_SL_* отработала", str(applied))
+
+        after = types.ModuleType("after")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        expected = {"CONSERVATIVE": 2.5, "BALANCED": 2.5, "AGGRESSIVE": 2.0,
+                   "HYSTERIC": 1.5}
+        for enum_member, params in after.RISK_PROFILES.items():
+            want = expected[enum_member.name]
+            check(abs(params["atr_sl_multiplier"] - want) < 1e-9,
+                  f"{enum_member.name}: atr_sl_multiplier расширен до {want}",
+                  str(params["atr_sl_multiplier"]))
+            # Остальные поля профиля не должны были измениться
+            check(params["risk_percent"] > 0, f"{enum_member.name}: risk_percent на месте")
+
+        check(after.MIN_SL_SPREAD_MULTIPLE == 8.0, "MIN_SL_SPREAD_MULTIPLE расширен")
+        check(after.MIN_SL_ATR_FRACTION == 1.5, "MIN_SL_ATR_FRACTION расширен")
+        check(after.MY_CUSTOM_SETTING == "не трогать", "Посторонняя настройка не тронута")
+
+        # Идемпотентность
+        before_text = Path(config_path).read_text(encoding="utf-8")
+        cm.apply_one_time(config_path)
+        check(Path(config_path).read_text(encoding="utf-8") == before_text,
+              "Повторный запуск ничего не меняет")
+
+
+def test_config_migrate_does_not_touch_customized_stop_loss() -> None:
+    print("\n[Осознанно настроенный стоп-лосс не трогается]")
+    custom_config = """from enum import Enum
+
+class RiskProfile(Enum):
+    CONSERVATIVE = "conservative"
+    BALANCED = "balanced"
+
+RISK_PROFILES = {
+    RiskProfile.CONSERVATIVE: dict(
+        risk_percent=0.3, atr_sl_multiplier=3.3, use_money_tp=True, target_profit_money=2.0,
+        min_score_to_trade=70, max_open_positions=1, max_trades_per_day=0,
+        daily_loss_limit_pct=2.0, max_drawdown_pct=6.0, max_total_risk_pct=0.5,
+        ignore_soft_filters=False, hedge_both_directions=False, name="Мой",
+    ),
+    RiskProfile.BALANCED: dict(
+        risk_percent=0.7, atr_sl_multiplier=1.2, use_money_tp=True, target_profit_money=4.0,
+        min_score_to_trade=62, max_open_positions=2, max_trades_per_day=0,
+        daily_loss_limit_pct=3.0, max_drawdown_pct=10.0, max_total_risk_pct=1.8,
+        ignore_soft_filters=False, hedge_both_directions=False, name="Сбалансированный",
+    ),
+}
+MIN_SL_SPREAD_MULTIPLE = 12.5
+"""
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text(custom_config, encoding="utf-8")
+        cm.apply_one_time(config_path)
+
+        after = types.ModuleType("after")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        for enum_member, params in after.RISK_PROFILES.items():
+            if enum_member.name == "CONSERVATIVE":
+                check(params["atr_sl_multiplier"] == 3.3,
+                      "Изменённое значение CONSERVATIVE осталось своим",
+                      str(params["atr_sl_multiplier"]))
+            elif enum_member.name == "BALANCED":
+                check(params["atr_sl_multiplier"] == 2.5,
+                      "Нетронутый (заводской) BALANCED всё же расширен",
+                      str(params["atr_sl_multiplier"]))
+        check(after.MIN_SL_SPREAD_MULTIPLE == 12.5,
+              "Изменённый MIN_SL_SPREAD_MULTIPLE не тронут")
+
+
+def test_config_migrate_fresh_example_needs_no_stop_loss_migration() -> None:
+    """config.py.example уже на новых (широких) значениях — свежая установка
+    не должна получать лишнюю пометку "стоп-лосс расширен" на пустом месте."""
+    print("\n[Свежий эталон не запускает миграцию стоп-лосса]")
+    example = (APP / "config.py.example").read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text(example, encoding="utf-8")
+        applied = cm.apply_one_time(config_path)
+        stop_related = [a for a in applied
+                        if "стоп-лосс расширен" in a or "минимальная дистанция" in a]
+        check(stop_related == [], "Эталон уже широкий — миграция ничего не делает",
+              str(stop_related))
+
+
 def test_config_migrate_skips_multiline() -> None:
     print("\n[Сложные блоки не трогаются]")
     example = (APP / "config.py.example").read_text(encoding="utf-8")
@@ -959,6 +1148,10 @@ def main() -> int:
 
     test_config_migrate_adds_missing()
     test_config_migrate_never_overwrites()
+    test_config_migrate_clears_stale_update_branch()
+    test_config_migrate_widens_stale_stop_loss()
+    test_config_migrate_does_not_touch_customized_stop_loss()
+    test_config_migrate_fresh_example_needs_no_stop_loss_migration()
     test_config_migrate_skips_multiline()
     test_ui_falls_back_to_default()
     test_migration_runs_on_start()

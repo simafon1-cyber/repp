@@ -177,6 +177,27 @@ def remote_sha(path: str):
         raise
 
 
+def get_file(path: str):
+    """Содержимое файла из репозитория как текст, или None, если файла там
+    нет. Используется, например, чтобы вернуть счета обратно на компьютер
+    после переустановки (см. accounts_backup.py)."""
+    url = f"{API}/repos/{repo()}/contents/{path}?ref={branch()}"
+    try:
+        with _request("GET", url) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    content = data.get("content", "")
+    encoding = data.get("encoding", "base64")
+    if encoding != "base64":
+        raise ValueError(f"Неожиданная кодировка ответа GitHub: {encoding}")
+    # GitHub разбивает base64 на строки по 60 символов внутри ответа —
+    # переносы нужно убрать перед декодированием.
+    return base64.b64decode(content.replace("\n", "")).decode("utf-8")
+
+
 def put_file(path: str, text: str, message: str) -> str:
     """Записать/обновить один файл. Возвращает короткий номер коммита."""
     payload = {

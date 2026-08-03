@@ -243,7 +243,6 @@ def test_updater_rules() -> None:
 
     CFG.UPDATE_REPO = "owner/repo"
     check(up.repo() == "owner/repo", "Репозиторий читается из настроек")
-    check(up.branch() == "main", "Ветка по умолчанию — main")
 
     # Ошибки сети переводятся на русский
     import urllib.error
@@ -253,6 +252,91 @@ def test_updater_rules() -> None:
     check("токен" in msg.lower(), "403 подсказывает про токен", msg)
     msg = up.explain_error(urllib.error.URLError("нет сети"))
     check("связи" in msg.lower(), "Нет сети — понятно", msg)
+
+
+class _FakeJSONResponse:
+    """Мини-заглушка urllib-ответа: `with _request(...) as r: r.read()`."""
+
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def test_updater_branch_autodetect() -> None:
+    """Жалоба владельца: обновление отвечало «Репозиторий или ветка не
+    найдены» на КАЖДЫЙ файл, хотя репозиторий существует. Причина: поле
+    «Ветка» было пустым, а старый код вслепую подставлял "main" — у этого
+    конкретного репозитория ветки main никогда не было (ничего ещё не влито
+    из рабочей ветки). Теперь пустое поле означает «спросить у GitHub, какая
+    ветка в репозитории главная»."""
+    print("\n[Обновление само узнаёт главную ветку репозитория]")
+
+    CFG.UPDATE_ENABLED = True
+    CFG.UPDATE_REPO = "owner/repo"
+    up._default_branch_cache.clear()
+
+    # 1. Ветка указана явно -> сети не трогаем вовсе
+    CFG.UPDATE_BRANCH = "develop"
+    saved_request = up._request
+    up._request = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("branch() не должен обращаться к сети, если ветка задана"))
+    try:
+        check(up.branch() == "develop", "Заданная ветка используется как есть")
+    finally:
+        up._request = saved_request
+
+    # 2. Поле пустое -> GitHub называет свою главную ветку
+    CFG.UPDATE_BRANCH = ""
+    up._default_branch_cache.clear()
+    up._request = lambda *a, **k: _FakeJSONResponse({"default_branch": "master"})
+    try:
+        check(up.branch() == "master",
+              "Пустое поле -> ветка берётся у самого репозитория (не 'main' вслепую)")
+        # Кэш: повторный вызов НЕ должен снова стучаться в сеть
+        up._request = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("повторный вызов обязан использовать кэш"))
+        check(up.branch() == "master", "Второй вызов взят из кэша")
+    finally:
+        up._request = saved_request
+
+    # 3. GitHub недоступен -> тихий безопасный откат на "main", программа не падает
+    CFG.UPDATE_BRANCH = ""
+    up._default_branch_cache.clear()
+    up._request = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("нет сети"))
+    try:
+        check(up.branch() == "main", "Сеть недоступна — используется безопасный запасной вариант")
+    finally:
+        up._request = saved_request
+
+    # 4. Разные репозитории не путают друг друга в кэше
+    up._default_branch_cache.clear()
+    calls = []
+
+    def fake(url, *a, **k):
+        calls.append(url)
+        return _FakeJSONResponse({"default_branch": "trunk"})
+
+    up._request = fake
+    try:
+        CFG.UPDATE_REPO = "owner/repo-a"
+        CFG.UPDATE_BRANCH = ""
+        up.branch()
+        CFG.UPDATE_REPO = "owner/repo-b"
+        up.branch()
+        check(len(calls) == 2, "Для двух разных репозиториев — два запроса", str(calls))
+    finally:
+        up._request = saved_request
+        CFG.UPDATE_REPO = "owner/repo"
+
+    up._default_branch_cache.clear()
 
 
 def test_updater_does_not_mix_versions() -> None:
@@ -316,8 +400,14 @@ def test_bundled_everything() -> None:
     print("\n[Всё едет внутри программы]")
 
     wf = (ROOT / ".github" / "workflows" / "build-exe.yml").read_text(encoding="utf-8")
-    for mod in ("bridge_host", "diagnostics", "updater"):
+    for mod in ("bridge_host", "diagnostics", "updater", "cloud_journal",
+                "config_migrate", "accounts_backup"):
         check(f"--hidden-import {mod}" in wf, f"{mod} виден сборщику")
+
+    bat = (APP / "build_exe.bat").read_text(encoding="ascii")
+    for mod in ("bridge_host", "diagnostics", "updater", "cloud_journal",
+                "config_migrate", "accounts_backup"):
+        check(f"--hidden-import {mod}" in bat, f"{mod} виден и в build_exe.bat")
 
     # Мост не должен требовать отдельной установки
     req = (APP / "requirements.txt").read_text(encoding="utf-8").lower()
@@ -393,6 +483,7 @@ def main() -> int:
     test_bridge_endpoints()
     test_diagnostics()
     test_updater_rules()
+    test_updater_branch_autodetect()
     test_updater_does_not_mix_versions()
     test_updater_never_silent()
     test_bundled_everything()

@@ -10,9 +10,12 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import accounts_backup
 import config as cfg
 from control import control  # объект, а не модуль: см. control.py
 from account_supervisor import AccountSupervisor
@@ -271,6 +274,27 @@ class AccountsTab:
                   padx=14, pady=5, activebackground="#c94438",
                   activeforeground="white").pack(side="right")
 
+        # --- резервная копия списка счетов в облаке ---
+        # Список счетов (логины, серверы, зашифрованные пароли) НАРОЧНО не
+        # входит в git и не трогается обновлением программы — это личные
+        # данные. Значит переустановка или перенос на другой компьютер их не
+        # переживают, если не сохранить отдельно. Пароли уходят в облако уже
+        # зашифрованными паролем входа (см. accounts_backup.py) — репозиторий
+        # должен быть ЗАКРЫТЫМ, это ответственность владельца.
+        cloud_row = tk.Frame(outer, bg=BG)
+        cloud_row.pack(fill="x", padx=10, pady=(0, 6))
+        tk.Button(cloud_row, text="☁ Сохранить счета в облако",
+                  command=self._backup_to_cloud, bg=BG_CARD, fg=FG,
+                  relief="flat", font=("Segoe UI", 8), padx=8, pady=3,
+                  activebackground="#2e2e2e", activeforeground=FG).pack(side="left")
+        tk.Button(cloud_row, text="☁ Восстановить из облака",
+                  command=self._restore_from_cloud, bg=BG_CARD, fg=FG,
+                  relief="flat", font=("Segoe UI", 8), padx=8, pady=3,
+                  activebackground="#2e2e2e", activeforeground=FG).pack(side="left", padx=(6, 0))
+        self.cloud_status = tk.Label(cloud_row, text="", bg=BG, fg=FG_MUTED,
+                                     font=("Segoe UI", 8), anchor="w")
+        self.cloud_status.pack(side="left", padx=(10, 0))
+
         # --- тело: слева счета, справа подробности ---
         body = tk.Frame(outer, bg=BG)
         body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -302,6 +326,7 @@ class AccountsTab:
         self.tree.tag_configure("profit", foreground=PROFIT)
         self.tree.tag_configure("loss", foreground=LOSS)
         self.tree.tag_configure("off", foreground=FG_DIM)
+        self.tree.tag_configure("locked", foreground=LOSS)
 
         manage = tk.Frame(left, bg=BG)
         manage.pack(fill="x", pady=(6, 0))
@@ -383,14 +408,19 @@ class AccountsTab:
         self.tree.delete(*self.tree.get_children())
         for account in self.store.accounts:
             state = self.supervisor.state(account.login)
+            locked = account.password_locked()
             tags = []
-            if not account.enabled:
+            if locked:
+                tags.append("locked")
+            elif not account.enabled:
                 tags.append("off")
             elif state.connected:
                 tags.append("profit" if state.profit > 0 else "loss" if state.profit < 0 else "")
+            name = account.name or f"Счёт {account.login}"
             self.tree.insert(
                 "", "end", iid=str(account.login),
-                values=(account.name or f"Счёт {account.login}", state.status,
+                values=("🔒 " + name if locked else name,
+                        "пароль заблокирован" if locked else state.status,
                         money(state.profit) if state.connected else "—"),
                 tags=tuple(t for t in tags if t))
 
@@ -544,6 +574,79 @@ class AccountsTab:
         messagebox.showinfo("Команда отправлена",
                             f"Команда закрытия отправлена на счетов: {sent}")
 
+    # ---------- резервная копия в облаке ----------
+    def _backup_to_cloud(self):
+        ok, reason = accounts_backup.ready()
+        if not ok:
+            messagebox.showwarning(
+                "Облако не настроено",
+                reason + "\n\nНастраивается на вкладке «Система», раздел "
+                        "«Журнал сделок в облаке» — те же репозиторий и токен "
+                        "используются для резервной копии счетов.")
+            return
+        if not self.store.accounts:
+            messagebox.showinfo("Нечего сохранять", "Список счетов пуст.")
+            return
+        self.cloud_status.configure(text="Сохраняю в облако...", fg=FG_MUTED)
+
+        def worker():
+            result = accounts_backup.upload()
+            self.root.after(0, lambda: self._after_backup(result))
+
+        threading.Thread(target=worker, daemon=True, name="accounts-backup").start()
+
+    def _after_backup(self, result: dict):
+        if result.get("ok"):
+            self.cloud_status.configure(
+                text=f"Сохранено в облако ({time.strftime('%H:%M:%S')})", fg=PROFIT)
+        else:
+            self.cloud_status.configure(text="Не сохранено: " + result.get("error", ""),
+                                        fg=LOSS)
+            messagebox.showwarning("Не удалось сохранить", result.get("error", ""))
+
+    def _restore_from_cloud(self):
+        ok, reason = accounts_backup.ready()
+        if not ok:
+            messagebox.showwarning(
+                "Облако не настроено",
+                reason + "\n\nНастраивается на вкладке «Система», раздел "
+                        "«Журнал сделок в облаке» — те же репозиторий и токен "
+                        "используются для резервной копии счетов.")
+            return
+        if not messagebox.askyesno(
+            "Восстановить из облака",
+            "Список счетов будет заменён облачной копией.\n\n"
+            "Текущий локальный файл (если есть) не удаляется — сохранится "
+            "рядом с припиской .before-restore.\n\n"
+            "Продолжить?"
+        ):
+            return
+        self.cloud_status.configure(text="Восстанавливаю из облака...", fg=FG_MUTED)
+
+        def worker():
+            result = accounts_backup.restore()
+            self.root.after(0, lambda: self._after_restore(result))
+
+        threading.Thread(target=worker, daemon=True, name="accounts-restore").start()
+
+    def _after_restore(self, result: dict):
+        if not result.get("ok"):
+            self.cloud_status.configure(text="Не восстановлено: " + result.get("error", ""),
+                                        fg=LOSS)
+            messagebox.showwarning("Не удалось восстановить", result.get("error", ""))
+            return
+        self.cloud_status.configure(text=f"Восстановлено из облака ({time.strftime('%H:%M:%S')})", fg=PROFIT)
+        # Файл на диске поменялся снаружи — перечитываем список тем же
+        # паролем входа, что уже используется в этой сессии.
+        self._load_accounts()
+        self.selected_login = None
+        self._refresh_list()
+        self._refresh_summary()
+        messagebox.showinfo(
+            "Готово",
+            "Счета восстановлены из облака. Пароли расшифруются автоматически, "
+            "если пароль входа тот же, каким они сохранялись в облако.")
+
     # ---------- обновление ----------
     def _is_visible(self) -> bool:
         """Видна ли вкладка сейчас. Рисовать скрытое — пустая трата времени."""
@@ -571,21 +674,43 @@ class AccountsTab:
             iid = str(account.login)
             if iid not in existing:
                 continue
-            state = self.supervisor.state(account.login)
-            status = state.status
-            if self.supervisor.is_running(account.login) and self.supervisor.is_stale(account.login):
-                status = "нет ответа"
-            values = (account.name or f"Счёт {account.login}", status,
-                      money(state.profit) if state.connected else "—")
+            locked = account.password_locked()
+            name = account.name or f"Счёт {account.login}"
+            if locked:
+                # Не трогаем статус подключения бегущими данными: пароль всё
+                # равно заблокирован, счёт не запустится, лишние обновления
+                # только маскировали бы предупреждение.
+                values = ("🔒 " + name, "пароль заблокирован", "—")
+            else:
+                state = self.supervisor.state(account.login)
+                status = state.status
+                if self.supervisor.is_running(account.login) and self.supervisor.is_stale(account.login):
+                    status = "нет ответа"
+                values = (name, status, money(state.profit) if state.connected else "—")
             # Пишем только если значения реально изменились: лишний вызов
             # item() перерисовывает строку и сбрасывает выделение
             if tuple(self.tree.item(iid, "values")) != values:
                 self.tree.item(iid, values=values)
+            current_tags = self.tree.item(iid, "tags")
+            want_tag = ("locked",) if locked else tuple(t for t in current_tags if t != "locked")
+            if locked and current_tags != want_tag:
+                self.tree.item(iid, tags=want_tag)
 
     def _refresh_summary(self):
         totals = self.supervisor.totals()
         if not self.store.accounts:
             self.summary.configure(text="Счетов нет — нажмите «+ Добавить»", fg=FG_MUTED)
+            return
+        locked = sum(1 for a in self.store.accounts if a.password_locked())
+        if locked:
+            # Показываем это ПЕРВЫМ и заметным цветом: иначе на вкладке со
+            # множеством счетов легко не заметить, что часть паролей просто
+            # временно недоступна (это не потеря данных — см. подсказку у
+            # конкретного счёта), и решить, что счета "куда-то делись".
+            self.summary.configure(
+                text=f"⚠ {locked} из {len(self.store.accounts)} счетов: пароль не "
+                     f"расшифрован (нужен правильный пароль входа в программу)",
+                fg=LOSS)
             return
         self.summary.configure(
             text=f"счетов: {len(self.store.accounts)} · запущено: {totals['running']} · "
@@ -619,7 +744,14 @@ class AccountsTab:
             text += f"\n{state.error}"
         if state.trading_blocked:
             text += f"\nТОРГОВЛЯ ОСТАНОВЛЕНА: {state.blocked_reason}"
-        self.status.configure(text=text, fg=STATUS_COLORS.get(status, FG_MUTED))
+        if account.password_locked():
+            text += ("\n⚠ Пароль счёта не расшифрован текущим паролем входа — "
+                     "счёт не запустится. Пароль НЕ потерян: войдите в "
+                     "программу с правильным паролем (или включите "
+                     "REQUIRE_LOGIN в настройках) и откройте вкладку «Счета» "
+                     "заново.")
+        self.status.configure(text=text, fg=STATUS_COLORS.get(status, FG_MUTED)
+                              if not account.password_locked() else LOSS)
 
         self.btn_start.configure(state="disabled" if running else "normal",
                                  bg=BG_CARD if running else ACCENT,

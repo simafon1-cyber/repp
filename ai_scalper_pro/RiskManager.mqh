@@ -38,7 +38,7 @@ void ApplyRiskProfile()
    {
       case PROFILE_CONSERVATIVE:
          g_effRiskPercent           = 0.3;
-         g_effATRSLMultiplier       = 1.0;
+         g_effATRSLMultiplier       = 2.5;
          g_effUseMoneyTP            = true;
          g_effTargetProfitMoney     = 2.0;
          g_effMinScoreToTrade       = 70;
@@ -58,7 +58,7 @@ void ApplyRiskProfile()
          // из-за этого перекоса риск:прибыль, а не из-за качества сигналов. TargetProfitMoney=8
          // даёт безубыточный порог ~60% (12/(12+8)) — сопоставимо со Сбалансированным (~64%).
          g_effRiskPercent           = 1.2;
-         g_effATRSLMultiplier       = 0.8;
+         g_effATRSLMultiplier       = 2.0;
          g_effUseMoneyTP            = true;
          g_effTargetProfitMoney     = 8.0;
          g_effMinScoreToTrade       = 55;
@@ -81,7 +81,7 @@ void ApplyRiskProfile()
          // любой шум. 45 всё ещё намного мягче Агрессивного (55) и
          // Сбалансированного (62), но отсекает сигналы нулевого качества.
          g_effRiskPercent           = 0.1;
-         g_effATRSLMultiplier       = 0.5;
+         g_effATRSLMultiplier       = 1.5;
          g_effUseMoneyTP            = true;
          g_effTargetProfitMoney     = 1.0;
          g_effMinScoreToTrade       = 45;
@@ -103,7 +103,7 @@ void ApplyRiskProfile()
 
       default: // PROFILE_BALANCED
          g_effRiskPercent           = 0.7;
-         g_effATRSLMultiplier       = 1.2;
+         g_effATRSLMultiplier       = 2.5;
          g_effUseMoneyTP            = true;
          g_effTargetProfitMoney     = 4.0;
          g_effMinScoreToTrade       = 62;

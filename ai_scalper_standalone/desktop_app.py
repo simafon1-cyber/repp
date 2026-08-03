@@ -986,14 +986,20 @@ class App:
         ttk.Label(add_frame, textvariable=self.available_symbols_var, foreground="#888").grid(
             row=1, column=0, columnspan=4, sticky="w", padx=(0, 6), pady=(4, 0))
 
-        self.symbols_columns = ("enabled", "symbol", "lot", "buy", "sell", "regime", "ai", "custom", "multi", "learn", "paused", "reject")
-        headings = ("Вкл", "Символ", "Лот", "BUY", "SELL", "Режим", "AI", "Своя стратегия", "Индикаторы", "Автообучение", "Пауза", "Отказ")
+        self.symbols_columns = ("enabled", "symbol", "lot", "buy", "sell", "regime", "ai", "custom", "multi", "learn", "paused", "reject", "risk")
+        headings = ("Вкл", "Символ", "Лот", "BUY", "SELL", "Режим", "AI", "Своя стратегия", "Индикаторы", "Автообучение", "Пауза", "Отказ", "Риск лота")
         self.symbols_tree = ttk.Treeview(parent, columns=self.symbols_columns, show="headings", height=12)
         for col, head in zip(self.symbols_columns, headings):
             self.symbols_tree.heading(col, text=head)
             self.symbols_tree.column(col, width=90, anchor="center")
         self.symbols_tree.column("reject", width=220, anchor="w")
         self.symbols_tree.column("symbol", width=90, anchor="w")
+        # "Риск лота" — минимальный лот брокера рискует больше настроенного
+        # процента (частая причина "очень много убытка" на маленьком
+        # депозите: ниже минимального лота опуститься нельзя, чем бы ни был
+        # задан риск на сделку). Красным — чтобы не потерялось среди колонок.
+        self.symbols_tree.column("risk", width=260, anchor="w")
+        self.symbols_tree.tag_configure("risk_over", foreground="#e05561")
         self.symbols_tree.pack(fill="both", expand=True, padx=10, pady=6)
         self.symbols_tree.bind("<Double-1>", self._on_symbols_double_click)
 
@@ -1131,14 +1137,18 @@ class App:
             enabled_txt = "✓" if sy.get("enabled", True) else "✗"
             lot_txt = sy.get("lot_override") or "авто"
             ai_txt = f"{sy.get('ai_direction') or '-'} ({round((sy.get('ai_confidence') or 0) * 100)}%)"
-            self.symbols_tree.insert("", "end", iid=sym, values=(
-                enabled_txt, sym, lot_txt,
-                round(sy.get("buy_score", 0), 1), round(sy.get("sell_score", 0), 1),
-                sy.get("regime", "-"), ai_txt, round(sy.get("custom_score", 0), 1),
-                round(sy.get("multi_indicator_score", 0), 1),
-                sy.get("learning_status", "-"),
-                sy.get("paused_until") or "-", sy.get("reject_reason", "-"),
-            ))
+            risk_warning = sy.get("risk_warning", "") or ""
+            self.symbols_tree.insert("", "end", iid=sym,
+                tags=("risk_over",) if risk_warning else (),
+                values=(
+                    enabled_txt, sym, lot_txt,
+                    round(sy.get("buy_score", 0), 1), round(sy.get("sell_score", 0), 1),
+                    sy.get("regime", "-"), ai_txt, round(sy.get("custom_score", 0), 1),
+                    round(sy.get("multi_indicator_score", 0), 1),
+                    sy.get("learning_status", "-"),
+                    sy.get("paused_until") or "-", sy.get("reject_reason", "-"),
+                    risk_warning or "-",
+                ))
 
     # ---- вкладка "Сделки" ------------------------------------------------------
     def _build_tab_positions(self, parent):
@@ -2145,41 +2155,44 @@ class App:
                   ).grid(row=3, column=1, sticky="w", padx=8)
 
         ttk.Label(up, text="Ветка:").grid(row=4, column=0, sticky="w", padx=8, pady=3)
-        self.update_branch_var = tk.StringVar(value=getattr(cfg, "UPDATE_BRANCH", "main"))
+        self.update_branch_var = tk.StringVar(value=getattr(cfg, "UPDATE_BRANCH", ""))
         ttk.Entry(up, textvariable=self.update_branch_var, width=24).grid(
             row=4, column=1, sticky="w", padx=8)
+        ttk.Label(up, foreground="#666",
+                  text="пусто = программа сама возьмёт главную ветку репозитория"
+                  ).grid(row=5, column=1, sticky="w", padx=8)
 
-        ttk.Label(up, text="Токен GitHub:").grid(row=5, column=0, sticky="w", padx=8, pady=3)
+        ttk.Label(up, text="Токен GitHub:").grid(row=6, column=0, sticky="w", padx=8, pady=3)
         self.update_token_var = tk.StringVar(value=getattr(cfg, "UPDATE_TOKEN", ""))
         ttk.Entry(up, textvariable=self.update_token_var, width=44, show="*").grid(
-            row=5, column=1, sticky="w", padx=8)
+            row=6, column=1, sticky="w", padx=8)
         ttk.Label(up, foreground="#666", wraplength=420, justify="left",
                   text="Для закрытого репозитория. Права: Contents: Read-only — "
                        "обычное обновление; Actions: Read and write — если хотите, "
                        "чтобы программа сама заказывала сборку .exe"
-                  ).grid(row=6, column=1, sticky="w", padx=8)
+                  ).grid(row=7, column=1, sticky="w", padx=8)
 
         self.update_auto_var = tk.BooleanVar(value=getattr(cfg, "UPDATE_AUTO_APPLY", False))
         ttk.Checkbutton(up, variable=self.update_auto_var,
                         text="Ставить обновление само при запуске (не спрашивая)").grid(
-            row=7, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 0))
+            row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 0))
         ttk.Label(up, foreground="#666", wraplength=520, justify="left",
                   text="При старте торговля ещё не началась и открытых позиций у бота "
                        "нет — подменять его в этот момент безопасно. Посреди работы "
                        "обновление не ставится никогда, даже с этой галочкой.").grid(
-            row=8, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 2))
+            row=9, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 2))
 
         self.update_build_var = tk.BooleanVar(value=getattr(cfg, "UPDATE_REQUEST_BUILD", False))
         ttk.Checkbutton(up, variable=self.update_build_var,
                         text="Если готовой сборки нет — заказать её на GitHub самому").grid(
-            row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 0))
+            row=10, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 0))
         ttk.Label(up, foreground="#666", wraplength=520, justify="left",
                   text="Раньше это делалось руками: вкладка Actions -> Run workflow. "
                        "Токену нужно право Actions: Read and write.").grid(
-            row=10, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 4))
+            row=11, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 4))
 
         upbtn = ttk.Frame(up)
-        upbtn.grid(row=11, column=0, columnspan=2, sticky="w", padx=8, pady=6)
+        upbtn.grid(row=12, column=0, columnspan=2, sticky="w", padx=8, pady=6)
         ttk.Button(upbtn, text="Сохранить", command=self.save_system_settings).grid(row=0, column=0)
         ttk.Button(upbtn, text="Обновить всё сейчас",
                    command=self.update_everything_now).grid(row=0, column=1, padx=6)
@@ -2191,7 +2204,7 @@ class App:
         self.update_status_var = tk.StringVar(value="")
         ttk.Label(up, textvariable=self.update_status_var, foreground="#888",
                   wraplength=780, justify="left").grid(
-            row=12, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
+            row=13, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
 
         # ---------- Журнал сделок в облаке ----------
         jr = ttk.LabelFrame(parent, text=" Журнал сделок в облаке ")
@@ -2203,7 +2216,10 @@ class App:
                   "компьютер выключен. Три файла — журнал бота, реальные закрытые "
                   "сделки из MetaTrader и разбор словами (винрейт, средний плюс/минус, "
                   "сколько сделок умерло за секунды, какая пара даёт минус).\n"
-                  "Пароли, ключи и токены туда НЕ попадают — только сделки."
+                  "Пароли, ключи и токены туда НЕ попадают — только сделки.\n"
+                  "Этот же репозиторий и токен используются для резервной копии "
+                  "списка счетов (кнопки «Сохранить/Восстановить из облака» на "
+                  "вкладке «Счета») — заводить для неё отдельные настройки не нужно."
                   ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
 
         self.journal_enabled_var = tk.BooleanVar(
@@ -2399,7 +2415,12 @@ class App:
         _write_config_value("BRIDGE_PORT", repr(port))
         _write_config_value("UPDATE_ENABLED", repr(bool(self.update_enabled_var.get())))
         _write_config_value("UPDATE_REPO", repr(self.update_repo_var.get().strip()))
-        _write_config_value("UPDATE_BRANCH", repr(self.update_branch_var.get().strip() or "main"))
+        # Пустое поле НЕ подменяем на "main" насильно: у репозитория может не
+        # быть такой ветки вовсе (обычное дело, пока никто не влил ветку в
+        # главную) — тогда каждый файл отвечал бы "не найден" без понятной
+        # причины. Пустая строка означает "программа сама узнает у GitHub
+        # главную ветку репозитория" (см. updater.repo_default_branch()).
+        _write_config_value("UPDATE_BRANCH", repr(self.update_branch_var.get().strip()))
         _write_config_value("UPDATE_TOKEN", repr(token))
         _write_config_value("UPDATE_AUTO_APPLY", repr(bool(self.update_auto_var.get())))
         _write_config_value("UPDATE_REQUEST_BUILD", repr(bool(self.update_build_var.get())))
@@ -3507,15 +3528,35 @@ class App:
         p("Список торгуемых инструментов. Можно добавлять/удалять пары прямо здесь, "
           "без правки файлов. Двойной клик по названию символа открывает мини-график "
           "цены. Видно score BUY/SELL, режим рынка (тренд/флэт), сигнал AI, статус "
-          "автообучения и причину, по которой последний раз не открылась сделка.")
+          "автообучения и причину, по которой последний раз не открылась сделка.\n\n"
+          "Колонка «Риск лота» — предупреждение на маленьком депозите: минимальный "
+          "лот брокера иногда рискует БОЛЬШЕ, чем разрешает настроенный процент "
+          "риска (ниже минимального лота опуститься нельзя, сколько ни настраивай "
+          "риск). Строка подсвечивается красным, а в колонке — точная цифра: "
+          "«минимальный лот X рискует Y — в Z раз больше настроенного риска».")
 
-        h2("5. Сделки")
+        h2("5. Счета")
+        p("Несколько торговых счетов сразу: у каждого свой логин, сервер, "
+          "инструменты и лимиты риска. Кнопки запуска/остановки, «Закрыть все "
+          "позиции», только прибыльные, только убыточные. Красная кнопка "
+          "«Закрыть всё на всех счетах» — для аварийной ситуации.\n\n"
+          "Если строка счёта помечена значком 🔒 и подсвечена красным — пароль "
+          "счёта не расшифрован ТЕКУЩИМ паролем входа (обычно потому что "
+          "программа открылась без экрана входа). Пароль НЕ потерян: войдите "
+          "с правильным паролем и откройте вкладку заново.\n\n"
+          "Кнопки «☁ Сохранить счета в облако» / «☁ Восстановить из облака» — "
+          "резервная копия списка счетов в том же закрытом репозитории, что и "
+          "журнал сделок (вкладка «Система»). Список счетов НЕ входит в git и "
+          "не трогается обновлением программы — без резервной копии он не "
+          "переживёт переустановку или перенос на другой компьютер.")
+
+        h2("6. Сделки")
         p("Все ОТКРЫТЫЕ позиции на счёте — не только те, что открыл этот бот, но и "
           "открытые вручную в терминале MT5 (колонка «Источник»: Бот/Ручная). Кнопка "
           "«Закрыть выбранную сделку» закрывает позицию по рынку — работает для любой "
           "строки в таблице.")
 
-        h2("6. Лог")
+        h2("7. Лог")
         p("История сделок. Верхняя таблица — журнал этого бота (что и когда бот сам "
           "открывал/закрывал, с score). Нижняя таблица — синхронизированная история "
           "из MT5 (раздел «Синхронизация с MetaTrader»): подтягивается напрямую из "
@@ -3523,10 +3564,10 @@ class App:
           "30 дней (в т.ч. открытые вручную), и статистика (винрейт, профит-фактор) "
           "там всегда 100% совпадает с историей у брокера.")
 
-        h2("7. Equity (продвинутый режим)")
+        h2("8. Equity (продвинутый режим)")
         p("График изменения эквити счёта с момента запуска программы.")
 
-        h2("8. Настройка (видна всегда)")
+        h2("9. Настройка (видна всегда)")
         p("Сверху — быстрые переключатели: профиль риска (Консервативный/"
           "Сбалансированный/Агрессивный/Истеричка), режим торговли (Скальпинг/"
           "Новости/Оба), пауза новых сделок, звук+всплывающие уведомления.\n"
@@ -3546,16 +3587,16 @@ class App:
           "файл настроек сами, со стандартными значениями. Ваши собственные "
           "значения при этом не трогаются.")
 
-        h2("9. Новости (продвинутый режим)")
+        h2("10. Новости (продвинутый режим)")
         p("Источник экономического календаря (провайдер + API-ключ) и таблица "
           "предстоящих новостей. Пока ключ не задан — фильтр по новостям просто "
           "не влияет на торговлю (безопасное поведение по умолчанию).")
 
-        h2("10. Chat AI (продвинутый режим)")
+        h2("11. Chat AI (продвинутый режим)")
         p("Обычный чат с Claude прямо в программе — можно спросить что угодно про "
           "рынок или настройки, не переключаясь на другое окно.")
 
-        h2("11. Система: обновление без переустановки")
+        h2("12. Система: обновление без переустановки")
         p("Вкладка «Система» → «Обновление из GitHub». Впишите репозиторий "
           "(владелец/название), токен, поставьте галочку «Проверять "
           "обновления» и нажмите «Обновить всё сейчас». Одним нажатием "
@@ -3576,7 +3617,7 @@ class App:
           "хоть один файл не скачался, не заменяется ни один, а старые "
           "сохраняются рядом с припиской .bak.")
 
-        h2("12. Система: журнал сделок в облаке")
+        h2("13. Система: журнал сделок в облаке")
         p("Вкладка «Система» → «Журнал сделок в облаке». Программа выкладывает "
           "историю сделок в папку journal/ вашего ЗАКРЫТОГО репозитория "
           "GitHub — три файла: журнал бота, реальные закрытые сделки из "

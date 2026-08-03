@@ -325,18 +325,29 @@ def calc_lot(symbol: str, sl_dist: float, equity: float, sym_state: SymbolState)
         min_lot_risk = min_lot * loss_per_lot
         if min_lot_risk > risk_money and equity > 0:
             over = min_lot_risk / risk_money if risk_money > 0 else 0
+            over_pct = min_lot_risk / equity * 100.0
             if not getattr(cfg, "ALLOW_MIN_LOT_OVER_RISK", True):
-                log.warning(
-                    "%s: минимальный лот %.2f рискует %.2f (%.2f%% счёта) при бюджете "
-                    "%.2f (%.2f%%) — сделка отменена. Инструмент слишком «дорогой» "
-                    "для этого депозита.",
-                    symbol, min_lot, min_lot_risk, min_lot_risk / equity * 100.0,
-                    risk_money, profile["risk_percent"] * mult)
+                sym_state.last_risk_warning = (
+                    f"Мин. лот {min_lot:.2f} рискует {min_lot_risk:.2f} "
+                    f"({over_pct:.2f}% счёта) вместо {risk_money:.2f} "
+                    f"({profile['risk_percent'] * mult:.2f}%) — сделка отменена. "
+                    f"{symbol} слишком «дорогой» для этого депозита.")
+                log.warning("%s: %s", symbol, sym_state.last_risk_warning)
                 return 0.0
-            log.warning(
-                "%s: минимальный лот %.2f рискует %.2f (%.2f%% счёта) — это в %.1f раза "
-                "больше настроенного риска. Торгуем, потому что ALLOW_MIN_LOT_OVER_RISK=True.",
-                symbol, min_lot, min_lot_risk, min_lot_risk / equity * 100.0, over)
+            # ГЛАВНАЯ ПРИЧИНА "очень много убытка" на маленьком депозите: чем
+            # шире стоп (см. ATRSLMultiplier), тем больше риск в деньгах даже у
+            # МИНИМАЛЬНОГО лота брокера — виден он только здесь, ниже
+            # опуститься нельзя. Раньше это тонуло в файле журнала; теперь то
+            # же предупреждение видно прямо на вкладке "Символы".
+            sym_state.last_risk_warning = (
+                f"Мин. лот {min_lot:.2f} рискует {min_lot_risk:.2f} "
+                f"({over_pct:.2f}% счёта) — в {over:.1f} раза больше настроенного "
+                f"риска {profile['risk_percent'] * mult:.2f}%.")
+            log.warning("%s: %s", symbol, sym_state.last_risk_warning)
+        else:
+            sym_state.last_risk_warning = ""
+    else:
+        sym_state.last_risk_warning = ""
 
     return max(min_lot, min(max_lot, lot))
 

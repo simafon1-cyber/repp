@@ -85,25 +85,25 @@ RISK_PROFILE = RiskProfile.HYSTERIC  # максимальная частота �
 # позиций сразу и превысить совокупный риск на счёте.
 RISK_PROFILES = {
     RiskProfile.CONSERVATIVE: dict(
-        risk_percent=0.3, atr_sl_multiplier=1.0, use_money_tp=True, target_profit_money=2.0,
+        risk_percent=0.3, atr_sl_multiplier=2.5, use_money_tp=True, target_profit_money=2.0,
         min_score_to_trade=70, max_open_positions=1, max_trades_per_day=0,
         daily_loss_limit_pct=2.0, max_drawdown_pct=6.0, max_total_risk_pct=0.5,
         ignore_soft_filters=False, hedge_both_directions=False, name="Консервативный",
     ),
     RiskProfile.BALANCED: dict(
-        risk_percent=0.7, atr_sl_multiplier=1.2, use_money_tp=True, target_profit_money=4.0,
+        risk_percent=0.7, atr_sl_multiplier=2.5, use_money_tp=True, target_profit_money=4.0,
         min_score_to_trade=62, max_open_positions=2, max_trades_per_day=0,
         daily_loss_limit_pct=3.0, max_drawdown_pct=10.0, max_total_risk_pct=1.8,
         ignore_soft_filters=False, hedge_both_directions=False, name="Сбалансированный",
     ),
     RiskProfile.AGGRESSIVE: dict(
-        risk_percent=1.2, atr_sl_multiplier=0.8, use_money_tp=True, target_profit_money=8.0,
+        risk_percent=1.2, atr_sl_multiplier=2.0, use_money_tp=True, target_profit_money=8.0,
         min_score_to_trade=55, max_open_positions=5, max_trades_per_day=0,
         daily_loss_limit_pct=5.0, max_drawdown_pct=15.0, max_total_risk_pct=6.5,
         ignore_soft_filters=False, hedge_both_directions=False, name="Агрессивный",
     ),
     RiskProfile.HYSTERIC: dict(
-        risk_percent=0.1, atr_sl_multiplier=0.5, use_money_tp=True, target_profit_money=1.0,
+        risk_percent=0.1, atr_sl_multiplier=1.5, use_money_tp=True, target_profit_money=1.0,
         min_score_to_trade=45, max_open_positions=10, max_trades_per_day=0,
         daily_loss_limit_pct=8.0, max_drawdown_pct=25.0, max_total_risk_pct=3.0,
         ignore_soft_filters=True, hedge_both_directions=False, name="Истеричка (YOLO)",
@@ -736,7 +736,12 @@ BRIDGE_CACHE_TTL_MIN = 45      # сколько минут держать отв
 # торгового робота под открытыми сделками нельзя.
 UPDATE_ENABLED = False
 UPDATE_REPO = ""               # владелец/название, например simafon1-cyber/repp
-UPDATE_BRANCH = "main"
+# Пусто = программа сама узнаёт у GitHub главную ветку репозитория
+# (repo_default_branch() в updater.py). НЕ подставляйте сюда "main" вслепую:
+# если в репозитории ветки main ещё нет (пока никто не сделал первый Pull
+# Request — обычное дело для нового проекта), обновление отвечало бы
+# "Репозиторий или ветка не найдены" на КАЖДЫЙ файл без понятной причины.
+UPDATE_BRANCH = ""
 # Токен нужен для ЗАКРЫТОГО репозитория: GitHub -> Settings ->
 # Developer settings -> Personal access tokens -> Fine-grained -> ваш
 # репозиторий. Права:
@@ -801,8 +806,8 @@ JOURNAL_MASK_ACCOUNT = False   # True = номер счёта в именах ф
 # Эти два числа задают пол, ниже которого стоп не опускается ни при каком
 # профиле. Расширение стопа автоматически УМЕНЬШАЕТ лот (объём считается от
 # риска в деньгах), поэтому риск в деньгах не растёт.
-MIN_SL_SPREAD_MULTIPLE = 4.0   # стоп не ближе 4 спредов
-MIN_SL_ATR_FRACTION = 0.8      # и не ближе 0.8 ATR
+MIN_SL_SPREAD_MULTIPLE = 8.0   # стоп не ближе 8 спредов
+MIN_SL_ATR_FRACTION = 1.5      # и не ближе 1.5 ATR
 
 # Что делать, если МИНИМАЛЬНЫЙ лот брокера рискует больше, чем разрешает
 # профиль. Так бывает на маленьком депозите: на счёте $100 минимальный лот

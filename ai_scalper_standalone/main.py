@@ -707,6 +707,7 @@ def build_snapshot(acc_info, acc_state: AccountState, sym_states: dict, all_posi
             "ai_confidence": st.ext_last_confidence,
             "reject_reason": st.last_reject_reason,
             "last_trade_result": st.last_trade_result,
+            "risk_warning": st.last_risk_warning,
             "enabled": control.is_symbol_enabled(sym),
             "lot_override": lot_overrides.get(sym, 0),
             "learning_status": al.learning_status_text(st),

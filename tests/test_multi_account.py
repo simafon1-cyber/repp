@@ -11,15 +11,26 @@ import json
 import sys
 import tempfile
 import time
+import types
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
-sys.path.insert(0, str(BASE.parent / "ai_scalper_standalone"))
+APP = BASE.parent / "ai_scalper_standalone"
+sys.path.insert(0, str(APP))
+
+# accounts_backup.py тянет cloud_journal.py, а тот — config: настоящего
+# config.py в git нет (там ключи), подставляем эталон, как это делают
+# остальные тесты.
+_cfg = types.ModuleType("config")
+exec((APP / "config.py.example").read_text(encoding="utf-8"), _cfg.__dict__)
+sys.modules["config"] = _cfg
 
 import accounts as acc_mod  # noqa: E402
 from account_supervisor import AccountState, AccountSupervisor  # noqa: E402
 from accounts import (MIN_POLL_MS, Account, AccountStore, migrate_from_config,  # noqa: E402
                       resolve_symbol, resolve_symbols)
+import accounts_backup as ab  # noqa: E402
+import cloud_journal as cj    # noqa: E402
 
 PASSWORD = "пароль-входа"
 SALT = "a0d1491a207ae9ecb87b775e065f2fba"
@@ -127,6 +138,90 @@ def test_store_operations() -> None:
         check(store.remove(2, PASSWORD, SALT), "счёт удаляется")
         check(not store.remove(2, PASSWORD, SALT), "повторное удаление возвращает False")
         check(len(AccountStore(path).load(PASSWORD, SALT)) == 2, "удаление сохранено")
+
+
+def test_locked_password_survives_other_saves() -> None:
+    """Реальная жалоба владельца: "не должен удалять счета при перезапуске".
+
+    Причина: по умолчанию REQUIRE_LOGIN=False и без "запомненного" пароля
+    программа открывается БЕЗ пароля входа — сессионный пароль пустой.
+    accounts.json при этом читается с ПУСТЫМ паролем: расшифровать чужим
+    ключом настоящий пароль счёта нельзя, он временно недоступен (это
+    ожидаемо). Раньше save() в таком состоянии брал пустую строку из памяти
+    и НАВСЕГДА шифровал её поверх настоящего пароля — одно нажатие ЛЮБОЙ
+    кнопки на вкладке "Счета" (переключить галочку у ДРУГОГО счёта, добавить
+    третий, удалить четвёртый — save() перезаписывает файл ЦЕЛИКОМ) стирало
+    пароль безвозвратно. Здесь именно это и проверяется на каждом таком
+    действии."""
+    print("\n=== 3б. Заблокированный (не расшифрованный) пароль не стирается ===")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "accounts.json"
+        store = AccountStore(path)
+        store.add(make(1001, password="реальный-пароль-1"), PASSWORD, SALT)
+        store.add(make(1002, password="реальный-пароль-2"), PASSWORD, SALT)
+
+        # "Перезапуск программы" без пароля входа — типичный REQUIRE_LOGIN=False
+        restarted = AccountStore(path)
+        restarted.load("", SALT)
+        check(restarted.accounts[0].password == "" and restarted.accounts[1].password == "",
+              "с пустым паролем входа пароли счетов недоступны (ожидаемо)")
+        check(restarted.accounts[0].password_locked() is True,
+              "счёт помечен как заблокированный, а не как «без пароля»")
+        check("не расшифрован" in restarted.accounts[0].validate()[0],
+              "сообщение объясняет причину, а не «не указан пароль»",
+              restarted.accounts[0].validate())
+
+        # Дальше пользователь делает РАЗНЫЕ действия тем же (пустым) паролем —
+        # ни одно из них не должно повредить чужой зашифрованный пароль.
+        restarted.accounts[0].enabled = False           # переключил галочку
+        restarted.save("", SALT)
+
+        restarted.add(make(1003, password="секрет-три"), "", SALT)  # добавил счёт
+
+        check(restarted.remove(1003, "", SALT), "удаление счёта без пароля работает")
+
+        # Теперь настоящий вход — все пароли обязаны быть целы
+        reloaded = AccountStore(path).load(PASSWORD, SALT)
+        by_login = {a.login: a for a in reloaded}
+        check(by_login[1001].password == "реальный-пароль-1",
+              "первый пароль пережил чужие сохранения", by_login[1001].password)
+        check(by_login[1002].password == "реальный-пароль-2",
+              "второй пароль пережил чужие сохранения", by_login[1002].password)
+        check(by_login[1001].enabled is False, "при этом сама галочка сохранилась")
+        check(1003 not in by_login, "добавленный и удалённый счёт по-прежнему удалён")
+
+
+def test_locked_account_not_confused_with_empty() -> None:
+    print("\n=== 3в. Заблокированный счёт отличим от счёта без пароля ===")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "accounts.json"
+        store = AccountStore(path)
+        store.add(make(1, password="настоящий"), PASSWORD, SALT)   # с паролем
+        store.add(make(2, password=""), PASSWORD, SALT)            # без пароля
+
+        locked_view = AccountStore(path).load("не тот пароль", SALT)
+        by_login = {a.login: a for a in locked_view}
+        check(by_login[1].password_locked() is True,
+              "счёт с реальным (но нерасшифрованным) паролем — заблокирован")
+        check(by_login[2].password_locked() is False,
+              "счёт, у которого пароля никогда не было — просто не заполнен")
+
+
+def test_correcting_password_still_works() -> None:
+    """Обычная, ЖЕЛАЕМАЯ смена пароля должна по-прежнему сохраняться."""
+    print("\n=== 3г. Осознанная смена пароля работает как раньше ===")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "accounts.json"
+        store = AccountStore(path)
+        store.add(make(1, password="старый"), PASSWORD, SALT)
+
+        again = AccountStore(path)
+        again.load(PASSWORD, SALT)
+        again.accounts[0].password = "новый"
+        again.save(PASSWORD, SALT)
+
+        check(AccountStore(path).load(PASSWORD, SALT)[0].password == "новый",
+              "новый пароль записан")
 
 
 def test_migration() -> None:
@@ -335,16 +430,196 @@ def test_symbols_in_state() -> None:
     check(len(state.available_symbols) == 2, "список пар хранится в состоянии счёта")
 
 
+# =====================================================================
+# 13. Резервная копия счетов в облаке
+# =====================================================================
+class _FakeCloud:
+    """Заглушка cloud_journal: запоминает, что в неё положили, ничего не шлёт
+    по сети."""
+
+    def __init__(self):
+        self.files = {}          # путь -> текст
+        self.put_calls = []
+        self.ready_result = (True, "")
+
+    def ready(self):
+        return self.ready_result
+
+    def put_file(self, path, text, message):
+        self.put_calls.append((path, text, message))
+        self.files[path] = text
+        return "abc123def456"
+
+    def get_file(self, path):
+        return self.files.get(path)
+
+    def remote_sha(self, path):
+        return "sha" if path in self.files else None
+
+    def explain_error(self, exc):
+        return f"ошибка: {exc}"
+
+
+def test_accounts_backup_not_ready_by_default() -> None:
+    print("\n=== 13. Резервная копия счетов в облаке ===")
+    check(ab.BACKUP_PATH != cj.folder(),
+          "путь резервной копии не совпадает с папкой журнала сделок",
+          ab.BACKUP_PATH)
+
+    old_enabled = _cfg.JOURNAL_CLOUD_ENABLED
+    _cfg.JOURNAL_CLOUD_ENABLED = False
+    ok, reason = ab.ready()
+    check(ok is False and reason, "Без настроенного облака — понятная причина", reason)
+    _cfg.JOURNAL_CLOUD_ENABLED = old_enabled
+
+
+def test_accounts_backup_upload_uses_real_file_asis() -> None:
+    """Файл уходит В ОБЛАКО КАК ЕСТЬ — со всеми "enc:..." полями. Модуль не
+    расшифровывает и не пересобирает содержимое: значит секреты счетов
+    уходят наружу ровно в том виде, в каком уже лежат зашифрованными на
+    диске, и ничего лишнего не подмешивается."""
+    with tempfile.TemporaryDirectory() as d:
+        store = AccountStore(Path(d) / "accounts.json")
+        store.add(make(1, password="настоящий-пароль-брокера"), PASSWORD, SALT)
+        raw_on_disk = (Path(d) / "accounts.json").read_text(encoding="utf-8")
+        check("настоящий-пароль-брокера" not in raw_on_disk,
+              "на диске пароль уже зашифрован (проверка честности теста)")
+
+        fake = _FakeCloud()
+        saved_app_dir, saved_put, saved_get, saved_ready, saved_sha, saved_err = (
+            ab.app_dir, cj.put_file, cj.get_file, cj.ready, cj.remote_sha, cj.explain_error)
+        ab.app_dir = lambda: d
+        cj.put_file, cj.get_file = fake.put_file, fake.get_file
+        cj.ready, cj.remote_sha, cj.explain_error = fake.ready, fake.remote_sha, fake.explain_error
+        try:
+            result = ab.upload()
+            check(result["ok"] is True, "Загрузка прошла", str(result))
+            check(len(fake.put_calls) == 1, "Ровно один файл отправлен")
+            sent_path, sent_text, _msg = fake.put_calls[0]
+            check(sent_path == ab.BACKUP_PATH, "Отправлен по правильному пути")
+            check(sent_text == raw_on_disk,
+                  "Содержимое совпадает байт в байт с файлом на диске")
+            check("настоящий-пароль-брокера" not in sent_text,
+                  "В облако не ушёл открытый пароль")
+        finally:
+            ab.app_dir, cj.put_file, cj.get_file = saved_app_dir, saved_put, saved_get
+            cj.ready, cj.remote_sha, cj.explain_error = saved_ready, saved_sha, saved_err
+
+
+def test_accounts_backup_upload_without_local_file() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        fake = _FakeCloud()
+        saved_app_dir, saved_ready = ab.app_dir, cj.ready
+        ab.app_dir = lambda: d
+        cj.ready = fake.ready
+        try:
+            result = ab.upload()
+            check(result["ok"] is False and "не найден" in result["error"].lower(),
+                  "Нет локального файла — понятная ошибка, а не падение",
+                  str(result))
+        finally:
+            ab.app_dir, cj.ready = saved_app_dir, saved_ready
+
+
+def test_accounts_backup_restore_preserves_local_file() -> None:
+    """Восстановление никогда не стирает молча: текущий файл (если есть)
+    сохраняется рядом с припиской .before-restore ДО замены."""
+    with tempfile.TemporaryDirectory() as d:
+        local_path = Path(d) / "accounts.json"
+        local_path.write_text('{"version": 1, "accounts": ["локальная копия"]}',
+                              encoding="utf-8")
+
+        fake = _FakeCloud()
+        fake.files[ab.BACKUP_PATH] = '{"version": 1, "accounts": ["облачная копия"]}'
+        saved_app_dir, saved_get, saved_ready, saved_sha, saved_err = (
+            ab.app_dir, cj.get_file, cj.ready, cj.remote_sha, cj.explain_error)
+        ab.app_dir = lambda: d
+        cj.get_file, cj.ready = fake.get_file, fake.ready
+        cj.remote_sha, cj.explain_error = fake.remote_sha, fake.explain_error
+        try:
+            result = ab.restore()
+            check(result["ok"] is True, "Восстановление прошло", str(result))
+            check(local_path.read_text(encoding="utf-8") ==
+                  '{"version": 1, "accounts": ["облачная копия"]}',
+                  "На диске теперь облачная копия")
+            backup_path = Path(str(local_path) + ".before-restore")
+            check(backup_path.exists(), "Старый файл сохранён рядом")
+            check("локальная копия" in backup_path.read_text(encoding="utf-8"),
+                  "И в нём именно то, что было ДО восстановления")
+        finally:
+            ab.app_dir, cj.get_file, cj.ready = saved_app_dir, saved_get, saved_ready
+            cj.remote_sha, cj.explain_error = saved_sha, saved_err
+
+
+def test_accounts_backup_restore_nothing_in_cloud() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        fake = _FakeCloud()  # облако пустое
+        saved_app_dir, saved_get, saved_ready = ab.app_dir, cj.get_file, cj.ready
+        ab.app_dir = lambda: d
+        cj.get_file, cj.ready = fake.get_file, fake.ready
+        try:
+            result = ab.restore()
+            check(result["ok"] is False and "нет" in result["error"].lower(),
+                  "Пустое облако — понятная причина, ничего не портится",
+                  str(result))
+        finally:
+            ab.app_dir, cj.get_file, cj.ready = saved_app_dir, saved_get, saved_ready
+
+
+def test_accounts_backup_roundtrip() -> None:
+    """Полный круг: сохранить -> испортить/потерять локально -> восстановить
+    -> те же счета с теми же (зашифрованными) паролями на диске."""
+    with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+        store = AccountStore(Path(d1) / "accounts.json")
+        store.add(make(1001, password="пароль-раз"), PASSWORD, SALT)
+        store.add(make(1002, password="пароль-два"), PASSWORD, SALT)
+        original_raw = (Path(d1) / "accounts.json").read_text(encoding="utf-8")
+
+        fake = _FakeCloud()
+        saved_app_dir, saved_put, saved_get, saved_ready = (
+            ab.app_dir, cj.put_file, cj.get_file, cj.ready)
+        cj.put_file, cj.get_file, cj.ready = fake.put_file, fake.get_file, fake.ready
+        try:
+            ab.app_dir = lambda: d1
+            check(ab.upload()["ok"] is True, "Сохранено с первого компьютера")
+
+            # "Переустановка" — совсем другая (пустая) папка
+            ab.app_dir = lambda: d2
+            result = ab.restore()
+            check(result["ok"] is True, "Восстановлено на втором компьютере", str(result))
+
+            restored = AccountStore(Path(d2) / "accounts.json")
+            loaded = restored.load(PASSWORD, SALT)
+            check(len(loaded) == 2, "Оба счёта на месте после переустановки")
+            by_login = {a.login: a for a in loaded}
+            check(by_login[1001].password == "пароль-раз", "Первый пароль восстановлен")
+            check(by_login[1002].password == "пароль-два", "Второй пароль восстановлен")
+            check((Path(d2) / "accounts.json").read_text(encoding="utf-8") == original_raw,
+                  "Восстановленный файл побайтово совпадает с оригиналом")
+        finally:
+            ab.app_dir, cj.put_file, cj.get_file, cj.ready = (
+                saved_app_dir, saved_put, saved_get, saved_ready)
+
+
 def main_run() -> int:
     test_validation()
     test_parallel_flag()
     test_store_encryption()
+    test_locked_password_survives_other_saves()
+    test_locked_account_not_confused_with_empty()
+    test_correcting_password_still_works()
     test_store_operations()
     test_migration()
     test_grouping()
     test_commands_and_totals()
     test_symbol_resolution()
     test_symbols_in_state()
+    test_accounts_backup_not_ready_by_default()
+    test_accounts_backup_upload_uses_real_file_asis()
+    test_accounts_backup_upload_without_local_file()
+    test_accounts_backup_restore_preserves_local_file()
+    test_accounts_backup_restore_nothing_in_cloud()
+    test_accounts_backup_roundtrip()
 
     print("\n===========================================")
     print(f"Пройдено: {passed}, провалено: {failed}")

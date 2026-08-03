@@ -119,8 +119,36 @@ def repo() -> str:
     return str(getattr(cfg, "UPDATE_REPO", "") or "").strip().strip("/")
 
 
+_default_branch_cache = {}
+
+
+def repo_default_branch() -> str:
+    """Ветка по умолчанию у репозитория на GitHub (то, что там открывается
+    первым).
+
+    Раньше пустое поле «Ветка» вслепую подставляло "main". Для репозитория,
+    где ветка main не заводилась вовсе (обычное дело, пока никто не сделал
+    первый Pull Request) — это означало «Репозиторий или ветка не найдены»
+    буквально на КАЖДЫЙ файл, хотя сам репозиторий и рабочая ветка в нём
+    существуют. Теперь при пустом поле программа спрашивает у самого GitHub,
+    какая ветка в этом репозитории главная."""
+    key = repo()
+    if key in _default_branch_cache:
+        return _default_branch_cache[key]
+    value = "main"
+    try:
+        with _request(f"{API}/repos/{key}") as response:
+            data = json.loads(response.read().decode("utf-8"))
+        value = str(data.get("default_branch", "") or "main")
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось узнать ветку по умолчанию репозитория %s: %s", key, e)
+    _default_branch_cache[key] = value
+    return value
+
+
 def branch() -> str:
-    return str(getattr(cfg, "UPDATE_BRANCH", "main") or "main").strip()
+    configured = str(getattr(cfg, "UPDATE_BRANCH", "") or "").strip()
+    return configured or repo_default_branch()
 
 
 def token() -> str:
@@ -151,8 +179,10 @@ def explain_error(exc: Exception) -> str:
     """Ошибку сети — понятной фразой."""
     if isinstance(exc, urllib.error.HTTPError):
         if exc.code == 404:
-            return ("Репозиторий или ветка не найдены. Проверьте UPDATE_REPO и "
-                    "UPDATE_BRANCH. Для закрытого репозитория нужен токен.")
+            return ("Репозиторий или ветка не найдены. Проверьте название "
+                    "репозитория (владелец/название) и ветку — оставьте поле "
+                    "«Ветка» пустым, чтобы программа сама взяла главную ветку "
+                    "репозитория. Для закрытого репозитория нужен токен.")
         if exc.code in (401, 403):
             return ("Нет доступа к репозиторию. Для закрытого нужен токен GitHub "
                     "с правом Contents: Read-only.")

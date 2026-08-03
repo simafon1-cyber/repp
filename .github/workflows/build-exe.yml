@@ -70,6 +70,7 @@ jobs:
           --hidden-import updater
           --hidden-import config_migrate
           --hidden-import cloud_journal
+          --hidden-import accounts_backup
           --hidden-import param_help
           --add-data "config.py.example;."
           --add-data "../mql5;mql5"

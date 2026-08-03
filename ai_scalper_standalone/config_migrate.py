@@ -180,6 +180,183 @@ ONE_TIME = [
 ]
 
 
+def _clear_stale_update_branch(text: str, existing: dict) -> tuple:
+    """Одноразовая правка вне общего списка ONE_TIME, потому что она условная:
+    трогать UPDATE_BRANCH можно, только если там буквально "main".
+
+    Раньше пустое поле «Ветка» при сохранении настроек принудительно
+    заменялось на "main", даже если в репозитории такой ветки никогда не
+    было (обычное дело, пока не сделан ни один Pull Request) — обновление
+    отвечало «Репозиторий или ветка не найдены» на каждый файл. Теперь пустая
+    строка означает «программа сама узнает у GitHub главную ветку» — то же
+    самое, если в репозитории main действительно существует, и рабочее вместо
+    ошибки, если её там нет. Стирать безопасно ТОЛЬКО значение "main": если
+    человек нарочно вписал свою ветку ("develop", ветка задачи и т.п.), это
+    его осознанный выбор, и трогать его нельзя."""
+    marker = "MIGRATED_UPDATE_BRANCH_AUTO"
+    if marker in existing:
+        return text, ""
+    node = existing.get("UPDATE_BRANCH")
+    if node is None:
+        return text, ""
+    value = node["value"]
+    if not (isinstance(value, ast.Constant) and value.value == "main"):
+        return text, ""
+    text = _replace_or_append(text, "UPDATE_BRANCH", repr(""))
+    note = ("поле «Ветка» обновления очищено: раньше пустое поле "
+            "принудительно заменялось на \"main\", даже если такой ветки в "
+            "репозитории нет. Теперь программа сама узнаёт главную ветку у "
+            "GitHub")
+    text = text.rstrip("\n") + f"\n\n# {note}\n{marker} = True\n"
+    return text, note
+
+
+def _line_start_offsets(text: str) -> list:
+    """Абсолютное смещение начала каждой строки (lineno в ast — 1-based)."""
+    offsets = [0]
+    for line in text.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    return offsets
+
+
+def _node_span(text: str, node, line_offsets: list) -> tuple:
+    """(начало, конец) узла ast как абсолютные смещения в text."""
+    start = line_offsets[node.lineno - 1] + node.col_offset
+    end = line_offsets[node.end_lineno - 1] + node.end_col_offset
+    return start, end
+
+
+# Множитель ATR для стоп-лосса по профилям риска — старые (тесные) значения,
+# из-за которых стоп стоял внутри обычного рыночного шума и сделки
+# закрывались за 8-11 секунд, не успев никуда пойти. См. пояснение к
+# _widen_stale_stop_loss() ниже.
+_OLD_ATR_SL_MULTIPLIER = {
+    "CONSERVATIVE": 1.0,
+    "BALANCED": 1.2,
+    "AGGRESSIVE": 0.8,
+    "HYSTERIC": 0.5,
+}
+_NEW_ATR_SL_MULTIPLIER = {
+    "CONSERVATIVE": 2.5,
+    "BALANCED": 2.5,
+    "AGGRESSIVE": 2.0,
+    "HYSTERIC": 1.5,
+}
+
+
+def _widen_stale_stop_loss(text: str) -> tuple:
+    """Одноразово раздвигает стоп-лосс в УЖЕ СУЩЕСТВУЮЩЕМ config.py.
+
+    RISK_PROFILES — многострочный словарь, поэтому sync() его не трогает
+    (см. SKIP), а обычный ONE_TIME работает только с простыми присваиваниями
+    "ИМЯ = значение" на одной строке. Здесь — узкая правка ИМЕННО
+    atr_sl_multiplier внутри каждого профиля, и только если он до сих пор
+    равен старому заводскому значению: если человек уже подправил его вручную,
+    трогать нельзя ни в коем случае.
+
+    Правка сделана через ast с точными смещениями в исходном тексте (а не
+    "собрать RISK_PROFILES заново"), чтобы ничего больше в файле — форматирование,
+    остальные поля, комментарии пользователя — не изменилось ни на символ."""
+    marker = "MIGRATED_WIDER_STOP_LOSS"
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return text, ""
+    if any(isinstance(n, ast.Assign) and len(n.targets) == 1
+           and isinstance(n.targets[0], ast.Name) and n.targets[0].id == marker
+           for n in tree.body):
+        return text, ""
+
+    target = None
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "RISK_PROFILES"
+                and isinstance(node.value, ast.Dict)):
+            target = node.value
+            break
+    if target is None:
+        return text, ""
+
+    line_offsets = _line_start_offsets(text)
+    replacements = []   # (start, end, новый_текст) — применяются справа налево
+    touched = []
+    for key_node, value_node in zip(target.keys, target.values):
+        if not (isinstance(key_node, ast.Attribute)
+                and key_node.attr in _OLD_ATR_SL_MULTIPLIER):
+            continue
+        if not isinstance(value_node, ast.Call):
+            continue
+        for kw in value_node.keywords:
+            if kw.arg != "atr_sl_multiplier":
+                continue
+            if not isinstance(kw.value, ast.Constant):
+                continue
+            old_expected = _OLD_ATR_SL_MULTIPLIER[key_node.attr]
+            try:
+                current = float(kw.value.value)
+            except (TypeError, ValueError):
+                continue
+            if abs(current - old_expected) > 1e-9:
+                continue   # уже другое значение — не своё дело трогать
+            new_value = _NEW_ATR_SL_MULTIPLIER[key_node.attr]
+            start, end = _node_span(text, kw.value, line_offsets)
+            replacements.append((start, end, repr(new_value)))
+            touched.append(key_node.attr)
+
+    if not replacements:
+        return text, ""
+
+    for start, end, new_text in sorted(replacements, key=lambda r: -r[0]):
+        text = text[:start] + new_text + text[end:]
+
+    note = (f"стоп-лосс расширен в профилях риска ({', '.join(sorted(touched))}): "
+           f"тесный стоп стоял внутри рыночного шума, сделки закрывались за "
+           f"секунды, не успев никуда пойти")
+    text = text.rstrip("\n") + f"\n\n# {note}\n{marker} = True\n"
+    return text, note
+
+
+# Пороги минимальной дистанции стопа — тоже старые/новые значения, простые
+# top-level присваивания (в отличие от RISK_PROFILES), но правим их так же
+# ОСТОРОЖНО: только если пользователь их не трогал.
+_STOP_FLOOR_DEFAULTS = [
+    ("MIN_SL_SPREAD_MULTIPLE", 4.0, 8.0),
+    ("MIN_SL_ATR_FRACTION", 0.8, 1.5),
+]
+
+
+def _widen_stop_floor(text: str, existing: dict) -> tuple:
+    """Раздвигает минимальную дистанцию стопа (MIN_SL_*), только если она
+    всё ещё равна старому заводскому значению — та же логика бережности, что
+    и у _widen_stale_stop_loss(), но для простых присваиваний."""
+    marker = "MIGRATED_WIDER_STOP_FLOOR"
+    if marker in existing:
+        return text, ""
+    touched = []
+    for name, old_value, new_value in _STOP_FLOOR_DEFAULTS:
+        node = existing.get(name)
+        if node is None:
+            continue
+        value_node = node["value"]
+        if not isinstance(value_node, ast.Constant):
+            continue
+        try:
+            current = float(value_node.value)
+        except (TypeError, ValueError):
+            continue
+        if abs(current - old_value) > 1e-9:
+            continue
+        text = _replace_or_append(text, name, repr(new_value))
+        touched.append(name)
+    if not touched:
+        return text, ""
+    note = ("минимальная дистанция стопа увеличена (" + ", ".join(touched) +
+           "): раньше стоп мог оказаться внутри спреда и обычного шума инструмента")
+    text = text.rstrip("\n") + f"\n\n# {note}\n{marker} = True\n"
+    return text, note
+
+
 def apply_one_time(config_path: str = "") -> list:
     """Применить одноразовые изменения из ONE_TIME. Возвращает пояснения к тем,
     что реально применились."""
@@ -199,6 +376,24 @@ def apply_one_time(config_path: str = "") -> list:
             text = _replace_or_append(text, name, repr(value))
         text = text.rstrip("\n") + f"\n\n# {note}\n{marker} = True\n"
         applied.append(note)
+
+    text, branch_note = _clear_stale_update_branch(text, existing)
+    if branch_note:
+        applied.append(branch_note)
+
+    # Стоп-лосс расширяется в config.py, УЖЕ существующем у пользователя.
+    # RISK_PROFILES и MIN_SL_* не входят в generic-миграцию выше (RISK_PROFILES
+    # многострочный и в SKIP, а MIN_SL_* нужно трогать только если пользователь
+    # их не менял) — эти два шага пересчитывают `existing`/`text` заново, потому
+    # что предыдущие шаги могли уже изменить текст.
+    existing = _top_level_assignments(text)
+    text, stop_note = _widen_stale_stop_loss(text)
+    if stop_note:
+        applied.append(stop_note)
+    existing = _top_level_assignments(text)
+    text, floor_note = _widen_stop_floor(text, existing)
+    if floor_note:
+        applied.append(floor_note)
 
     if not applied:
         return []

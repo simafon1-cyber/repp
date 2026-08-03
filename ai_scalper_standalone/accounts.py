@@ -61,7 +61,11 @@ class Account:
         if not self.server:
             problems.append("не указан сервер брокера")
         if not self.password:
-            problems.append("не указан пароль")
+            if self.password_locked():
+                problems.append("пароль не расшифрован (войдите в программу с "
+                                "правильным паролем входа)")
+            else:
+                problems.append("не указан пароль")
         if self.risk_percent <= 0 or self.risk_percent > 10:
             problems.append("риск на сделку должен быть от 0 до 10%")
         if self.max_positions < 1:
@@ -69,6 +73,13 @@ class Account:
         if self.poll_interval_ms < MIN_POLL_MS:
             problems.append(f"интервал опроса не может быть меньше {MIN_POLL_MS} мс")
         return problems
+
+    def password_locked(self) -> bool:
+        """Пароль счёта на диске ЕСТЬ (зашифрован), но сейчас не расшифрован —
+        текущий пароль входа (или его отсутствие: REQUIRE_LOGIN=False по
+        умолчанию) не тот, которым счёт сохранялся. Не путать с «пароль не
+        задан вовсе» — там и на диске пусто."""
+        return bool(getattr(self, "_password_encrypted", "")) and not self.password
 
     def runs_in_parallel(self) -> bool:
         """True, если у счёта своя копия терминала.
@@ -103,11 +114,21 @@ class AccountStore:
             account = Account()
             for key, value in item.items():
                 if key == "password_encrypted":
-                    try:
-                        account.password = secure_store.decrypt_value(value, password, salt)
-                    except Exception:  # noqa: BLE001
-                        # Неверный пароль входа или файл с другого компьютера:
-                        # счёт остаётся в списке, но потребует ввести пароль заново
+                    # Запоминаем зашифрованную строку КАК ЕСТЬ, независимо от
+                    # того, удалось её расшифровать или нет — см. save().
+                    account._password_encrypted = value or ""
+                    if value:
+                        try:
+                            account.password = secure_store.decrypt_value(value, password, salt)
+                        except Exception:  # noqa: BLE001
+                            # Неверный пароль входа (например, программа
+                            # запущена с REQUIRE_LOGIN=False и без "запомненного"
+                            # пароля) или файл с другого компьютера: счёт
+                            # остаётся в списке, потребует пароль входа заново.
+                            # ГЛАВНОЕ: сам зашифрованный пароль счёта (выше)
+                            # никуда не делся — только не расшифрован СЕЙЧАС.
+                            account.password = ""
+                    else:
                         account.password = ""
                 elif hasattr(account, key):
                     setattr(account, key, value)
@@ -119,7 +140,23 @@ class AccountStore:
         for account in self.accounts:
             item = asdict(account)
             plain = item.pop("password", "")
-            item["password_encrypted"] = secure_store.encrypt_value(plain, password, salt)
+            if plain:
+                item["password_encrypted"] = secure_store.encrypt_value(plain, password, salt)
+            else:
+                # КРИТИЧНО. Пустой пароль в памяти НЕ обязательно означает
+                # «пользователь его убрал» — так же выглядит счёт, чей пароль
+                # просто не удалось расшифровать ТЕКУЩИМ паролем входа
+                # (например, программа запущена без входа — REQUIRE_LOGIN=False
+                # по умолчанию, — а счёт был сохранён при другом пароле).
+                # Раньше в этом случае save() шифровал пустую строку и
+                # НАВСЕГДА уничтожал настоящий пароль счёта одним нажатием
+                # любой другой кнопки на вкладке «Счета» (переключить галочку,
+                # добавить/удалить ДРУГОЙ счёт — save() перезаписывает файл
+                # целиком). Теперь при пустом пароле сохраняется ТА ЖЕ
+                # зашифрованная строка, что была прочитана при загрузке —
+                # ничего не портится, пока пользователь не введёт настоящий
+                # пароль входа и не сохранит счёт заново осознанно.
+                item["password_encrypted"] = getattr(account, "_password_encrypted", "")
             payload["accounts"].append(item)
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,6 +164,12 @@ class AccountStore:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.path)
+        # После сохранения зашифрованное представление в памяти должно
+        # совпадать с тем, что только что легло на диск — иначе повторное
+        # сохранение (например, следующим действием пользователя) снова
+        # опиралось бы на устаревшую строку.
+        for account, item in zip(self.accounts, payload["accounts"]):
+            account._password_encrypted = item.get("password_encrypted", "")
 
     # ---------- операции со списком ----------
     def add(self, account: Account, password: str, salt: str) -> None:
