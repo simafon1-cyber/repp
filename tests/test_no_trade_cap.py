@@ -173,8 +173,8 @@ def test_config_defaults() -> None:
     exec(text, fresh.__dict__)
     default_pause = getattr(fresh, "PAUSE_MINUTES_AFTER_LOSS_STREAK", None)
     check(default_pause is not None, "Пауза задана в шаблоне")
-    check(default_pause is not None and default_pause < 120,
-          "Пауза по умолчанию короче двух часов — сессия не теряется",
+    check(default_pause == 0,
+          "Пауза по умолчанию снята — торговля не прерывается вовсе",
           str(default_pause))
     check(not hasattr(fresh, "PAUSE_HOURS_AFTER_LOSS_STREAK"),
           "Старой настройки в часах в шаблоне не осталось")
@@ -240,9 +240,21 @@ def test_money_protections_still_enforced() -> None:
     check(CFG.USE_DAILY_LOSS_LIMIT is False,
           "Дневной порог убытка выключен — бот работает всю сессию")
 
-    # А это — то, что защищает деньги вместо него. Все четыре обязаны остаться.
-    check(CFG.USE_MAX_DRAWDOWN_LIMIT is True,
-          "Лимит общей просадки остался — последний рубеж")
+    # Лимит просадки владелец тоже попросил снять: «не останавливать торговлю,
+    # убрать это условие». Остановок не осталось ни одной — значит защита
+    # целиком переехала на уровень ОДНОЙ сделки, и вот она обязана быть.
+    # Значения читаем из шаблона заново: тесты выше подменяют настройки в
+    # памяти, и без этого включённая остановка в поставляемом конфиге прошла бы
+    # незамеченной.
+    fresh = types.ModuleType("fresh_cfg")
+    exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
+    check(fresh.USE_DAILY_LOSS_LIMIT is False,
+          "В шаблоне дневной порог убытка выключен")
+    check(fresh.USE_MAX_DRAWDOWN_LIMIT is False,
+          "В шаблоне лимит просадки выключен — торговля не прерывается")
+    check(int(fresh.PAUSE_MINUTES_AFTER_LOSS_STREAK) == 0,
+          "В шаблоне паузы после серии убытков нет",
+          str(fresh.PAUSE_MINUTES_AFTER_LOSS_STREAK))
     profile = CFG.RISK_PROFILES[CFG.RiskProfile(CFG.RISK_PROFILE)]
     check(float(profile["risk_percent"]) > 0,
           "Риск на сделку ограничен процентом от счёта", str(profile["risk_percent"]))

@@ -405,9 +405,24 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       g_consecutiveLosses++;
       if(g_consecutiveLosses>=MaxConsecutiveLosses)
       {
-         g_pauseUntil=TimeCurrent()+PauseMinutesAfterLossStreak*60;
-         Print("Серия из ", g_consecutiveLosses, " убытков подряд. Пауза до ", TimeToString(g_pauseUntil,TIME_DATE|TIME_MINUTES));
-         g_consecutiveLosses=0;
+         if(PauseMinutesAfterLossStreak>0)
+         {
+            g_pauseUntil=TimeCurrent()+PauseMinutesAfterLossStreak*60;
+            Print("Серия из ", g_consecutiveLosses, " убытков подряд. Пауза до ", TimeToString(g_pauseUntil,TIME_DATE|TIME_MINUTES));
+            // Счётчик обнуляем только вместе с паузой: пауза и есть "реакция"
+            // на серию, после неё считаем заново.
+            g_consecutiveLosses=0;
+         }
+         else
+         {
+            // Паузы нет — торговля не прерывается. Тогда счётчик НЕ обнуляем:
+            // он держит множитель риска на нижней границе
+            // (MinLossStreakRiskMultiplier), пока не придёт прибыльная сделка.
+            // Обнулить его здесь значило бы вернуть полный объём сразу после
+            // пятого убытка подряд — то есть остаться и без паузы, и без
+            // снижения риска.
+            Print("Серия из ", g_consecutiveLosses, " убытков подряд. Паузы нет (PauseMinutesAfterLossStreak=0), объём сделок снижен до минимального множителя.");
+         }
       }
    }
    else g_consecutiveLosses=0;

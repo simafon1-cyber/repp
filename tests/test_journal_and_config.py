@@ -278,19 +278,144 @@ def test_zero_means_no_limit() -> None:
     CFG.USE_DAILY_LOSS_LIMIT = old_flag
 
 
-def test_money_protection_remains() -> None:
-    print("\n[Деньги защищены и без дневного порога]")
-    check(CFG.USE_MAX_DRAWDOWN_LIMIT is True,
-          "Лимит общей просадки остался включённым")
-    acc = FakeAccount(peak_equity=100.0)
-    limit = abs(rm.get_profile()["max_drawdown_pct"])
-    check(rm.max_drawdown_hit(acc, 100.0 - limit - 1) is True,
-          "Просадка сверх лимита останавливает торговлю")
+def test_nothing_halts_trading() -> None:
+    """Владелец: «Не останавливать торговлю, убрать это условие».
 
-    check(CFG.USE_STOP_LOSS is True if hasattr(CFG, "USE_STOP_LOSS") else True,
-          "Стоп-лосс на сделке никуда не делся")
-    check(float(CFG.RISK_PROFILES[CFG.RiskProfile(CFG.RISK_PROFILE)]["risk_percent"]) > 0,
-          "Риск на сделку по-прежнему ограничен процентом от счёта")
+    Проверяем ГЛАВНОЕ утверждение целиком: ни одно из трёх условий, которые
+    раньше выключали бота, больше не срабатывает при настройках по умолчанию.
+    Не по отдельности, а через ту самую функцию, которую спрашивает торговый
+    цикл перед каждым входом."""
+    print("\n[Ничто не останавливает торговлю]")
+    from state import SymbolState
+
+    check(CFG.USE_DAILY_LOSS_LIMIT is False, "Дневной порог убытка выключен")
+    check(CFG.USE_MAX_DRAWDOWN_LIMIT is False, "Лимит просадки выключен")
+    check(int(CFG.PAUSE_MINUTES_AFTER_LOSS_STREAK) == 0,
+          "Пауза после серии убытков снята",
+          str(CFG.PAUSE_MINUTES_AFTER_LOSS_STREAK))
+
+    sym = SymbolState("XAUUSD")
+    sym.consecutive_losses = 99
+
+    # Счёт наполовину съеден за день и просел от пика — торговля продолжается
+    acc = FakeAccount(day_start_equity=100.0, peak_equity=200.0)
+    for equity in (99.0, 80.0, 50.0, 10.0):
+        check(rm.trading_allowed(acc, sym, equity) is True,
+              f"Эквити {equity} при старте дня 100 и пике 200 — бот работает")
+
+    check(rm.loss_streak_pause_minutes() == 0.0,
+          "Длительность паузы — ноль", str(rm.loss_streak_pause_minutes()))
+
+
+def test_risk_is_capped_per_trade() -> None:
+    """Остановки убраны — значит защита должна работать НА КАЖДОЙ сделке.
+    Если и это исчезнет, счёт останется без ограничений вообще."""
+    print("\n[Вместо остановки ограничен размер каждого убытка]")
+    profile = CFG.RISK_PROFILES[CFG.RiskProfile(CFG.RISK_PROFILE)]
+    check(float(profile["risk_percent"]) > 0,
+          "Риск на сделку ограничен процентом от счёта",
+          str(profile["risk_percent"]))
+    check(float(profile["max_total_risk_pct"]) > 0,
+          "Совокупный риск по всем открытым сделкам ограничен",
+          str(profile["max_total_risk_pct"]))
+
+    risk_src = (APP / "risk_manager.py").read_text(encoding="utf-8")
+    check("def apply_min_stop_floor" in risk_src,
+          "Стоп не может оказаться внутри спреда и шума")
+    check(float(getattr(CFG, "MIN_SL_SPREAD_MULTIPLE", 0)) > 0,
+          "Минимум по спреду задан", str(getattr(CFG, "MIN_SL_SPREAD_MULTIPLE", 0)))
+    check(float(getattr(CFG, "MIN_SL_ATR_FRACTION", 0)) > 0,
+          "Минимум по размаху свечи задан",
+          str(getattr(CFG, "MIN_SL_ATR_FRACTION", 0)))
+
+    # Снижение объёма по серии убытков — единственное, что осталось реагировать
+    # на серию. Без него отмена паузы означала бы полный объём после любой
+    # череды неудач.
+    check(CFG.USE_LOSS_STREAK_RISK_SCALING is True,
+          "Объём снижается по мере серии убытков")
+    from state import SymbolState
+    sym = SymbolState("XAUUSD")
+    sym.consecutive_losses = 0
+    check(rm.loss_streak_risk_multiplier(sym) == 1.0, "Без убытков — полный объём")
+    sym.consecutive_losses = CFG.MAX_CONSECUTIVE_LOSSES
+    at_limit = rm.loss_streak_risk_multiplier(sym)
+    check(at_limit <= CFG.MIN_LOSS_STREAK_RISK_MULTIPLIER + 1e-9,
+          "На пороге серии объём урезан до минимума", str(at_limit))
+    sym.consecutive_losses = CFG.MAX_CONSECUTIVE_LOSSES * 10
+    check(rm.loss_streak_risk_multiplier(sym) >= CFG.MIN_LOSS_STREAK_RISK_MULTIPLIER,
+          "И не уходит ниже заданного минимума ни при какой серии")
+
+
+def test_loss_counter_not_reset_without_pause() -> None:
+    """Раньше счётчик убытков обнулялся вместе с постановкой паузы. Если паузы
+    нет, а счётчик всё равно обнулять, то после пятого убытка подряд бот
+    вернулся бы к ПОЛНОМУ объёму — то есть остался бы и без паузы, и без
+    снижения риска. Проверяем, что этого не происходит."""
+    print("\n[Без паузы счётчик убытков не обнуляется]")
+    # Разбираем дерево, а не текст: «else» в тексте ниже принадлежит проверке
+    # «убыток или прибыль», и поиск подстрокой перепутал бы ветки.
+    tree = ast.parse((APP / "main.py").read_text(encoding="utf-8"))
+    target = None
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                and ast.dump(node.test).count("pause_minutes") == 1
+                and isinstance(node.test.ops[0], ast.Gt)):
+            target = node
+            break
+    check(target is not None, "Найдена проверка «пауза вообще задана»")
+    if target is None:
+        return
+
+    def resets_counter(nodes) -> bool:
+        for n in nodes:
+            for sub in ast.walk(n):
+                if (isinstance(sub, ast.Assign)
+                        and isinstance(sub.value, ast.Constant) and sub.value.value == 0
+                        and any(isinstance(t, ast.Attribute)
+                                and t.attr == "consecutive_losses"
+                                for t in sub.targets)):
+                    return True
+        return False
+
+    check(resets_counter(target.body),
+          "С паузой счётчик обнуляется, как и раньше")
+    check(not resets_counter(target.orelse),
+          "Без паузы счётчик остаётся — объём держится сниженным до прибыли")
+
+    ea = (ROOT / "ai_scalper_pro" / "AI_Scalper_Pro.mq5").read_text(encoding="utf-8")
+    ea_code = re.sub(r"//.*", "", ea)
+    check("if(PauseMinutesAfterLossStreak>0)" in ea_code,
+          "В советнике то же правило")
+
+
+def test_advisor_defaults_match_program() -> None:
+    """Советник и программа должны вести себя одинаково. Если снять остановки
+    только в программе, советник на графике продолжит выключаться сам — и
+    человек решит, что настройка не сработала."""
+    print("\n[Советник настроен так же, как программа]")
+    text = (ROOT / "ai_scalper_pro" / "Config.mqh").read_text(encoding="utf-8")
+    code = re.sub(r"//.*", "", text)
+
+    def input_value(name: str):
+        m = re.search(rf"input\s+\w+\s+{re.escape(name)}\s*=\s*([^;]+);", code)
+        return m.group(1).strip() if m else None
+
+    check(input_value("UseDailyLossLimit") == "false",
+          "Дневной порог убытка выключен и в советнике",
+          str(input_value("UseDailyLossLimit")))
+    check(input_value("UseMaxDrawdownLimit") == "false",
+          "Лимит просадки выключен и в советнике",
+          str(input_value("UseMaxDrawdownLimit")))
+    check(input_value("PauseMinutesAfterLossStreak") == "0",
+          "Паузы после серии убытков нет и в советнике",
+          str(input_value("PauseMinutesAfterLossStreak")))
+
+    # Защита размера сделки в советнике при этом остаётся
+    check(input_value("UseLossStreakRiskScaling") == "true",
+          "Снижение объёма по серии убытков в советнике осталось")
+    total_risk = input_value("MaxTotalRiskPercent")
+    check(total_risk is not None and float(total_risk) > 0,
+          "Потолок совокупного риска в советнике задан", str(total_risk))
 
 
 # =====================================================================
@@ -657,7 +782,10 @@ def main() -> int:
 
     test_daily_loss_limit_off()
     test_zero_means_no_limit()
-    test_money_protection_remains()
+    test_nothing_halts_trading()
+    test_risk_is_capped_per_trade()
+    test_loss_counter_not_reset_without_pause()
+    test_advisor_defaults_match_program()
 
     test_calendar_writes_utf8()
     test_reader_expects_utf8()

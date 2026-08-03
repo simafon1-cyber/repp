@@ -139,15 +139,32 @@ def process_closed_deals(acc_state: AccountState, sym_states: dict):
         if profit < 0:
             sym_state.consecutive_losses += 1
             pause_minutes = rm.loss_streak_pause_minutes()
-            if sym_state.consecutive_losses >= cfg.MAX_CONSECUTIVE_LOSSES and pause_minutes > 0:
-                sym_state.pause_until = datetime.now() + timedelta(minutes=pause_minutes)
-                log.info("%s: серия из %d убытков подряд — пауза до %s",
-                         d.symbol, sym_state.consecutive_losses, sym_state.pause_until)
-                control.push_notification(
-                    "Серия убытков",
-                    f"{d.symbol}: пауза по этой паре до {sym_state.pause_until.strftime('%H:%M %d.%m')}",
-                )
-                sym_state.consecutive_losses = 0
+            if sym_state.consecutive_losses >= cfg.MAX_CONSECUTIVE_LOSSES:
+                if pause_minutes > 0:
+                    sym_state.pause_until = datetime.now() + timedelta(minutes=pause_minutes)
+                    log.info("%s: серия из %d убытков подряд — пауза до %s",
+                             d.symbol, sym_state.consecutive_losses, sym_state.pause_until)
+                    control.push_notification(
+                        "Серия убытков",
+                        f"{d.symbol}: пауза по этой паре до "
+                        f"{sym_state.pause_until.strftime('%H:%M %d.%m')}",
+                    )
+                    # Счётчик обнуляем только вместе с паузой: пауза и есть
+                    # реакция на серию, после неё считаем заново.
+                    sym_state.consecutive_losses = 0
+                elif sym_state.consecutive_losses == cfg.MAX_CONSECUTIVE_LOSSES:
+                    # Паузы нет — торговля не прерывается. Счётчик НЕ обнуляем:
+                    # он держит множитель риска на нижней границе, пока не
+                    # придёт прибыльная сделка. Человеку об этом говорим один
+                    # раз, а не после каждого следующего убытка.
+                    log.info("%s: серия из %d убытков подряд — паузы нет, "
+                             "объём сделок снижен до минимального множителя",
+                             d.symbol, sym_state.consecutive_losses)
+                    control.push_notification(
+                        "Серия убытков",
+                        f"{d.symbol}: {sym_state.consecutive_losses} убытков подряд. "
+                        f"Торговля продолжается, объём сделок снижен.",
+                    )
         else:
             sym_state.consecutive_losses = 0
 
