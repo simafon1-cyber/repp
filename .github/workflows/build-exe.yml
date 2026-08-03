@@ -65,6 +65,9 @@ jobs:
           --hidden-import telegram_reader
           --hidden-import trading_schedule
           --hidden-import mt5_install
+          --hidden-import bridge_host
+          --hidden-import diagnostics
+          --hidden-import updater
           --add-data "../mql5;mql5"
           --add-data "../ai_scalper_pro;ai_scalper_pro"
           --collect-all telethon

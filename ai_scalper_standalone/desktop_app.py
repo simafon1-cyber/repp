@@ -79,6 +79,9 @@ import news_calendar
 import news_providers
 import trading_schedule as tsched
 import mt5_install
+import bridge_host
+import diagnostics
+import updater
 import telegram_signals as tgs
 import telegram_reader as tgr
 import secure_store
@@ -587,6 +590,11 @@ class App:
         # Первый запуск: сами ставим советники и сервис в MetaTrader, чтобы
         # пользователю не приходилось запускать отдельные установщики.
         self.root.after(1200, self._auto_install_into_mt5_once)
+        # Мост для советников — тоже сам, если включён.
+        self.root.after(1500, self._start_bridge_if_enabled)
+        # Проверка обновлений при запуске: только смотрит, ставит по согласию.
+        if getattr(cfg, "UPDATE_CHECK_ON_START", True) and updater.enabled():
+            self.root.after(6000, lambda: self.check_updates(silent=True))
 
         if cfg.USE_WEB_DASHBOARD and not self._dashboard_started:
             try:
@@ -644,6 +652,7 @@ class App:
         tab_schedule = ttk.Frame(self.notebook)
         tab_tg = ttk.Frame(self.notebook)
         tab_sources = ttk.Frame(self.notebook)
+        tab_system = ttk.Frame(self.notebook)
         tab_chat = ttk.Frame(self.notebook)
         tab_help = ttk.Frame(self.notebook)
 
@@ -652,7 +661,8 @@ class App:
             "Счета": tab_accounts, "Сделки": tab_positions, "Лог": tab_log, "Equity": tab_equity,
             "Настройка": tab_config,
             "Календарь": tab_schedule, "Новости": tab_news,
-            "Источники": tab_sources, "Сигналы TG": tab_tg, "Chat AI": tab_chat,
+            "Источники": tab_sources, "Система": tab_system,
+            "Сигналы TG": tab_tg, "Chat AI": tab_chat,
             "Как пользоваться": tab_help,
         }
         for name, frame in self.tab_frames.items():
@@ -667,6 +677,7 @@ class App:
         self._build_tab_config(tab_config)
         self._build_tab_schedule(tab_schedule)
         self._build_tab_sources(tab_sources)
+        self._build_tab_system(tab_system)
         self._build_tab_telegram(tab_tg)
         self._build_tab_news(tab_news)
         self._build_tab_chat(tab_chat)
@@ -1820,6 +1831,253 @@ class App:
             self.news_tree.column(col, width=90, anchor="center")
         self.news_tree.column("event", width=220, anchor="w")
         self.news_tree.pack(fill="both", expand=True, padx=10, pady=6)
+
+    # ---- вкладка "Система" -----------------------------------------------------------
+    def _build_tab_system(self, parent):
+        """Проверка компьютера, мост для советников и обновление — в одном
+        месте. Всё, что отвечает на вопрос «почему не работает» и «как
+        получить свежую версию»."""
+        pad = {"padx": 12, "pady": 4}
+
+        ttk.Label(parent, text="Состояние системы",
+                  font=("Segoe UI", 12, "bold")).pack(anchor="w", **pad)
+
+        # ---------- Мост для советников ----------
+        br = ttk.LabelFrame(parent, text=" Мост для советников MetaTrader ")
+        br.pack(fill="x", padx=12, pady=(6, 4))
+
+        ttk.Label(br, foreground="#888", wraplength=780, justify="left", text=
+                  "Советники спрашивают у моста режим рынка. Мост встроен в программу — "
+                  "отдельно запускать нечего. Слушает только 127.0.0.1, наружу не "
+                  "открывается. Его ответ может лишь УМЕНЬШИТЬ объём сделки."
+                  ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 2))
+
+        self.bridge_enabled_var = tk.BooleanVar(value=getattr(cfg, "BRIDGE_ENABLED", False))
+        ttk.Checkbutton(br, text="Включить мост", variable=self.bridge_enabled_var).grid(
+            row=1, column=0, sticky="w", padx=8, pady=3)
+
+        ttk.Label(br, text="Порт:").grid(row=1, column=1, sticky="e", padx=4)
+        self.bridge_port_var = tk.StringVar(value=str(getattr(cfg, "BRIDGE_PORT", 8080)))
+        ttk.Entry(br, textvariable=self.bridge_port_var, width=8).grid(
+            row=1, column=2, sticky="w", padx=4)
+
+        self.bridge_status_var = tk.StringVar(value="")
+        ttk.Label(br, textvariable=self.bridge_status_var, foreground="#888",
+                  wraplength=780, justify="left").grid(
+            row=2, column=0, columnspan=3, sticky="w", padx=8, pady=(2, 6))
+
+        # ---------- Обновление ----------
+        up = ttk.LabelFrame(parent, text=" Обновление из GitHub ")
+        up.pack(fill="x", padx=12, pady=(6, 4))
+
+        ttk.Label(up, foreground="#888", wraplength=780, justify="left", text=
+                  "Правки кода приезжают с GitHub — переустанавливать программу не нужно. "
+                  "Советники обновляются сразу, сама программа — при следующем запуске. "
+                  "Молча ничего не ставится: программа спросит."
+                  ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
+
+        self.update_enabled_var = tk.BooleanVar(value=getattr(cfg, "UPDATE_ENABLED", False))
+        ttk.Checkbutton(up, text="Проверять обновления",
+                        variable=self.update_enabled_var).grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=8, pady=2)
+
+        ttk.Label(up, text="Репозиторий:").grid(row=2, column=0, sticky="w", padx=8, pady=3)
+        self.update_repo_var = tk.StringVar(value=getattr(cfg, "UPDATE_REPO", ""))
+        ttk.Entry(up, textvariable=self.update_repo_var, width=44).grid(
+            row=2, column=1, sticky="w", padx=8)
+        ttk.Label(up, foreground="#666", text="владелец/название, например simafon1-cyber/repp"
+                  ).grid(row=3, column=1, sticky="w", padx=8)
+
+        ttk.Label(up, text="Ветка:").grid(row=4, column=0, sticky="w", padx=8, pady=3)
+        self.update_branch_var = tk.StringVar(value=getattr(cfg, "UPDATE_BRANCH", "main"))
+        ttk.Entry(up, textvariable=self.update_branch_var, width=24).grid(
+            row=4, column=1, sticky="w", padx=8)
+
+        ttk.Label(up, text="Токен GitHub:").grid(row=5, column=0, sticky="w", padx=8, pady=3)
+        self.update_token_var = tk.StringVar(value=getattr(cfg, "UPDATE_TOKEN", ""))
+        ttk.Entry(up, textvariable=self.update_token_var, width=44, show="*").grid(
+            row=5, column=1, sticky="w", padx=8)
+        ttk.Label(up, foreground="#666",
+                  text="нужен только для ЗАКРЫТОГО репозитория, права Contents: Read-only"
+                  ).grid(row=6, column=1, sticky="w", padx=8)
+
+        upbtn = ttk.Frame(up)
+        upbtn.grid(row=7, column=0, columnspan=2, sticky="w", padx=8, pady=6)
+        ttk.Button(upbtn, text="Сохранить", command=self.save_system_settings).grid(row=0, column=0)
+        ttk.Button(upbtn, text="Проверить обновления",
+                   command=self.check_updates).grid(row=0, column=1, padx=6)
+
+        self.update_status_var = tk.StringVar(value="")
+        ttk.Label(up, textvariable=self.update_status_var, foreground="#888",
+                  wraplength=780, justify="left").grid(
+            row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
+
+        # ---------- Проверка компьютера ----------
+        ttk.Label(parent, text="Что установлено на этом компьютере",
+                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
+
+        ttk.Button(parent, text="Проверить заново",
+                   command=self.refresh_diagnostics).pack(anchor="w", padx=12)
+
+        cols = ("what", "state", "detail")
+        self.diag_tree = ttk.Treeview(parent, columns=cols, show="headings", height=12)
+        for col, head, width in (("what", "Что", 190), ("state", "Состояние", 90),
+                                 ("detail", "Подробности", 480)):
+            self.diag_tree.heading(col, text=head)
+            self.diag_tree.column(col, width=width,
+                                  anchor="center" if col == "state" else "w")
+        self.diag_tree.pack(fill="both", expand=True, padx=12, pady=(4, 4))
+        self.diag_tree.tag_configure("fail", foreground="#e05561")
+        self.diag_tree.tag_configure("warn", foreground="#e0a355")
+        self.diag_tree.tag_configure("ok", foreground="#6ab04c")
+
+        self.diag_summary_var = tk.StringVar(value="")
+        ttk.Label(parent, textvariable=self.diag_summary_var, wraplength=800,
+                  justify="left").pack(anchor="w", padx=12, pady=(0, 8))
+
+        self.refresh_diagnostics()
+        self._refresh_bridge_status()
+
+    def _start_bridge_if_enabled(self):
+        try:
+            if bridge_host.enabled():
+                problem = bridge_host.start()
+                if problem:
+                    log.warning("Мост: %s", problem)
+            self._refresh_bridge_status()
+        except Exception as e:
+            log.warning("Мост не запущен: %s", e)
+
+    def refresh_diagnostics(self):
+        """Проверки трогают диск и ищут терминалы — делаем это в фоне."""
+        def worker():
+            try:
+                results = diagnostics.run_all()
+            except Exception as e:
+                log.exception("Проверка системы не удалась: %s", e)
+                results = []
+            self.root.after(0, lambda: self._apply_diagnostics(results))
+
+        self.diag_summary_var.set("Проверяю...")
+        threading.Thread(target=worker, daemon=True, name="diagnostics").start()
+
+    def _apply_diagnostics(self, results):
+        for item in self.diag_tree.get_children():
+            self.diag_tree.delete(item)
+        labels = {diagnostics.OK: "есть", diagnostics.WARN: "внимание",
+                  diagnostics.FAIL: "НЕТ"}
+        for r in results:
+            detail = r["detail"]
+            if r["fix"]:
+                detail += f"  ->  {r['fix']}"
+            self.diag_tree.insert("", "end", tags=(r["level"],),
+                                  values=(r["name"], labels.get(r["level"], ""), detail))
+        self.diag_summary_var.set(diagnostics.summary(results) if results
+                                  else "Не удалось выполнить проверку.")
+
+    def _refresh_bridge_status(self):
+        try:
+            st = bridge_host.status()
+            self.bridge_status_var.set(
+                st["detail"] + (f"  Запросов от советников: {st['requests']}."
+                                if st["requests"] else ""))
+        except Exception:
+            pass
+
+    def save_system_settings(self):
+        try:
+            port = int(self.bridge_port_var.get().strip() or 8080)
+        except ValueError:
+            messagebox.showwarning(APP_TITLE, "Порт должен быть числом.")
+            return
+        if not (1024 <= port <= 65535):
+            messagebox.showwarning(APP_TITLE, "Порт должен быть в диапазоне 1024-65535.")
+            return
+
+        pw = control.get_session_password()
+        salt = getattr(cfg, "SECURITY_SALT", "")
+        # Токен GitHub — такой же секрет, как ключи API
+        token = secure_store.protect_secret(self.update_token_var.get().strip(), pw, salt)
+
+        _write_config_value("BRIDGE_ENABLED", repr(bool(self.bridge_enabled_var.get())))
+        _write_config_value("BRIDGE_PORT", repr(port))
+        _write_config_value("UPDATE_ENABLED", repr(bool(self.update_enabled_var.get())))
+        _write_config_value("UPDATE_REPO", repr(self.update_repo_var.get().strip()))
+        _write_config_value("UPDATE_BRANCH", repr(self.update_branch_var.get().strip() or "main"))
+        _write_config_value("UPDATE_TOKEN", repr(token))
+        try:
+            _reload_cfg()
+        except Exception:
+            pass
+
+        # Мост перезапускаем сразу: ждать перезапуска программы ради галочки незачем
+        bridge_host.stop()
+        if bridge_host.enabled():
+            problem = bridge_host.start()
+            if problem:
+                messagebox.showwarning(APP_TITLE, problem)
+        self._refresh_bridge_status()
+        messagebox.showinfo(APP_TITLE, "Настройки системы сохранены.")
+        self.refresh_diagnostics()
+
+    def check_updates(self, silent: bool = False):
+        def worker():
+            result = updater.check()
+            self.root.after(0, lambda: self._after_update_check(result, silent))
+
+        self.update_status_var.set("Проверяю GitHub...")
+        threading.Thread(target=worker, daemon=True, name="update-check").start()
+
+    def _after_update_check(self, result: dict, silent: bool):
+        if result.get("error"):
+            self.update_status_var.set(result["error"])
+            if not silent:
+                messagebox.showwarning(APP_TITLE, result["error"])
+            return
+
+        if not result.get("available"):
+            self.update_status_var.set(result.get("message") or "Обновлений нет.")
+            if not silent:
+                messagebox.showinfo(APP_TITLE, "Установлена последняя версия.")
+            return
+
+        revision = result["revision"]
+        text = f"Есть новая версия ({revision}): {result.get('message', '')}"
+        self.update_status_var.set(text)
+
+        # Спрашиваем ВСЕГДА, даже при автопроверке: подменять торгового робота
+        # без ведома человека, пока у него открыты позиции, недопустимо.
+        if not messagebox.askyesno(
+                APP_TITLE,
+                f"{text}\n\nОбновить советники в MetaTrader сейчас?\n\n"
+                "Программа при этом продолжит работать в текущей версии — "
+                "она обновляется отдельно, при перезапуске."):
+            return
+        self._apply_update(revision)
+
+    def _apply_update(self, revision: str):
+        def worker():
+            report = updater.update_advisors(
+                progress=lambda t: self.root.after(0, lambda: self.update_status_var.set(t)))
+            self.root.after(0, lambda: self._after_update_applied(report, revision))
+
+        self.update_status_var.set("Скачиваю обновление...")
+        threading.Thread(target=worker, daemon=True, name="update-apply").start()
+
+    def _after_update_applied(self, report: dict, revision: str):
+        if report.get("errors"):
+            text = "Обновление не завершено: " + "; ".join(report["errors"][:3])
+            self.update_status_var.set(text)
+            messagebox.showwarning(APP_TITLE, text)
+            return
+        updater.remember_revision(revision, _write_config_value)
+        try:
+            _reload_cfg()
+        except Exception:
+            pass
+        text = f"Советники обновлены до версии {revision}. {report.get('installed', '')}"
+        self.update_status_var.set(text)
+        messagebox.showinfo(APP_TITLE, text)
 
     # ---- вкладка "Источники" ---------------------------------------------------------
     def _build_tab_sources(self, parent):
