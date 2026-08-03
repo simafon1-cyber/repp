@@ -6,36 +6,65 @@ updater.py — обновление программы из GitHub без пер
 остаётся старой. Переустанавливать её каждый раз незачем — обновление
 скачивается и применяется само.
 
-ЧТО ОБНОВЛЯЕТСЯ БЕЗ ПЕРЕЗАПУСКА
-Советники и сервис календаря (.mq5/.mqh). Это обычные текстовые файлы: их
-достаточно положить в терминал и пересобрать, что программа уже умеет
-(mt5_install). Перезапуск не нужен.
+ЧТО ОБНОВЛЯЕТСЯ, ОДНОЙ КНОПКОЙ «ОБНОВИТЬ ВСЁ»
+  1. Советники и сервис календаря (.mq5/.mqh) — скачиваются, кладутся в
+     каждый найденный терминал и компилируются. Перезапуск не нужен: это
+     обычные файлы, которые читает MetaTrader, а не часть процесса.
+  2. Сама программа:
+       * запущена из исходников — скачиваются все .py и заменяются на месте;
+       * запущена как .exe — скачивается готовый .exe из Releases (а если
+         релиза нет — из последней сборки GitHub Actions).
+  3. Новые настройки — дописываются в config.py (config_migrate.py).
 
 ЧТО ТРЕБУЕТ ПЕРЕЗАПУСКА
-Сама программа (.exe). Работающий файл заменить нельзя — Windows его держит.
-Поэтому новая версия скачивается рядом, а подмена происходит при следующем
-запуске: программа видит файл .new, меняет его местами со старым и стартует.
+Только сама программа. Работающий файл заменить нельзя — Windows его держит,
+а у Python уже загружены модули. Поэтому новая версия кладётся рядом, а
+подмена происходит в самом начале следующего запуска (apply_pending_swap).
+
+ЕСЛИ ГОТОВОЙ СБОРКИ ЕЩЁ НЕТ
+.exe собирается на серверах GitHub. Раньше это приходилось запускать руками
+через вкладку Actions. Теперь программа умеет попросить сборку сама
+(request_build) и потом забрать результат — руками ничего открывать не надо.
+
+ЧТО НИКОГДА НЕ ПЕРЕЗАПИСЫВАЕТСЯ
+config.py (ваши настройки и ключи), accounts.json, telegram_session, журналы,
+trades_log.csv, learning_state.json. Список — в PROTECTED. Обновление,
+затирающее ваши пароли, — это не обновление, а потеря данных.
+
+ВСЁ ИЛИ НИЧЕГО
+Файлы сначала скачиваются во временную папку и проверяются (каждый .py должен
+разбираться как Python). Только если проверку прошли ВСЕ — они заменяют
+рабочие, и то с резервной копией. Половина новых файлов и половина старых —
+верный способ получить программу, которая не запускается.
 
 ПРИВАТНЫЙ РЕПОЗИТОРИЙ
-Если репозиторий закрытый, нужен токен GitHub с правом чтения содержимого
-(Settings -> Developer settings -> Personal access tokens -> Fine-grained,
-доступ Contents: Read-only). Токен — такой же секрет, как ключи API: он
-хранится в config.py и шифруется наравне с ними.
+Нужен токен GitHub (Settings -> Developer settings -> Personal access tokens
+-> Fine-grained, ваш репозиторий). Права: Contents: Read-only — для обычного
+обновления; Actions: Read and write — если хотите, чтобы программа сама
+заказывала сборку .exe. Токен — такой же секрет, как ключи API: хранится в
+config.py и шифруется наравне с ними.
 
 ЧЕГО ЗДЕСЬ НЕТ
-Обновление никогда не ставится молча в фоне. Программа проверяет наличие
-новой версии и СПРАШИВАЕТ. Подменять торгового робота без ведома человека,
-пока у него открыты позиции, недопустимо.
+Обновление не ставится молча ПОСРЕДИ РАБОТЫ. Автоматически оно применяется
+только при запуске программы, до начала торговли (UPDATE_AUTO_APPLY). Если
+новая версия появилась, когда открыты позиции, программа скажет об этом и
+будет ждать решения: подменять торгового робота под открытыми сделками
+нельзя.
 """
 
+import ast
 import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import zipfile
 
 import config as cfg
 
@@ -43,6 +72,23 @@ log = logging.getLogger("updater")
 
 API = "https://api.github.com"
 RAW = "https://raw.githubusercontent.com"
+
+# Файлы, которые обновление НЕ ТРОГАЕТ никогда. Это ваши данные, а не код.
+PROTECTED = {
+    "config.py",
+    "accounts.json",
+    "accounts.tmp",
+    "telegram_session",
+    "trades_log.csv",
+    "trades_log.csv.sha256",
+    "learning_state.json",
+    ".login_remember",
+    "scalper.log",
+    "config.py.sha256",
+}
+
+# Папка репозитория, в которой лежит сама программа.
+PROGRAM_DIR = "ai_scalper_standalone"
 
 # Файлы советников, которые имеет смысл обновлять отдельно от программы.
 # Совпадает со списком в mt5_install — там же они и ставятся.
@@ -228,6 +274,442 @@ def update_advisors(progress=None) -> dict:
     return report
 
 
+# =====================================================================
+# ОБНОВЛЕНИЕ САМОЙ ПРОГРАММЫ: ЗАПУСК ИЗ ИСХОДНИКОВ
+# =====================================================================
+def is_frozen() -> bool:
+    """Программа запущена как собранный .exe (а не как набор .py)."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def list_repo_files() -> list:
+    """Все файлы репозитория одним запросом (дерево целиком).
+
+    Список файлов НЕ зашит в код намеренно: когда в программе появляется
+    новый модуль, зашитый список о нём не знает — обновление молча привезло
+    бы половину новой версии."""
+    url = f"{API}/repos/{repo()}/git/trees/{branch()}?recursive=1"
+    with _request(url) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("truncated"):
+        log.warning("GitHub отдал дерево файлов не целиком — репозиторий очень большой.")
+    return [item["path"] for item in (data.get("tree") or [])
+            if item.get("type") == "blob"]
+
+
+def safe_relative(path: str) -> bool:
+    """Путь из ответа GitHub можно безопасно превратить в путь на диске.
+
+    Ответ сети — не доверенные данные: путь вида ../../Windows/System32
+    вывел бы запись за пределы папки программы. Проверяем до, а не после."""
+    if not path or path.startswith("/") or path.startswith("\\"):
+        return False
+    if ":" in path:
+        return False
+    parts = path.replace("\\", "/").split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return False
+    return True
+
+
+def program_files(all_paths=None) -> list:
+    """Какие файлы программы обновлять. Возвращает список (путь_в_репозитории,
+    имя_на_диске) — программа лежит в одной папке, вложенности у неё нет."""
+    if all_paths is None:
+        all_paths = list_repo_files()
+    prefix = PROGRAM_DIR + "/"
+    out = []
+    for path in all_paths:
+        if not path.startswith(prefix) or not safe_relative(path):
+            continue
+        name = path[len(prefix):]
+        if "/" in name:
+            continue                      # вложенных папок у программы нет
+        if name in PROTECTED:
+            continue                      # ваши данные не трогаем
+        if not (name.endswith(".py") or name == "config.py.example"
+                or name in ("requirements.txt", "requirements-build.txt")):
+            continue
+        out.append((path, name))
+    return sorted(out)
+
+
+def update_program_files(progress=None) -> dict:
+    """Обновляет .py самой программы (для запуска из исходников).
+
+    Всё или ничего: сначала скачиваем во временную папку и проверяем, что
+    каждый файл разбирается как Python, и только потом заменяем рабочие."""
+    def say(text):
+        if progress:
+            try:
+                progress(text)
+            except Exception:
+                pass
+
+    report = {"downloaded": 0, "replaced": 0, "errors": [], "restart_needed": False}
+
+    try:
+        files = program_files()
+    except Exception as e:
+        report["errors"].append(f"Не удалось получить список файлов: {explain_error(e)}")
+        return report
+    if not files:
+        report["errors"].append(
+            f"В репозитории не найдена папка {PROGRAM_DIR}/ — проверьте название "
+            f"репозитория и ветку.")
+        return report
+
+    staging = tempfile.mkdtemp(prefix="ai-scalper-src-")
+    try:
+        for path, name in files:
+            say(f"Скачиваю {name}...")
+            try:
+                text = download_text(path)
+            except Exception as e:
+                report["errors"].append(f"{name}: {explain_error(e)}")
+                break
+            if name.endswith(".py"):
+                try:
+                    ast.parse(text)
+                except SyntaxError as e:
+                    report["errors"].append(f"{name}: скачанный файл битый ({e})")
+                    break
+            with open(os.path.join(staging, name), "w", encoding="utf-8",
+                      newline="\n") as f:
+                f.write(text)
+            report["downloaded"] += 1
+
+        if report["errors"]:
+            report["errors"].append(
+                "Скачалось не всё — ничего не заменено, чтобы не смешать версии.")
+            return report
+
+        say("Заменяю файлы...")
+        target_dir = app_dir()
+        for _, name in files:
+            source = os.path.join(staging, name)
+            destination = os.path.join(target_dir, name)
+            try:
+                new_text = open(source, encoding="utf-8").read()
+                if os.path.exists(destination):
+                    old_text = open(destination, encoding="utf-8", errors="replace").read()
+                    if old_text == new_text:
+                        continue          # не трогаем то, что и так свежее
+                    shutil.copy2(destination, destination + ".bak")
+                shutil.copy2(source, destination)
+                report["replaced"] += 1
+            except OSError as e:
+                report["errors"].append(f"{name}: не удалось записать ({e})")
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    report["restart_needed"] = report["replaced"] > 0
+    return report
+
+
+# =====================================================================
+# ОБНОВЛЕНИЕ САМОЙ ПРОГРАММЫ: СОБРАННЫЙ .EXE
+# =====================================================================
+EXE_NAME = "AI_Scalper_Pro.exe"
+BUILD_WORKFLOW = "build-exe.yml"
+ARTIFACT_NAME = "AI_Scalper_Pro-windows"
+
+
+class _DropAuthOnRedirect(urllib.request.HTTPRedirectHandler):
+    """Убирает заголовок Authorization при переходе на ЧУЖОЙ адрес.
+
+    GitHub отдаёт файлы релизов и артефактов не сам: он отвечает
+    перенаправлением на подписанную ссылку в хранилище (amazonaws.com).
+    urllib по умолчанию тащит все заголовки за собой — хранилище видит чужой
+    заголовок Authorization, не понимает его и отвечает отказом. Плюс это
+    означало бы отправку вашего токена GitHub на сторонний сервер, чего быть
+    не должно."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is None:
+            return None
+        old_host = urllib.parse.urlparse(req.full_url).netloc
+        new_host = urllib.parse.urlparse(newurl).netloc
+        if old_host != new_host:
+            for name in list(new_req.headers):
+                if name.lower() == "authorization":
+                    del new_req.headers[name]
+            new_req.unredirected_hdrs.pop("Authorization", None)
+        return new_req
+
+
+def _open_binary(url: str, accept: str, timeout: int = 300):
+    headers = {"Accept": accept, "User-Agent": "AI-Scalper-Updater"}
+    if token():
+        headers["Authorization"] = f"Bearer {token()}"
+    opener = urllib.request.build_opener(_DropAuthOnRedirect)
+    return opener.open(urllib.request.Request(url, headers=headers), timeout=timeout)
+
+
+def download_binary(url: str, destination: str, accept: str,
+                    progress=None) -> None:
+    """Скачивает большой файл на диск кусками, не держа его целиком в памяти."""
+    with _open_binary(url, accept=accept, timeout=300) as response:
+        total = int(response.headers.get("Content-Length") or 0)
+        done = 0
+        with open(destination, "wb") as f:
+            while True:
+                chunk = response.read(1024 * 256)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if progress and total:
+                    try:
+                        progress(f"Скачиваю программу: {done * 100 // total}%")
+                    except Exception:
+                        pass
+
+
+def latest_release_exe() -> dict:
+    """Ссылка на .exe из последнего релиза. {"url", "name", "tag"} или {}."""
+    url = f"{API}/repos/{repo()}/releases/latest"
+    try:
+        with _request(url) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {}                     # релизов ещё нет — это не ошибка
+        raise
+    for asset in (data.get("assets") or []):
+        if str(asset.get("name", "")).lower().endswith(".exe"):
+            return {"url": asset.get("url", ""), "name": asset.get("name", ""),
+                    "tag": str(data.get("tag_name", ""))}
+    return {}
+
+
+def latest_build_artifact() -> dict:
+    """Последняя УСПЕШНАЯ сборка .exe из GitHub Actions.
+
+    Нужна, когда релиз ещё не выпущен: сборка происходит на каждый запуск
+    workflow, а релиз — только по тегу. Артефакты живут ограниченное время и
+    скачиваются zip-ом, поэтому это запасной путь, а не основной."""
+    url = f"{API}/repos/{repo()}/actions/artifacts?per_page=30"
+    with _request(url) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    for item in (data.get("artifacts") or []):
+        if item.get("expired"):
+            continue
+        # Именно НАША сборка: в репозитории могут накапливаться артефакты
+        # других сценариев, и взять первый попавшийся значило бы скачать
+        # неизвестно что и подсунуть это вместо программы.
+        if str(item.get("name", "")) != ARTIFACT_NAME:
+            continue
+        return {"url": item.get("archive_download_url", ""),
+                "name": str(item.get("name", "")),
+                "created": str(item.get("created_at", ""))[:10]}
+    return {}
+
+
+def _extract_exe(zip_path: str, destination: str) -> bool:
+    """Достаёт программу из скачанного архива сборки.
+
+    В архиве лежит не только она: рядом установщик AI_Scalper_Setup.exe. Брать
+    «первый попавшийся .exe» нельзя — вместо программы подменился бы
+    установщик, и при следующем запуске открылось бы окно установки."""
+    with zipfile.ZipFile(zip_path) as archive:
+        # Имена внутри архива — тоже не доверенные данные (ZipSlip).
+        members = [m for m in archive.namelist()
+                   if m.lower().endswith(".exe") and safe_relative(m)]
+        exact = [m for m in members
+                 if m.replace("\\", "/").split("/")[-1].lower() == EXE_NAME.lower()]
+        chosen = exact[0] if exact else None
+        if chosen is None:
+            # Запасной путь: любой .exe, кроме установщика.
+            rest = [m for m in members if "setup" not in m.lower()]
+            chosen = rest[0] if rest else None
+        if chosen is None:
+            return False
+        with archive.open(chosen) as src, open(destination, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        return True
+
+
+def download_new_exe(progress=None) -> dict:
+    """Кладёт новую версию программы рядом со старой (файл .new).
+
+    Подмена произойдёт при следующем запуске — работающий .exe заменить
+    нельзя. Возвращает {"ok", "source", "error"}."""
+    def say(text):
+        if progress:
+            try:
+                progress(text)
+            except Exception:
+                pass
+
+    result = {"ok": False, "source": "", "error": ""}
+    destination = pending_swap_path()
+    temporary = destination + ".part"
+
+    try:
+        say("Ищу готовую сборку...")
+        release = latest_release_exe()
+        if release.get("url"):
+            say(f"Скачиваю версию {release.get('tag', '')}...")
+            download_binary(release["url"], temporary,
+                            accept="application/octet-stream", progress=progress)
+            os.replace(temporary, destination)
+            result.update(ok=True, source=f"релиз {release.get('tag', '')}")
+            return result
+
+        artifact = latest_build_artifact()
+        if not artifact.get("url"):
+            result["error"] = (
+                "Готовой сборки нет: ни релиза, ни свежего результата сборки. "
+                "Нажмите «Собрать новую версию» — программа попросит GitHub "
+                "собрать .exe, это занимает несколько минут.")
+            return result
+
+        say(f"Скачиваю сборку от {artifact.get('created', '')}...")
+        archive_path = temporary + ".zip"
+        download_binary(artifact["url"], archive_path,
+                        accept="application/vnd.github+json", progress=progress)
+        try:
+            if not _extract_exe(archive_path, temporary):
+                result["error"] = "В сборке не нашёлся .exe."
+                return result
+        finally:
+            try:
+                os.remove(archive_path)
+            except OSError:
+                pass
+        os.replace(temporary, destination)
+        result.update(ok=True, source=f"сборка от {artifact.get('created', '')}")
+        return result
+
+    except Exception as e:  # noqa: BLE001
+        result["error"] = explain_error(e)
+        return result
+    finally:
+        if os.path.exists(temporary):
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+
+
+def request_build() -> str:
+    """Просит GitHub собрать новую версию .exe. Пустая строка — получилось.
+
+    Раньше это делалось руками: вкладка Actions -> Run workflow. Токену нужно
+    право Actions: Read and write."""
+    url = f"{API}/repos/{repo()}/actions/workflows/{BUILD_WORKFLOW}/dispatches"
+    payload = json.dumps({"ref": branch()}).encode("utf-8")
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "AI-Scalper-Updater",
+        "Content-Type": "application/json",
+    }
+    if token():
+        headers["Authorization"] = f"Bearer {token()}"
+    else:
+        return ("Для заказа сборки нужен токен GitHub с правом "
+                "Actions: Read and write.")
+    request = urllib.request.Request(url, data=payload, headers=headers,
+                                     method="POST")
+    try:
+        urllib.request.urlopen(request, timeout=30)
+        return ""
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return ("Токену не хватает прав. Нужно Actions: Read and write "
+                    "(там же, где выдавали Contents).")
+        if e.code == 404:
+            return (f"Не найден сценарий сборки {BUILD_WORKFLOW} в ветке "
+                    f"{branch()}. Проверьте репозиторий и ветку.")
+        if e.code == 422:
+            return (f"GitHub не принял запрос: сценарий {BUILD_WORKFLOW} должен "
+                    f"разрешать ручной запуск (workflow_dispatch).")
+        return explain_error(e)
+    except Exception as e:  # noqa: BLE001
+        return explain_error(e)
+
+
+def build_status() -> dict:
+    """Что сейчас со сборкой .exe: идёт, готова, упала.
+
+    {"state", "text"} — state: "running" / "done" / "failed" / "none"."""
+    url = (f"{API}/repos/{repo()}/actions/workflows/{BUILD_WORKFLOW}"
+           f"/runs?per_page=1")
+    try:
+        with _request(url) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        return {"state": "none", "text": explain_error(e)}
+
+    runs = data.get("workflow_runs") or []
+    if not runs:
+        return {"state": "none", "text": "Сборок ещё не было."}
+
+    run = runs[0]
+    status = str(run.get("status", ""))
+    conclusion = str(run.get("conclusion", ""))
+    when = str(run.get("created_at", ""))[:16].replace("T", " ")
+    if status != "completed":
+        return {"state": "running",
+                "text": f"Сборка идёт (запущена {when}). Обычно занимает 5-10 минут."}
+    if conclusion == "success":
+        return {"state": "done", "text": f"Сборка готова ({when})."}
+    return {"state": "failed",
+            "text": f"Сборка не удалась ({when}, {conclusion or 'без причины'}). "
+                    f"Подробности — на GitHub, вкладка Actions."}
+
+
+# =====================================================================
+# ОДНА КНОПКА: ОБНОВИТЬ ВСЁ
+# =====================================================================
+def update_everything(progress=None) -> dict:
+    """Советники + сама программа. Возвращает сводку для показа человеку."""
+    def say(text):
+        if progress:
+            try:
+                progress(text)
+            except Exception:
+                pass
+
+    summary = {"errors": [], "lines": [], "restart_needed": False}
+
+    say("Обновляю советники в MetaTrader...")
+    advisors = update_advisors(progress=progress)
+    if advisors.get("errors"):
+        summary["errors"].extend(advisors["errors"])
+    elif advisors.get("downloaded"):
+        summary["lines"].append(
+            f"Советники обновлены ({advisors['downloaded']} файлов). "
+            + advisors.get("installed", ""))
+
+    if is_frozen():
+        say("Обновляю саму программу...")
+        exe = download_new_exe(progress=progress)
+        if exe.get("ok"):
+            summary["lines"].append(
+                f"Новая версия программы скачана ({exe['source']}). "
+                f"Она встанет при следующем запуске.")
+            summary["restart_needed"] = True
+        elif exe.get("error"):
+            summary["errors"].append(exe["error"])
+    else:
+        say("Обновляю файлы программы...")
+        source = update_program_files(progress=progress)
+        if source.get("errors"):
+            summary["errors"].extend(source["errors"])
+        elif source.get("replaced"):
+            summary["lines"].append(
+                f"Файлы программы обновлены ({source['replaced']} шт.). "
+                f"Нужен перезапуск.")
+            summary["restart_needed"] = True
+        else:
+            summary["lines"].append("Файлы программы уже свежие.")
+
+    return summary
+
+
 def pending_swap_path() -> str:
     """Куда кладётся скачанная новая версия программы."""
     if getattr(sys, "frozen", False):
@@ -235,11 +717,16 @@ def pending_swap_path() -> str:
     return os.path.join(app_dir(), "update.new")
 
 
-def apply_pending_swap() -> str:
+def apply_pending_swap(attempts: int = 12, pause: float = 0.5) -> str:
     """Вызывается ПРИ СТАРТЕ: если рядом лежит скачанная версия — меняем.
 
     Работающий .exe заменить нельзя, Windows его держит. Поэтому подмена
-    делается в самом начале запуска, пока новый файл ещё не занят."""
+    делается в самом начале запуска, пока новый файл ещё не занят.
+
+    Повторяем несколько раз с паузой: при автоматическом перезапуске старая
+    копия программы может ещё не успеть закрыться, и первая попытка
+    переименования упрётся в «файл занят». Это нормальная гонка на секунду, а
+    не повод отказываться от обновления."""
     if not getattr(sys, "frozen", False):
         return ""
     new_path = pending_swap_path()
@@ -248,15 +735,49 @@ def apply_pending_swap() -> str:
 
     current = sys.executable
     backup = current + ".old"
+    last_error = None
+    for attempt in range(max(1, attempts)):
+        try:
+            if os.path.exists(backup):
+                os.remove(backup)
+            os.replace(current, backup)
+            os.replace(new_path, current)
+            return ("Программа обновлена. Перезапустите её, чтобы начать работу "
+                    "в новой версии.")
+        except OSError as e:
+            last_error = e
+            if attempt + 1 < attempts:
+                time.sleep(pause)
+    log.warning("Не удалось применить обновление: %s", last_error)
+    return f"Не удалось применить обновление: {last_error}"
+
+
+def restart_program() -> str:
+    """Запускает программу заново и завершает текущую копию.
+
+    Зачем это нужно. Обновление меняет файлы на диске, но в уже работающем
+    процессе загружены СТАРЫЕ модули. Работать дальше — значит смешивать две
+    версии: часть кода старая, часть новая, и при первом же расхождении в
+    именах функций программа упадёт в самом неожиданном месте. Честный
+    перезапуск дешевле любой попытки «подгрузить на ходу».
+
+    Возвращает текст ошибки; при успехе не возвращается вовсе — процесс
+    завершается."""
     try:
-        if os.path.exists(backup):
-            os.remove(backup)
-        os.replace(current, backup)
-        os.replace(new_path, current)
-        return "Программа обновлена. Перезапустите её, чтобы начать работу в новой версии."
-    except OSError as e:
-        log.warning("Не удалось применить обновление: %s", e)
-        return f"Не удалось применить обновление: {e}"
+        if getattr(sys, "frozen", False):
+            command = [sys.executable]
+        else:
+            command = [sys.executable, os.path.abspath(sys.argv[0])]
+        command.extend(sys.argv[1:])
+        subprocess.Popen(command, close_fds=True)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось перезапустить программу: %s", e)
+        return f"Не удалось перезапустить программу: {e}"
+
+    # os._exit, а не sys.exit: sys.exit бросает исключение, которое перехватит
+    # обработчик выше, и программа продолжит работать двумя копиями сразу.
+    log.info("Перезапуск после обновления.")
+    os._exit(0)
 
 
 def remember_revision(revision: str, write_config) -> None:

@@ -1,0 +1,503 @@
+#!/usr/bin/env python3
+"""Тесты самообновления: программа скачивает и ставит новую версию сама.
+
+Владелец: «Я хотел сделать синхронизацию, чтобы мне не надо было каждый раз
+всё устанавливать, чтобы программа скачивала всё сама и изменяла данные
+файлы».
+
+Что здесь проверяется, по важности:
+  1. ВАШИ ДАННЫЕ НЕ ТРОГАЮТСЯ. config.py, accounts.json, telegram_session,
+     журналы и CSV сделок не могут быть перезаписаны обновлением ни при
+     каких данных с сервера.
+  2. ВСЁ ИЛИ НИЧЕГО. Если хоть один файл не скачался или скачался битым —
+     не заменяется ни один. Половина новой версии хуже старой целиком.
+  3. Ответ сети — не доверенные данные: путь вида ../../Windows не выведет
+     запись за пределы папки программы (ни из дерева файлов, ни из архива).
+  4. Скачанное действительно ПРИМЕНЯЕТСЯ: подмена .exe вызывается при старте,
+     а не остаётся мёртвым кодом (так и было — файл лежал, программа
+     запускалась старой).
+  5. Обновление не ставится посреди работы под открытыми сделками.
+  6. Токен GitHub не уезжает на чужой сервер при перенаправлении на хранилище.
+
+Запуск:  python3 tests/test_selfupdate.py
+"""
+
+from __future__ import annotations
+
+import ast
+import io
+import os
+import sys
+import tempfile
+import types
+import urllib.error
+import urllib.request
+import zipfile
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent
+ROOT = BASE.parent
+APP = ROOT / "ai_scalper_standalone"
+sys.path.insert(0, str(APP))
+
+passed = 0
+failed = 0
+
+
+def check(ok: bool, name: str, detail: str = "") -> None:
+    global passed, failed
+    if ok:
+        passed += 1
+        print(f"  OK   {name}")
+    else:
+        failed += 1
+        print(f"  СБОЙ {name}" + (f"  -> {detail}" if detail else ""))
+
+
+cfg = types.ModuleType("config")
+exec((APP / "config.py.example").read_text(encoding="utf-8"), cfg.__dict__)
+sys.modules["config"] = cfg
+CFG = cfg
+CFG.UPDATE_ENABLED = True
+CFG.UPDATE_REPO = "owner/repo"
+CFG.UPDATE_BRANCH = "main"
+CFG.UPDATE_TOKEN = "секретный-токен"
+
+import updater as up   # noqa: E402
+
+
+def code_only(text: str) -> str:
+    """Файл без комментариев и строк документации: проверка не должна
+    срабатывать на описание ошибки вместо самого кода."""
+    out = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return text
+    doc = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            doc.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    for i, line in enumerate(text.splitlines(), start=1):
+        if i in doc:
+            continue
+        out.append(line.split("#", 1)[0])
+    return "\n".join(out)
+
+
+# =====================================================================
+# 1. Ваши данные не трогаются
+# =====================================================================
+def test_personal_files_never_updated() -> None:
+    print("\n[Личные файлы обновление не трогает]")
+    personal = ["config.py", "accounts.json", "telegram_session",
+                "trades_log.csv", "learning_state.json", ".login_remember",
+                "scalper.log"]
+    for name in personal:
+        check(name in up.PROTECTED, f"{name} в списке неприкосновенных")
+
+    # Даже если сервер пришлёт их в списке файлов — они отсеются
+    tree = [f"{up.PROGRAM_DIR}/{name}" for name in personal]
+    tree += [f"{up.PROGRAM_DIR}/main.py", f"{up.PROGRAM_DIR}/config.py.example"]
+    files = up.program_files(tree)
+    names = [name for _, name in files]
+    for name in personal:
+        check(name not in names, f"Сервер прислал {name} — он всё равно отброшен")
+    check("main.py" in names, "Обычный файл программы обновляется")
+    check("config.py.example" in names,
+          "Эталон настроек обновляется (из него берутся новые параметры)")
+
+
+def test_only_program_folder() -> None:
+    print("\n[Обновляется только папка программы]")
+    tree = [
+        f"{up.PROGRAM_DIR}/main.py",
+        f"{up.PROGRAM_DIR}/sub/deep.py",     # вложенных папок у программы нет
+        "tests/test_bridge.py",              # тесты пользователю не нужны
+        "mql5/DualGuardEA.mq5",              # советники ставит другой механизм
+        "README.md",
+    ]
+    names = [name for _, name in up.program_files(tree)]
+    check(names == ["main.py"], "Берётся только своё", str(names))
+
+
+def test_path_traversal_blocked() -> None:
+    print("\n[Путь с сервера не может увести запись из папки программы]")
+    for bad in ("../evil.py", "../../Windows/System32/x.py", "/etc/passwd",
+                "C:/Windows/x.py", "a//b.py", "./x.py", "", "a/../../b.py"):
+        check(up.safe_relative(bad) is False, f"Отклонён путь {bad!r}")
+    for good in ("ai_scalper_standalone/main.py", "mql5/DualGuardEA.mq5"):
+        check(up.safe_relative(good) is True, f"Обычный путь принят: {good}")
+
+    tree = [f"../../../{up.PROGRAM_DIR}/evil.py",
+            f"{up.PROGRAM_DIR}/../../../evil.py"]
+    check(up.program_files(tree) == [],
+          "Опасные пути не попадают в список обновления")
+
+
+# =====================================================================
+# 2. Всё или ничего
+# =====================================================================
+class FakeDownloads:
+    """Подменяет download_text: отдаёт заготовленное содержимое или ошибку."""
+
+    def __init__(self, contents: dict):
+        self.contents = contents
+        self.asked = []
+
+    def __call__(self, path: str) -> str:
+        self.asked.append(path)
+        value = self.contents.get(path)
+        if isinstance(value, Exception):
+            raise value
+        if value is None:
+            raise urllib.error.HTTPError(path, 404, "Not Found", None, None)
+        return value
+
+
+def run_update(contents: dict, tree: list, target: str) -> dict:
+    saved_download = up.download_text
+    saved_list = up.list_repo_files
+    saved_dir = up.app_dir
+    up.download_text = FakeDownloads(contents)
+    up.list_repo_files = lambda: tree
+    up.app_dir = lambda: target
+    try:
+        return up.update_program_files()
+    finally:
+        up.download_text = saved_download
+        up.list_repo_files = saved_list
+        up.app_dir = saved_dir
+
+
+def test_all_or_nothing() -> None:
+    print("\n[Половина новой версии не ставится]")
+    tree = [f"{up.PROGRAM_DIR}/a.py", f"{up.PROGRAM_DIR}/b.py",
+            f"{up.PROGRAM_DIR}/c.py"]
+
+    with tempfile.TemporaryDirectory() as d:
+        for name in ("a.py", "b.py", "c.py"):
+            Path(d, name).write_text(f"OLD = '{name}'\n", encoding="utf-8")
+
+        # Один файл не скачался
+        report = run_update({
+            f"{up.PROGRAM_DIR}/a.py": "NEW = 1\n",
+            f"{up.PROGRAM_DIR}/b.py": None,          # 404
+            f"{up.PROGRAM_DIR}/c.py": "NEW = 3\n",
+        }, tree, d)
+        check(report["replaced"] == 0, "Ни один файл не заменён",
+              str(report["replaced"]))
+        check(any("не всё" in e for e in report["errors"]),
+              "Сказано, почему установка отменена", str(report["errors"]))
+        for name in ("a.py", "b.py", "c.py"):
+            check(Path(d, name).read_text(encoding="utf-8").startswith("OLD"),
+                  f"{name} остался старым")
+
+
+def test_broken_download_rejected() -> None:
+    print("\n[Битый файл не заменяет рабочий]")
+    tree = [f"{up.PROGRAM_DIR}/a.py", f"{up.PROGRAM_DIR}/b.py"]
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "a.py").write_text("OLD = 1\n", encoding="utf-8")
+        Path(d, "b.py").write_text("OLD = 2\n", encoding="utf-8")
+
+        report = run_update({
+            f"{up.PROGRAM_DIR}/a.py": "NEW = 1\n",
+            f"{up.PROGRAM_DIR}/b.py": "def сломано(:\n",   # не Python
+        }, tree, d)
+        check(report["replaced"] == 0, "Ничего не заменено")
+        check(any("битый" in e for e in report["errors"]),
+              "Сказано, что файл битый", str(report["errors"]))
+        check(Path(d, "a.py").read_text(encoding="utf-8") == "OLD = 1\n",
+              "Соседний файл тоже не пострадал")
+
+
+def test_successful_update() -> None:
+    print("\n[Удачное обновление меняет файлы и делает копию]")
+    tree = [f"{up.PROGRAM_DIR}/a.py", f"{up.PROGRAM_DIR}/b.py"]
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "a.py").write_text("OLD = 1\n", encoding="utf-8")
+        Path(d, "b.py").write_text("SAME = 2\n", encoding="utf-8")
+        Path(d, "config.py").write_text("MY_SECRET = 'мой пароль'\n", encoding="utf-8")
+
+        report = run_update({
+            f"{up.PROGRAM_DIR}/a.py": "NEW = 1\n",
+            f"{up.PROGRAM_DIR}/b.py": "SAME = 2\n",       # не изменился
+        }, tree, d)
+        check(not report["errors"], "Ошибок нет", str(report["errors"]))
+        check(report["downloaded"] == 2, "Скачаны оба файла")
+        check(report["replaced"] == 1, "Заменён только изменившийся",
+              str(report["replaced"]))
+        check(Path(d, "a.py").read_text(encoding="utf-8") == "NEW = 1\n",
+              "Новый код на месте")
+        check(Path(d, "a.py.bak").exists(),
+              "Старая версия сохранена рядом — есть куда откатиться")
+        check(not Path(d, "b.py.bak").exists(),
+              "Неизменившийся файл не копируется зря")
+        check(Path(d, "config.py").read_text(encoding="utf-8")
+              == "MY_SECRET = 'мой пароль'\n",
+              "Ваш config.py остался нетронутым")
+        check(report["restart_needed"] is True,
+              "Сказано, что нужен перезапуск")
+
+
+def test_empty_repo_is_explained() -> None:
+    print("\n[Пустой ответ объясняется, а не молчит]")
+    with tempfile.TemporaryDirectory() as d:
+        report = run_update({}, ["README.md"], d)
+        check(report["replaced"] == 0, "Ничего не заменено")
+        check(any(up.PROGRAM_DIR in e for e in report["errors"]),
+              "Сказано, что папка программы не найдена", str(report["errors"]))
+
+
+# =====================================================================
+# 3. Архив сборки
+# =====================================================================
+def test_zip_slip_blocked() -> None:
+    print("\n[Архив сборки не может записать файл куда попало]")
+    with tempfile.TemporaryDirectory() as d:
+        evil = os.path.join(d, "evil.zip")
+        with zipfile.ZipFile(evil, "w") as z:
+            z.writestr("../../../подсунутый.exe", b"MZ")
+        target = os.path.join(d, "out.exe")
+        check(up._extract_exe(evil, target) is False,
+              "Файл с путём наружу не распакован")
+        check(not os.path.exists(target), "Ничего не записано")
+        check(not os.path.exists(os.path.join(d, "подсунутый.exe")),
+              "И рядом тоже ничего не появилось")
+
+        good = os.path.join(d, "good.zip")
+        with zipfile.ZipFile(good, "w") as z:
+            z.writestr("AI_Scalper_Pro.exe", "MZ-программа".encode("utf-8"))
+        check(up._extract_exe(good, target) is True, "Обычный архив распакован")
+        check(open(target, "rb").read() == "MZ-программа".encode("utf-8"), "Содержимое верное")
+
+        # В архиве сборки рядом лежит установщик. Взять его вместо программы —
+        # значит при следующем запуске открыть окно установки вместо торговли.
+        both = os.path.join(d, "both.zip")
+        with zipfile.ZipFile(both, "w") as z:
+            z.writestr("AI_Scalper_Setup.exe", "УСТАНОВЩИК".encode("utf-8"))
+            z.writestr("AI_Scalper_Pro.exe", "ПРОГРАММА".encode("utf-8"))
+        check(up._extract_exe(both, target) is True, "Архив с двумя .exe распакован")
+        check(open(target, "rb").read() == "ПРОГРАММА".encode("utf-8"),
+              "Выбрана программа, а не установщик")
+
+
+# =====================================================================
+# 4. Скачанное действительно применяется
+# =====================================================================
+def test_swap_is_actually_called() -> None:
+    print("\n[Скачанная версия действительно ставится при запуске]")
+    body = code_only((APP / "desktop_app.py").read_text(encoding="utf-8"))
+    check("updater.apply_pending_swap()" in body,
+          "Подмена скачанного файла вызывается программой")
+
+    start = body.split("def main(", 1)[1]
+    swap_at = start.find("apply_pending_swap")
+    app_at = start.find("App()")
+    check(0 <= swap_at < app_at,
+          "Подмена происходит ДО запуска окна — позже файл уже занят")
+
+
+def test_swap_retries_and_backs_up() -> None:
+    print("\n[Подмена переживает «файл занят» и оставляет откат]")
+    with tempfile.TemporaryDirectory() as d:
+        current = os.path.join(d, "AI_Scalper_Pro.exe")
+        Path(current).write_bytes("СТАРАЯ".encode("utf-8"))
+        Path(current + ".new").write_bytes("НОВАЯ".encode("utf-8"))
+
+        saved_frozen = getattr(sys, "frozen", None)
+        saved_exe = sys.executable
+        sys.frozen = True
+        sys.executable = current
+        try:
+            text = up.apply_pending_swap(attempts=3, pause=0.01)
+        finally:
+            sys.executable = saved_exe
+            if saved_frozen is None:
+                del sys.frozen
+            else:
+                sys.frozen = saved_frozen
+
+        check("обновлена" in text, "Подмена удалась", text)
+        check(open(current, "rb").read() == "НОВАЯ".encode("utf-8"), "На месте новая версия")
+        check(open(current + ".old", "rb").read() == "СТАРАЯ".encode("utf-8"),
+              "Старая сохранена — есть куда вернуться")
+        check(not os.path.exists(current + ".new"),
+              "Временный файл убран, повторной подмены не будет")
+
+    # Без скачанного файла подмена молчит
+    saved_frozen = getattr(sys, "frozen", None)
+    sys.frozen = False
+    try:
+        check(up.apply_pending_swap() == "", "Нечего ставить — ничего не делается")
+    finally:
+        if saved_frozen is None:
+            del sys.frozen
+        else:
+            sys.frozen = saved_frozen
+
+
+def test_restart_after_update() -> None:
+    print("\n[После обновления программа перезапускается сама]")
+    body = code_only((APP / "updater.py").read_text(encoding="utf-8"))
+    check("def restart_program" in body, "Перезапуск есть")
+    fn = body.split("def restart_program", 1)[1].split("\ndef ", 1)[0]
+    check("subprocess.Popen" in fn, "Новая копия запускается")
+    check("os._exit(0)" in fn,
+          "Старая завершается жёстко — иначе работали бы две копии сразу")
+
+    ui = code_only((APP / "desktop_app.py").read_text(encoding="utf-8"))
+    after = ui.split("def _after_auto_update", 1)[1].split("\n    def _bot_is_busy", 1)[0]
+    check("restart_needed" in after,
+          "Перезапуск только когда файлы реально менялись")
+
+
+# =====================================================================
+# 5. Не посреди работы
+# =====================================================================
+def test_not_during_open_positions() -> None:
+    print("\n[Обновление не ставится под открытыми сделками]")
+    ui = code_only((APP / "desktop_app.py").read_text(encoding="utf-8"))
+    check("def _bot_is_busy" in ui, "Есть проверка занятости бота")
+    fn = ui.split("def _bot_is_busy", 1)[1].split("\n    def ", 1)[0]
+    check("positions" in fn, "Смотрятся именно открытые позиции")
+
+    manual = ui.split("def update_everything_now", 1)[1].split("\n    def ", 1)[0]
+    check("_bot_is_busy" in manual,
+          "Кнопка «Обновить всё» спрашивает при открытых сделках")
+
+    # Автоустановка — только при запуске, когда торговля ещё не началась
+    init = ui.split("def __init__", 1)[1].split("\n    def ", 1)[0]
+    check("UPDATE_AUTO_APPLY" in init,
+          "Автоустановка привязана к запуску программы")
+    check("_start_bot_when_ready" in init,
+          "Торговля стартует только после обновления")
+
+    gate = ui.split("def _start_bot_when_ready", 1)[1].split("\n    def ", 1)[0]
+    check("START_BOT_MAX_WAIT_TICKS" in gate,
+          "Зависшее обновление не блокирует торговлю навсегда")
+
+
+def test_auto_apply_off_by_default() -> None:
+    print("\n[Само ничего не ставится, пока не разрешили]")
+    fresh = types.ModuleType("fresh")
+    exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
+    check(fresh.UPDATE_ENABLED is False, "Обновление выключено по умолчанию")
+    check(fresh.UPDATE_AUTO_APPLY is False,
+          "Автоустановка выключена по умолчанию")
+    check(fresh.UPDATE_REQUEST_BUILD is False,
+          "Заказ сборки выключен по умолчанию")
+
+
+# =====================================================================
+# 6. Токен не уезжает на чужой сервер
+# =====================================================================
+class FakeResponse:
+    def __init__(self, url):
+        self.url = url
+
+
+def test_token_not_sent_to_storage() -> None:
+    print("\n[Токен GitHub не уходит на сторонний сервер]")
+    handler = up._DropAuthOnRedirect()
+
+    request = urllib.request.Request(
+        "https://api.github.com/repos/owner/repo/releases/assets/1",
+        headers={"Authorization": "Bearer секретный-токен",
+                 "Accept": "application/octet-stream"})
+    moved = handler.redirect_request(
+        request, io.BytesIO(b""), 302, "Found", {},
+        "https://objects.githubusercontent.com/подписанная-ссылка")
+    check(moved is not None, "Перенаправление обработано")
+    if moved is not None:
+        headers = {k.lower(): v for k, v in moved.headers.items()}
+        check("authorization" not in headers,
+              "На чужом адресе заголовка с токеном нет", str(headers))
+        check("Authorization" not in moved.unredirected_hdrs,
+              "И в скрытых заголовках тоже")
+
+    # На своём адресе токен остаётся — иначе закрытый репозиторий не откроется
+    same = handler.redirect_request(
+        urllib.request.Request(
+            "https://api.github.com/a",
+            headers={"Authorization": "Bearer секретный-токен"}),
+        io.BytesIO(b""), 302, "Found", {}, "https://api.github.com/b")
+    if same is not None:
+        headers = {k.lower(): v for k, v in same.headers.items()}
+        check("authorization" in headers,
+              "На том же сервере токен сохраняется")
+
+
+# =====================================================================
+# 7. Заказ сборки
+# =====================================================================
+def test_build_request_needs_token() -> None:
+    print("\n[Заказ сборки объясняет, чего не хватает]")
+    saved = CFG.UPDATE_TOKEN
+    CFG.UPDATE_TOKEN = ""
+    problem = up.request_build()
+    check("токен" in problem.lower(), "Без токена сказано прямо", problem)
+    check("Actions" in problem, "Названо нужное право", problem)
+    CFG.UPDATE_TOKEN = saved
+
+    body = code_only((APP / "updater.py").read_text(encoding="utf-8"))
+    check("workflow_dispatch" in (APP.parent / ".github" / "workflows"
+                                  / up.BUILD_WORKFLOW).read_text(encoding="utf-8"),
+          "Сценарий сборки разрешает запуск по команде")
+    check("dispatches" in body, "Сборка заказывается через GitHub API")
+
+
+def test_update_everything_covers_both() -> None:
+    print("\n[Одна кнопка обновляет и советники, и программу]")
+    body = code_only((APP / "updater.py").read_text(encoding="utf-8"))
+    fn = body.split("def update_everything", 1)[1].split("\ndef ", 1)[0]
+    check("update_advisors" in fn, "Советники в MetaTrader обновляются")
+    check("download_new_exe" in fn, "Собранная программа скачивается")
+    check("update_program_files" in fn, "Файлы исходников обновляются")
+    check("is_frozen()" in fn,
+          "Способ выбирается по тому, как программа запущена")
+
+    ui = code_only((APP / "desktop_app.py").read_text(encoding="utf-8"))
+    manual = ui.split("def _after_update_everything", 1)[1].split("\n    def ", 1)[0]
+    check("config_migrate.sync()" in manual,
+          "Новые настройки дописываются тем же нажатием")
+
+
+def main() -> int:
+    print("=" * 62)
+    print("ТЕСТЫ САМООБНОВЛЕНИЯ: ПРОГРАММА СТАВИТ НОВУЮ ВЕРСИЮ САМА")
+    print("=" * 62)
+
+    test_personal_files_never_updated()
+    test_only_program_folder()
+    test_path_traversal_blocked()
+
+    test_all_or_nothing()
+    test_broken_download_rejected()
+    test_successful_update()
+    test_empty_repo_is_explained()
+
+    test_zip_slip_blocked()
+
+    test_swap_is_actually_called()
+    test_swap_retries_and_backs_up()
+    test_restart_after_update()
+
+    test_not_during_open_positions()
+    test_auto_apply_off_by_default()
+
+    test_token_not_sent_to_storage()
+
+    test_build_request_needs_token()
+    test_update_everything_covers_both()
+
+    print("\n" + "=" * 62)
+    print(f"Пройдено: {passed}   Провалено: {failed}")
+    print("=" * 62)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -622,8 +622,15 @@ class App:
         self.root.after(1200, self._auto_install_into_mt5_once)
         # Мост для советников — тоже сам, если включён.
         self.root.after(1500, self._start_bridge_if_enabled)
-        # Проверка обновлений при запуске: только смотрит, ставит по согласию.
-        if getattr(cfg, "UPDATE_CHECK_ON_START", True) and updater.enabled():
+        # Обновление при запуске. Момент выбран не случайно: торговля ещё не
+        # началась, открытых позиций у бота нет — подменять его безопасно.
+        self._auto_update_busy = False
+        self._start_bot_waits = 0
+        if updater.enabled() and getattr(cfg, "UPDATE_AUTO_APPLY", False):
+            self._auto_update_busy = True
+            self.root.after(300, self._auto_apply_update)
+        elif getattr(cfg, "UPDATE_CHECK_ON_START", True) and updater.enabled():
+            # Без галочки автоустановки — только смотрим и спрашиваем.
             self.root.after(6000, lambda: self.check_updates(silent=True))
 
         if cfg.USE_WEB_DASHBOARD and not self._dashboard_started:
@@ -641,7 +648,7 @@ class App:
         # Автозапуск торгового цикла вместе с программой — не нужно нажимать
         # "Старт" руками. Кнопки Старт/Стоп остаются для ручной остановки/
         # перезапуска. Небольшая задержка — чтобы окно успело отрисоваться.
-        self.root.after(400, self.start_bot)
+        self.root.after(400, self._start_bot_when_ready)
 
     # ---- тема оформления --------------------------------------------------
     def _apply_theme(self):
@@ -2107,9 +2114,12 @@ class App:
         up.pack(fill="x", padx=12, pady=(6, 4))
 
         ttk.Label(up, foreground="#888", wraplength=780, justify="left", text=
-                  "Правки кода приезжают с GitHub — переустанавливать программу не нужно. "
-                  "Советники обновляются сразу, сама программа — при следующем запуске. "
-                  "Молча ничего не ставится: программа спросит."
+                  "Правки кода приезжают с GitHub сами — переустанавливать программу не "
+                  "нужно. Кнопка «Обновить всё» скачивает и ставит: советники в "
+                  "MetaTrader (сразу, без перезапуска), файлы самой программы и новые "
+                  "настройки. Перезапуск нужен только самой программе.\n"
+                  "Ваши данные не трогаются никогда: настройки, счета, пароли, журналы "
+                  "и сессия Telegram остаются на месте."
                   ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
 
         self.update_enabled_var = tk.BooleanVar(value=getattr(cfg, "UPDATE_ENABLED", False))
@@ -2133,20 +2143,45 @@ class App:
         self.update_token_var = tk.StringVar(value=getattr(cfg, "UPDATE_TOKEN", ""))
         ttk.Entry(up, textvariable=self.update_token_var, width=44, show="*").grid(
             row=5, column=1, sticky="w", padx=8)
-        ttk.Label(up, foreground="#666",
-                  text="нужен только для ЗАКРЫТОГО репозитория, права Contents: Read-only"
+        ttk.Label(up, foreground="#666", wraplength=420, justify="left",
+                  text="Для закрытого репозитория. Права: Contents: Read-only — "
+                       "обычное обновление; Actions: Read and write — если хотите, "
+                       "чтобы программа сама заказывала сборку .exe"
                   ).grid(row=6, column=1, sticky="w", padx=8)
 
+        self.update_auto_var = tk.BooleanVar(value=getattr(cfg, "UPDATE_AUTO_APPLY", False))
+        ttk.Checkbutton(up, variable=self.update_auto_var,
+                        text="Ставить обновление само при запуске (не спрашивая)").grid(
+            row=7, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 0))
+        ttk.Label(up, foreground="#666", wraplength=520, justify="left",
+                  text="При старте торговля ещё не началась и открытых позиций у бота "
+                       "нет — подменять его в этот момент безопасно. Посреди работы "
+                       "обновление не ставится никогда, даже с этой галочкой.").grid(
+            row=8, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 2))
+
+        self.update_build_var = tk.BooleanVar(value=getattr(cfg, "UPDATE_REQUEST_BUILD", False))
+        ttk.Checkbutton(up, variable=self.update_build_var,
+                        text="Если готовой сборки нет — заказать её на GitHub самому").grid(
+            row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 0))
+        ttk.Label(up, foreground="#666", wraplength=520, justify="left",
+                  text="Раньше это делалось руками: вкладка Actions -> Run workflow. "
+                       "Токену нужно право Actions: Read and write.").grid(
+            row=10, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 4))
+
         upbtn = ttk.Frame(up)
-        upbtn.grid(row=7, column=0, columnspan=2, sticky="w", padx=8, pady=6)
+        upbtn.grid(row=11, column=0, columnspan=2, sticky="w", padx=8, pady=6)
         ttk.Button(upbtn, text="Сохранить", command=self.save_system_settings).grid(row=0, column=0)
+        ttk.Button(upbtn, text="Обновить всё сейчас",
+                   command=self.update_everything_now).grid(row=0, column=1, padx=6)
         ttk.Button(upbtn, text="Проверить обновления",
-                   command=self.check_updates).grid(row=0, column=1, padx=6)
+                   command=self.check_updates).grid(row=0, column=2)
+        ttk.Button(upbtn, text="Собрать новую версию",
+                   command=self.request_build_now).grid(row=0, column=3, padx=6)
 
         self.update_status_var = tk.StringVar(value="")
         ttk.Label(up, textvariable=self.update_status_var, foreground="#888",
                   wraplength=780, justify="left").grid(
-            row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
+            row=12, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
 
         # ---------- Журнал сделок в облаке ----------
         jr = ttk.LabelFrame(parent, text=" Журнал сделок в облаке ")
@@ -2356,6 +2391,8 @@ class App:
         _write_config_value("UPDATE_REPO", repr(self.update_repo_var.get().strip()))
         _write_config_value("UPDATE_BRANCH", repr(self.update_branch_var.get().strip() or "main"))
         _write_config_value("UPDATE_TOKEN", repr(token))
+        _write_config_value("UPDATE_AUTO_APPLY", repr(bool(self.update_auto_var.get())))
+        _write_config_value("UPDATE_REQUEST_BUILD", repr(bool(self.update_build_var.get())))
 
         _write_config_value("JOURNAL_CLOUD_ENABLED", repr(bool(self.journal_enabled_var.get())))
         _write_config_value("JOURNAL_REPO", repr(self.journal_repo_var.get().strip()))
@@ -2383,6 +2420,216 @@ class App:
         self._refresh_bridge_status()
         messagebox.showinfo(APP_TITLE, "Настройки системы сохранены.")
         self.refresh_diagnostics()
+
+    # ---- обновление при запуске ---------------------------------------------
+    # Верхняя граница ожидания: даже если GitHub не отвечает и обновление
+    # висит, торговля должна начаться. Лучше работать на старой версии, чем не
+    # работать вовсе.
+    START_BOT_MAX_WAIT_TICKS = 240        # 240 x 500 мс = 2 минуты
+
+    def _start_bot_when_ready(self):
+        """Ждём, пока доставится обновление, и только потом стартуем торговлю.
+
+        Запускать бота посреди замены файлов нельзя: часть модулей была бы
+        старой, часть новой."""
+        if not getattr(self, "_auto_update_busy", False):
+            self.start_bot()
+            return
+        self._start_bot_waits += 1
+        if self._start_bot_waits >= self.START_BOT_MAX_WAIT_TICKS:
+            log.warning("Обновление при запуске затянулось — начинаю торговлю "
+                        "на текущей версии.")
+            self._auto_update_busy = False
+            self.start_bot()
+            return
+        self.root.after(500, self._start_bot_when_ready)
+
+    def _auto_apply_update(self):
+        """Скачать и поставить обновление без вопросов — только при запуске."""
+        self.status_var.set("Проверяю обновления...")
+
+        def worker():
+            summary = {"errors": [], "lines": [], "restart_needed": False}
+            try:
+                check = updater.check()
+                if check.get("error"):
+                    summary["errors"].append(check["error"])
+                elif check.get("available"):
+                    summary = updater.update_everything()
+                    summary["revision"] = check.get("revision", "")
+                else:
+                    summary["lines"].append("Установлена последняя версия.")
+            except Exception as e:  # noqa: BLE001
+                log.warning("Автообновление не удалось: %s", e)
+                summary["errors"].append(updater.explain_error(e))
+            self.root.after(0, lambda: self._after_auto_update(summary))
+
+        threading.Thread(target=worker, daemon=True, name="update-auto").start()
+
+    def _after_auto_update(self, summary: dict):
+        self._auto_update_busy = False
+        errors = summary.get("errors") or []
+        if errors:
+            # Нет связи с GitHub — не повод не торговать. Пишем в журнал и
+            # работаем на той версии, что есть.
+            log.warning("Автообновление: %s", "; ".join(errors[:3]))
+            self.status_var.set("Готово (обновиться не удалось)")
+            return
+
+        if summary.get("revision"):
+            try:
+                updater.remember_revision(summary["revision"], _write_config_value)
+            except Exception:
+                pass
+        try:
+            config_migrate.sync()
+        except Exception as e:  # noqa: BLE001
+            log.warning("Не удалось дописать новые настройки: %s", e)
+
+        if not summary.get("restart_needed"):
+            return
+
+        # Файлы на диске уже новые, а в памяти — старые модули. Работать в
+        # таком виде нельзя: части программы разошлись бы по версиям.
+        self._show_toast("Обновление установлено",
+                         "Программа перезапускается в новой версии.")
+        self.root.after(1500, self._restart_after_update)
+
+    def _restart_after_update(self):
+        try:
+            self.stop_bot()
+        except Exception:
+            pass
+        problem = updater.restart_program()
+        if problem:
+            messagebox.showwarning(
+                APP_TITLE,
+                problem + "\n\nЗакройте и откройте программу вручную — "
+                          "обновление встанет при следующем запуске.")
+
+    def _bot_is_busy(self) -> str:
+        """Почему сейчас нельзя подменять программу. Пустая строка — можно.
+
+        Обновление посреди работы — это подмена торгового робота под открытыми
+        сделками: позиции останутся без того, кто ведёт их стоп и цель."""
+        if self.bot_thread and self.bot_thread.is_alive():
+            snap = ds.get_snapshot() or {}
+            open_count = len(snap.get("positions", []))
+            if open_count:
+                return (f"Сейчас открыто сделок: {open_count}. Обновление подменяет "
+                        f"программу — сначала закройте сделки или остановите бота.")
+            return ("Бот работает. Обновление лучше ставить на остановленном: "
+                    "нажмите «Стоп» на вкладке «Обзор».")
+        return ""
+
+    def update_everything_now(self):
+        """Одна кнопка: советники + сама программа + новые настройки."""
+        ok_repo = updater.enabled() and updater.repo() and "/" in updater.repo()
+        if not ok_repo:
+            messagebox.showwarning(
+                APP_TITLE,
+                "Сначала включите «Проверять обновления» и впишите репозиторий "
+                "(владелец/название), затем «Сохранить».")
+            return
+
+        busy = self._bot_is_busy()
+        if busy and not messagebox.askyesno(
+                APP_TITLE, busy + "\n\nВсё равно продолжить?"):
+            return
+        if not messagebox.askyesno(
+                APP_TITLE,
+                f"Скачать и поставить свежую версию из {updater.repo()} "
+                f"(ветка {updater.branch()})?\n\n"
+                "Обновятся советники в MetaTrader и файлы программы.\n"
+                "Настройки, счета, пароли и журналы НЕ трогаются."):
+            return
+
+        self.update_status_var.set("Обновляю...")
+
+        def worker():
+            try:
+                summary = updater.update_everything(
+                    progress=lambda t: self.root.after(
+                        0, lambda: self.update_status_var.set(t)))
+            except Exception as e:  # noqa: BLE001
+                log.exception("Обновление не удалось: %s", e)
+                summary = {"errors": [updater.explain_error(e)], "lines": [],
+                           "restart_needed": False}
+            self.root.after(0, lambda: self._after_update_everything(summary))
+
+        threading.Thread(target=worker, daemon=True, name="update-all").start()
+
+    def _after_update_everything(self, summary: dict):
+        errors = summary.get("errors") or []
+        lines = summary.get("lines") or []
+
+        if errors:
+            text = "Обновление не завершено:\n- " + "\n- ".join(errors[:4])
+            self.update_status_var.set(text.replace("\n", " "))
+            # Готовой сборки нет — можем заказать её прямо отсюда
+            if (any("Собрать новую версию" in e for e in errors)
+                    and getattr(cfg, "UPDATE_REQUEST_BUILD", False)):
+                self._request_build_worker(auto=True)
+                return
+            messagebox.showwarning(APP_TITLE, text)
+            return
+
+        # Новые настройки — тем же нажатием: иначе после обновления кода
+        # программа искала бы параметры, которых нет в вашем config.py.
+        try:
+            added = config_migrate.sync()
+            if added:
+                lines.append(f"Добавлены новые настройки: {', '.join(added)}.")
+                _reload_cfg()
+        except Exception as e:  # noqa: BLE001
+            log.warning("Не удалось дописать новые настройки: %s", e)
+
+        revision = ""
+        try:
+            check = updater.check()
+            revision = check.get("revision", "")
+            if revision:
+                updater.remember_revision(revision, _write_config_value)
+                _reload_cfg()
+        except Exception:
+            pass
+
+        text = "\n".join(lines) if lines else "Всё уже свежее — обновлять нечего."
+        if summary.get("restart_needed"):
+            text += "\n\nПерезапустите программу, чтобы новая версия заработала."
+        self.update_status_var.set(text.replace("\n", " "))
+        messagebox.showinfo(APP_TITLE, text)
+
+    def request_build_now(self):
+        if not messagebox.askyesno(
+                APP_TITLE,
+                "Попросить GitHub собрать новую версию программы?\n\n"
+                "Сборка идёт 5-10 минут на серверах GitHub — ваш компьютер не "
+                "нагружается. Когда закончится, нажмите «Обновить всё сейчас»."):
+            return
+        self._request_build_worker(auto=False)
+
+    def _request_build_worker(self, auto: bool):
+        self.update_status_var.set("Прошу GitHub собрать новую версию...")
+
+        def worker():
+            problem = updater.request_build()
+            status = updater.build_status() if not problem else {}
+            self.root.after(0, lambda: self._after_build_request(problem, status, auto))
+
+        threading.Thread(target=worker, daemon=True, name="update-build").start()
+
+    def _after_build_request(self, problem: str, status: dict, auto: bool):
+        if problem:
+            self.update_status_var.set(problem)
+            messagebox.showwarning(APP_TITLE, problem)
+            return
+        text = ("Сборка заказана. " + (status.get("text", "") or
+                "Обычно занимает 5-10 минут.") +
+                "\nКогда закончится — нажмите «Обновить всё сейчас».")
+        self.update_status_var.set(text.replace("\n", " "))
+        if not auto:
+            messagebox.showinfo(APP_TITLE, text)
 
     def check_updates(self, silent: bool = False):
         def worker():
@@ -3298,7 +3545,28 @@ class App:
         p("Обычный чат с Claude прямо в программе — можно спросить что угодно про "
           "рынок или настройки, не переключаясь на другое окно.")
 
-        h2("11. Система: журнал сделок в облаке")
+        h2("11. Система: обновление без переустановки")
+        p("Вкладка «Система» → «Обновление из GitHub». Впишите репозиторий "
+          "(владелец/название), токен, поставьте галочку «Проверять "
+          "обновления» и нажмите «Обновить всё сейчас». Одним нажатием "
+          "обновятся: советники в MetaTrader (сразу, без перезапуска), файлы "
+          "самой программы и новые настройки.\n\n"
+          "Если готовой сборки ещё нет — кнопка «Собрать новую версию»: "
+          "программа сама попросит GitHub собрать её (5-10 минут на их "
+          "серверах, ваш компьютер не нагружается). Раньше для этого надо было "
+          "заходить на сайт во вкладку Actions. Токену нужно право "
+          "Actions: Read and write.\n\n"
+          "Галочка «Ставить обновление само при запуске» — программа всё "
+          "сделает и перезапустится сама, ничего не спрашивая. При старте "
+          "торговля ещё не началась и открытых сделок нет, поэтому подменять "
+          "её в этот момент безопасно.\n\n"
+          "Чего обновление НЕ делает: не ставится посреди работы под открытыми "
+          "сделками (спросит); не трогает ваши настройки, счета, пароли, "
+          "журналы и сессию Telegram; не ставит половину новой версии — если "
+          "хоть один файл не скачался, не заменяется ни один, а старые "
+          "сохраняются рядом с припиской .bak.")
+
+        h2("12. Система: журнал сделок в облаке")
         p("Вкладка «Система» → «Журнал сделок в облаке». Программа выкладывает "
           "историю сделок в папку journal/ вашего ЗАКРЫТОГО репозитория "
           "GitHub — три файла: журнал бота, реальные закрытые сделки из "
@@ -3760,6 +4028,25 @@ def main():
     # бесконечно открывать саму себя, пока не кончится память.
     # Вызывать нужно ПЕРВЫМ делом, до любой другой работы.
     multiprocessing.freeze_support()
+
+    # САМОЕ ПЕРВОЕ ДЕЛО: если рядом лежит скачанная новая версия — ставим её.
+    # Работающий .exe заменить нельзя, Windows его держит, поэтому подмена
+    # возможна только здесь, пока программа ещё не «развернулась».
+    # Раньше эта функция была написана, но её никто не вызывал: скачанный файл
+    # так и лежал рядом с программой, а она продолжала запускаться старой.
+    try:
+        swapped = updater.apply_pending_swap()
+        if swapped and "обновлена" in swapped:
+            # Подмена удалась — но в памяти сейчас СТАРЫЙ код: он был прочитан
+            # из файла до переименования. Стартуем заново, уже из нового файла.
+            # Зацикливания не будет: файл .new после подмены исчез, и следующий
+            # запуск подменять уже нечего.
+            log.info("%s Перезапускаюсь в новой версии.", swapped)
+            updater.restart_program()
+        elif swapped:
+            log.warning("%s", swapped)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось применить скачанное обновление: %s", e)
 
     # Дописываем в config.py настройки, появившиеся в новой версии. Без этого
     # новые поля на вкладке «Настройка» были бы пустыми, а «Сохранить» ругался
