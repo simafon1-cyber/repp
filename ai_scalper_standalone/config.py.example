@@ -73,28 +73,38 @@ class RiskProfile(Enum):
 RISK_PROFILE = RiskProfile.HYSTERIC  # максимальная частота сделок, крошечный риск на сделку (см. вкладку "Настройка")
 
 # eff*-параметры на каждый профиль — те же цифры, что в MQL5 v8.0 (RiskManager.mqh)
+#
+# max_trades_per_day = 0 означает БЕЗ ОГРАНИЧЕНИЯ: бот отрабатывает всю
+# торговую сессию, сколько бы сделок ни набралось. Само по себе ограничение
+# по ЧИСЛУ сделок ничего не защищает — деньги защищают дневной лимит убытка
+# (daily_loss_limit_pct) и лимит просадки (max_drawdown_pct). Впишите любое
+# число, если всё же захотите ограничить количество.
+#
+# max_open_positions — это НЕ дневной лимит, а сколько сделок держать
+# ОДНОВРЕМЕННО. Он остаётся: без него один сигнал мог бы открыть десятки
+# позиций сразу и превысить совокупный риск на счёте.
 RISK_PROFILES = {
     RiskProfile.CONSERVATIVE: dict(
         risk_percent=0.3, atr_sl_multiplier=1.0, use_money_tp=True, target_profit_money=2.0,
-        min_score_to_trade=70, max_open_positions=1, max_trades_per_day=10,
+        min_score_to_trade=70, max_open_positions=1, max_trades_per_day=0,
         daily_loss_limit_pct=2.0, max_drawdown_pct=6.0, max_total_risk_pct=0.5,
         ignore_soft_filters=False, hedge_both_directions=False, name="Консервативный",
     ),
     RiskProfile.BALANCED: dict(
         risk_percent=0.7, atr_sl_multiplier=1.2, use_money_tp=True, target_profit_money=4.0,
-        min_score_to_trade=62, max_open_positions=2, max_trades_per_day=20,
+        min_score_to_trade=62, max_open_positions=2, max_trades_per_day=0,
         daily_loss_limit_pct=3.0, max_drawdown_pct=10.0, max_total_risk_pct=1.8,
         ignore_soft_filters=False, hedge_both_directions=False, name="Сбалансированный",
     ),
     RiskProfile.AGGRESSIVE: dict(
         risk_percent=1.2, atr_sl_multiplier=0.8, use_money_tp=True, target_profit_money=8.0,
-        min_score_to_trade=55, max_open_positions=5, max_trades_per_day=40,
+        min_score_to_trade=55, max_open_positions=5, max_trades_per_day=0,
         daily_loss_limit_pct=5.0, max_drawdown_pct=15.0, max_total_risk_pct=6.5,
         ignore_soft_filters=False, hedge_both_directions=False, name="Агрессивный",
     ),
     RiskProfile.HYSTERIC: dict(
         risk_percent=0.1, atr_sl_multiplier=0.5, use_money_tp=True, target_profit_money=1.0,
-        min_score_to_trade=45, max_open_positions=10, max_trades_per_day=200,
+        min_score_to_trade=45, max_open_positions=10, max_trades_per_day=0,
         daily_loss_limit_pct=8.0, max_drawdown_pct=25.0, max_total_risk_pct=3.0,
         ignore_soft_filters=True, hedge_both_directions=False, name="Истеричка (YOLO)",
         # ОТКЛЮЧЕНО по факту реальных сделок пользователя (скриншот: обе ноги
@@ -452,6 +462,14 @@ TP_TIGHTEN_SHRINK_PER_MINUTE = 0.10 # за каждую минуту жизни 
 TP_TIGHTEN_MIN_FRACTION = 0.25      # но не ниже 25% стартовой цели
 TP_TIGHTEN_MIN_PROFIT_POINTS = 10   # авто-масштабируется; TP всегда остаётся в плюсе от входа
 TP_TIGHTEN_STEP_POINTS = 5          # авто-масштабируется; мельче — не дёргаем сервер
+# КРИТИЧНО: цель прибыли не может стать меньше собственного риска сделки,
+# умноженного на это число. 1.0 = цель всегда покрывает хотя бы свой стоп.
+#
+# Без этого пола сжатие цели со временем делало сделку убыточной по
+# математике: у профиля "Истеричка" стоп равен 0.5*ATR, а цель ужималась до
+# 0.375*ATR — риск больше выигрыша, и при обычном винрейте это гарантированный
+# минус. Поднимите до 1.5-2.0, если хотите более осторожное соотношение.
+TP_TIGHTEN_MIN_R = 1.0
 
 # Спасение убыточной сделки в безубыток.
 # Сделка, которая заметно ушла в минус и вернулась к нулю, уже показала, что
@@ -472,7 +490,12 @@ BE_RESCUE_EXIT_POINTS = 3           # авто-масштабируется; "н
 USE_DAILY_LOSS_LIMIT = True
 USE_MAX_DRAWDOWN_LIMIT = True
 MAX_CONSECUTIVE_LOSSES = 5
-PAUSE_HOURS_AFTER_LOSS_STREAK = 12
+# Пауза по ПАРЕ после серии убытков — в МИНУТАХ.
+# Раньше было 12 ЧАСОВ, что после пяти неудач подряд выключало пару до конца
+# дня и на следующее утро. Это ограничение по сделкам, а не по риску: деньги
+# защищают дневной лимит убытка и лимит просадки. 30 минут дают рынку сменить
+# характер, но не съедают торговую сессию. 0 = без паузы вообще.
+PAUSE_MINUTES_AFTER_LOSS_STREAK = 30
 USE_LOSS_STREAK_RISK_SCALING = True
 MIN_LOSS_STREAK_RISK_MULTIPLIER = 0.3
 

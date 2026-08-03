@@ -488,12 +488,22 @@ def test_end_to_end() -> None:
     tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[pos], learned_tp_points=100)
     check(not modified, "Цель не изменилась — обращения к серверу нет", str(modified))
 
-    # --- Выученная цель уменьшилась: TP подтягивается ближе
+    # --- Выученная цель уменьшилась, но ОСТАЁТСЯ выше риска: TP подтягивается
+    # Стоп на 1999.0 при входе 2000.0 = риск 100 пт. Цель 150 пт выше риска,
+    # значит пол 1R не мешает и перенос происходит.
+    reset()
+    pos = FakePos(1, True, 2000.0, 1999.0, 2002.0)
+    tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[pos], learned_tp_points=150)
+    check(len(modified) == 1 and abs(modified[0][2] - 2001.5) < 1e-9,
+          "Цель уменьшилась (но выше риска) — TP подтянут ближе", str(modified))
+
+    # --- Выученная цель НИЖЕ риска сделки: пол 1R не даёт её принять.
+    # Это и есть защита от «мелкие плюсы против полноразмерных стопов».
     reset()
     pos = FakePos(1, True, 2000.0, 1999.0, 2001.0)
     tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[pos], learned_tp_points=50)
-    check(len(modified) == 1 and abs(modified[0][2] - 2000.5) < 1e-9,
-          "Цель уменьшилась — TP подтянут ближе", str(modified))
+    check(not modified,
+          "Цель ниже риска (50 пт против 100 пт стопа) — TP НЕ опускается", str(modified))
 
     # --- Выученная цель ВЫРОСЛА: TP остаётся на месте (главное правило)
     reset()
@@ -633,6 +643,73 @@ def test_learning_persistence() -> None:
     check("al.save_learning_state(sym_states)" in src, "main.py сохраняет статистику")
 
 
+def test_target_never_below_own_risk() -> None:
+    """САМОЕ ВАЖНОЕ ЗДЕСЬ: цель прибыли не может стать меньше собственного
+    риска сделки.
+
+    Без этого пола сжатие цели со временем делало систему убыточной по
+    математике. У профиля «Истеричка» стоп = 0.5*ATR, стартовая цель =
+    1.5*ATR, пол сжатия 25% -> 0.375*ATR. Через 7-8 минут сделка рисковала
+    БОЛЬШЕ, чем могла выиграть (1 : 0.75). При винрейте около половины это
+    гарантированный минус: мелкие плюсы против полноразмерных стопов."""
+    print("\n[Цель не опускается ниже собственного риска]")
+
+    risk = 50.0        # стоп в 50 пунктах = 1R
+
+    # Цель ужалась до 20 пт — меньше риска. Пол обязан её поднять до 50.
+    tp = tm.tighten_take_profit(True, OPEN, 2000.10, 0.0, 20, 5, POINT, 0.0, 0,
+                                risk_points=risk, min_r=1.0)
+    check(abs(tp - (OPEN + risk * POINT)) < 1e-9,
+          "Цель поднята до 1R, а не оставлена ниже риска", f"{tp}")
+
+    tp = tm.tighten_take_profit(False, OPEN, 1999.90, 0.0, 20, 5, POINT, 0.0, 0,
+                                risk_points=risk, min_r=1.0)
+    check(abs(tp - (OPEN - risk * POINT)) < 1e-9, "SELL: то же самое", f"{tp}")
+
+    # Цель БОЛЬШЕ риска — пол не мешает
+    tp = tm.tighten_take_profit(True, OPEN, 2000.10, 0.0, 150, 5, POINT, 0.0, 0,
+                                risk_points=risk, min_r=1.0)
+    check(abs(tp - (OPEN + 150 * POINT)) < 1e-9,
+          "Цель выше риска остаётся как есть", f"{tp}")
+
+    # Требование более осторожного соотношения
+    tp = tm.tighten_take_profit(True, OPEN, 2000.10, 0.0, 20, 5, POINT, 0.0, 0,
+                                risk_points=risk, min_r=2.0)
+    check(abs(tp - (OPEN + 100 * POINT)) < 1e-9,
+          "min_r=2 требует цель вдвое больше риска", f"{tp}")
+
+    # Риск неизвестен (позиция без стопа) — пол не применяется, но и вреда нет
+    tp = tm.tighten_take_profit(True, OPEN, 2000.10, 0.0, 20, 5, POINT, 0.0, 0,
+                                risk_points=0.0, min_r=1.0)
+    check(abs(tp - (OPEN + 20 * POINT)) < 1e-9,
+          "Без известного риска работает по-старому", f"{tp}")
+
+    # Полная картина «Истерички»: ATR=1.0 (100 пт), стоп 0.5*ATR = 50 пт
+    atr_points = 100.0
+    stop = atr_points * 0.5
+    start_target = atr_points * 1.5
+    for minutes in (0, 5, 10, 30, 120):
+        shrunk = tm.shrunk_target_points(start_target, minutes * 60, 0.10, 0.25)
+        tp = tm.tighten_take_profit(True, OPEN, 2000.10, 0.0, shrunk, 5, POINT, 0.0, 0,
+                                    risk_points=stop, min_r=1.0)
+        reward = (tp - OPEN) / POINT
+        check(reward >= stop - 1e-6,
+              f"Через {minutes} мин выигрыш ({reward:.0f} пт) не меньше риска ({stop:.0f} пт)",
+              f"{reward:.1f}")
+
+    # Настройка проброшена в реальный вызов, а не только существует
+    src = (APP / "trade_manager.py").read_text(encoding="utf-8")
+    check("risk_points=risk_points" in src, "Риск сделки передаётся в подтягивание цели")
+    check("TP_TIGHTEN_MIN_R" in src, "Настройка минимального соотношения читается")
+    cfg_text = (APP / "config.py.example").read_text(encoding="utf-8")
+    check("TP_TIGHTEN_MIN_R" in cfg_text, "Настройка есть в шаблоне конфига")
+    import types as _t
+    fresh = _t.ModuleType("f")
+    exec(cfg_text, fresh.__dict__)
+    check(fresh.TP_TIGHTEN_MIN_R >= 1.0,
+          "По умолчанию цель покрывает хотя бы свой стоп", str(fresh.TP_TIGHTEN_MIN_R))
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ ФИКСАЦИИ ПРИБЫЛИ")
@@ -650,6 +727,7 @@ def main() -> int:
     test_config_params_exist()
     test_end_to_end()
     test_learning_persistence()
+    test_target_never_below_own_risk()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

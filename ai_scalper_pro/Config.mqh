@@ -270,7 +270,7 @@ input double MinScoreToTrade = 65;      // Порог score для входа (�
 input group "=== Риск / лот (Advanced, только в ручном режиме) ==="
 input bool   UseRiskPercent  = false;   // ВКЛ расчёт лота по риску в % от депозита (вместо фиксированного LotSize)
 input double RiskPercent     = 1.0;     // Риск на сделку, % от депозита (если включён расчёт выше)
-input int    MaxTradesPerDay = 20;      // Макс. сделок в день (суммарно)
+input int    MaxTradesPerDay = 0;       // Макс. сделок в день, 0 = БЕЗ ОГРАНИЧЕНИЯ (советник работает всю сессию)
 input int    MaxOpenPositions = 3;      // Сколько сделок держать ОДНОВРЕМЕННО
                                          // Внимание: каждая позиция считает риск/лот независимо —
                                          // суммарный риск = RiskPercent × MaxOpenPositions.
@@ -306,7 +306,7 @@ input double DailyLossLimitPercent = 3.0;   // Дневной лимит убы�
 input bool   UseMaxDrawdownLimit = true;    // ВКЛ лимит просадки от пикового equity
 input double MaxDrawdownPercent  = 10.0;    // Просадка от пика, % — останов до перезапуска EA
 input int    MaxConsecutiveLosses = 5;      // После скольких убытков подряд ставим паузу
-input int    PauseHoursAfterLossStreak = 12;// На сколько часов пауза после серии убытков
+input int    PauseMinutesAfterLossStreak = 30;// Пауза после серии убытков, МИНУТ (0 = без паузы)
 // п.22: по опыту трейдеров/MQL5-блогов — жёсткая пауза только ПОСЛЕ N убытков
 // подряд слишком грубая: лучше плавно снижать риск по мере приближения к порогу,
 // а не торговать на полную катушку вплоть до самой паузы.

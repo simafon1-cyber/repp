@@ -43,7 +43,7 @@ void ApplyRiskProfile()
          g_effTargetProfitMoney     = 2.0;
          g_effMinScoreToTrade       = 70;
          g_effMaxOpenPositions      = 1;
-         g_effMaxTradesPerDay       = 10;
+         g_effMaxTradesPerDay       = 0;   // 0 = без ограничения
          g_effDailyLossLimitPercent = 2.0;
          g_effMaxDrawdownPercent    = 6.0;
          g_effMaxTotalRiskPercent   = 0.5;  // ~1 сделка × 0.3% с небольшим запасом
@@ -63,7 +63,7 @@ void ApplyRiskProfile()
          g_effTargetProfitMoney     = 8.0;
          g_effMinScoreToTrade       = 55;
          g_effMaxOpenPositions      = 5;
-         g_effMaxTradesPerDay       = 40;
+         g_effMaxTradesPerDay       = 0;   // 0 = без ограничения
          g_effDailyLossLimitPercent = 5.0;
          g_effMaxDrawdownPercent    = 15.0;
          g_effMaxTotalRiskPercent   = 6.5;  // ~5 сделок × 1.2% с небольшим запасом —
@@ -86,7 +86,7 @@ void ApplyRiskProfile()
          g_effTargetProfitMoney     = 1.0;
          g_effMinScoreToTrade       = 45;
          g_effMaxOpenPositions      = 10;
-         g_effMaxTradesPerDay       = 200;
+         g_effMaxTradesPerDay       = 0;   // 0 = без ограничения
          g_effDailyLossLimitPercent = 8.0;
          g_effMaxDrawdownPercent    = 25.0;
          g_effMaxTotalRiskPercent   = 3.0;   // 10 сделок × 0.1% ≈ 1% — запас на случай проскальзывания
@@ -108,7 +108,7 @@ void ApplyRiskProfile()
          g_effTargetProfitMoney     = 4.0;
          g_effMinScoreToTrade       = 62;
          g_effMaxOpenPositions      = 2;
-         g_effMaxTradesPerDay       = 20;
+         g_effMaxTradesPerDay       = 0;   // 0 = без ограничения
          g_effDailyLossLimitPercent = 3.0;
          g_effMaxDrawdownPercent    = 10.0;
          g_effMaxTotalRiskPercent   = 1.8;  // ~2 сделки × 0.7% с небольшим запасом

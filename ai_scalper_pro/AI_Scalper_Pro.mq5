@@ -147,7 +147,11 @@ void OnTick()
    UpdateMarketRegime(); // п.18: считаем режим рынка раз в бар, до расчёта score
    if(!TradingAllowed()) { g_lastRejectReason="Торговля приостановлена (лимит/просадка/пауза)"; return; }
    if(CountOpenPositions()>=g_effMaxOpenPositions) { g_lastRejectReason="Достигнут лимит одновременных сделок"; return; }
-   if(TradesToday>=g_effMaxTradesPerDay) { g_lastRejectReason="Достигнут лимит сделок за день"; return; }
+   // 0 = без ограничения: советник отрабатывает всю торговую сессию. Само по
+   // себе ограничение по ЧИСЛУ сделок ничего не защищает — деньги защищают
+   // дневной лимит убытка и лимит просадки, они проверяются отдельно.
+   if(g_effMaxTradesPerDay>0 && TradesToday>=g_effMaxTradesPerDay)
+     { g_lastRejectReason="Достигнут лимит сделок за день"; return; }
    if(!SpreadOK())      { g_lastRejectReason="Спред слишком широкий"; return; }
    if(!TimeFilterOk())  { g_lastRejectReason="Вне торгового времени"; return; }
    if(GetATRValue()<=0) { g_lastRejectReason="Индикаторы не готовы"; return; }
@@ -401,7 +405,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       g_consecutiveLosses++;
       if(g_consecutiveLosses>=MaxConsecutiveLosses)
       {
-         g_pauseUntil=TimeCurrent()+PauseHoursAfterLossStreak*3600;
+         g_pauseUntil=TimeCurrent()+PauseMinutesAfterLossStreak*60;
          Print("Серия из ", g_consecutiveLosses, " убытков подряд. Пауза до ", TimeToString(g_pauseUntil,TIME_DATE|TIME_MINUTES));
          g_consecutiveLosses=0;
       }

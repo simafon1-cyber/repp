@@ -279,14 +279,29 @@ def tp_floor_price(is_buy: bool, price_open: float, price: float,
 
 def tighten_take_profit(is_buy: bool, price_open: float, price: float, current_tp: float,
                         target_points: float, min_profit_points: float, point: float,
-                        broker_min_dist: float, step_points: float) -> float:
+                        broker_min_dist: float, step_points: float,
+                        risk_points: float = 0.0, min_r: float = 1.0) -> float:
     """Новый TP или 0.0, если менять нечего.
 
     Возвращает 0.0 (а не current_tp) специально: вызывающий код так отличает
     "изменений нет" от "поставить TP в ноль", а ноль TP в MT5 означает
-    "цель не задана" и здесь никогда не является результатом."""
+    "цель не задана" и здесь никогда не является результатом.
+
+    risk_points — собственный риск сделки (расстояние вход<->стоп) в пунктах,
+    min_r — сколько таких риском цель обязана покрывать."""
     if target_points <= 0 or point <= 0:
         return 0.0
+
+    # КРИТИЧНО. Цель не может стать меньше собственного риска сделки.
+    # Без этого пола получалось следующее: у профиля "Истеричка" стоп равен
+    # 0.5*ATR, стартовая цель 1.5*ATR, а сжатие со временем опускало её до
+    # 25% = 0.375*ATR. Через 7-8 минут сделка рисковала БОЛЬШЕ, чем могла
+    # выиграть (1 : 0.75), и при обычном винрейте это гарантированный минус —
+    # мелкие плюсы против полноразмерных стопов. Та же ошибка уже была здесь
+    # с Profit Lock, её лечит PROFIT_LOCK_START_R_FRACTION; сжатие цели
+    # обязано подчиняться тому же правилу.
+    if risk_points > 0 and min_r > 0:
+        target_points = max(target_points, risk_points * min_r)
 
     candidate = (price_open + target_points * point) if is_buy else (price_open - target_points * point)
     floor = tp_floor_price(is_buy, price_open, price, min_profit_points, point, broker_min_dist)
@@ -507,7 +522,9 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                 getattr(cfg, "TP_TIGHTEN_STEP_POINTS", 5), 0.02, atr_value, point)
             new_tp = tighten_take_profit(
                 is_buy, p.price_open, price, current_tp, target,
-                eff_min_profit, point, broker_min_dist, eff_tp_step)
+                eff_min_profit, point, broker_min_dist, eff_tp_step,
+                risk_points=risk_points,
+                min_r=getattr(cfg, "TP_TIGHTEN_MIN_R", 1.0))
             if new_tp > 0:
                 best_tp = new_tp
 

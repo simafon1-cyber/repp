@@ -198,6 +198,27 @@ def max_drawdown_hit(acc_state: AccountState, equity: float) -> bool:
     return dd >= profile["max_drawdown_pct"]
 
 
+def loss_streak_pause_minutes() -> float:
+    """Сколько минут пауза по паре после серии убытков. 0 = без паузы.
+
+    Раньше настройка была в ЧАСАХ и по умолчанию равнялась 12 — после пяти
+    неудач подряд пара выключалась до конца дня. Это ограничение по числу
+    сделок, а не по риску: деньги защищают дневной лимит убытка и лимит
+    просадки, которые проверяются отдельно. Старое имя настройки читается для
+    совместимости, если новое не задано."""
+    minutes = getattr(cfg, "PAUSE_MINUTES_AFTER_LOSS_STREAK", None)
+    if minutes is not None:
+        try:
+            return max(0.0, float(minutes))
+        except (TypeError, ValueError):
+            return 0.0
+    legacy_hours = getattr(cfg, "PAUSE_HOURS_AFTER_LOSS_STREAK", 0)
+    try:
+        return max(0.0, float(legacy_hours) * 60.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def loss_streak_pause_active(sym_state: SymbolState) -> bool:
     return pause_active(sym_state.pause_until)
 

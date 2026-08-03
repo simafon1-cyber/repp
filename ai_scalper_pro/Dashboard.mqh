@@ -104,7 +104,7 @@ void UpdateDashboard()
    txt+="Спред ОК: "+(SpreadOK()?"да":"нет")+" ("+(string)SymbolInfoInteger(_Symbol,SYMBOL_SPREAD)+" пт)\n";
    txt+="Фильтр объёма: "+(UseVolumeFilter?"ВКЛ":"ВЫКЛ (мягкий)")+"\n";
    txt+="ATR: "+DoubleToString(GetATRValue()/_Point,1)+" пт | ADX: "+DoubleToString(GetADXValue(),1)+" | RSI: "+DoubleToString(GetRSIValue(),1)+"\n";
-   txt+="Открытых сделок: "+(string)CountOpenPositions()+"/"+(string)g_effMaxOpenPositions+" | Сделок сегодня: "+(string)TradesToday+"/"+(string)g_effMaxTradesPerDay+"\n";
+   txt+="Открытых сделок: "+(string)CountOpenPositions()+"/"+(string)g_effMaxOpenPositions+" | Сделок сегодня: "+(string)TradesToday+(g_effMaxTradesPerDay>0 ? "/"+(string)g_effMaxTradesPerDay : " (без лимита)")+"\n";
    txt+="Общий риск открытых сделок: "+DoubleToString(GetOpenRiskPercent(),2)+"% / потолок "+DoubleToString(g_effMaxTotalRiskPercent,1)+"%\n";
    txt+="Режим TP: "+tpModeTxt+"\n";
    double curPts=0,peakPts=0;

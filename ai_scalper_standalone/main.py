@@ -138,8 +138,9 @@ def process_closed_deals(acc_state: AccountState, sym_states: dict):
 
         if profit < 0:
             sym_state.consecutive_losses += 1
-            if sym_state.consecutive_losses >= cfg.MAX_CONSECUTIVE_LOSSES:
-                sym_state.pause_until = datetime.now() + timedelta(hours=cfg.PAUSE_HOURS_AFTER_LOSS_STREAK)
+            pause_minutes = rm.loss_streak_pause_minutes()
+            if sym_state.consecutive_losses >= cfg.MAX_CONSECUTIVE_LOSSES and pause_minutes > 0:
+                sym_state.pause_until = datetime.now() + timedelta(minutes=pause_minutes)
                 log.info("%s: серия из %d убытков подряд — пауза до %s",
                          d.symbol, sym_state.consecutive_losses, sym_state.pause_until)
                 control.push_notification(
@@ -304,7 +305,12 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     if rm.count_open_positions(symbol, positions=all_positions) >= profile["max_open_positions"]:
         sym_state.last_reject_reason = "Достигнут лимит одновременных сделок"
         return
-    if acc_state.trades_today >= profile["max_trades_per_day"]:
+    # 0 = без ограничения: бот работает всю торговую сессию, сколько бы
+    # сделок ни набралось. Ограничение по ЧИСЛУ сделок само по себе ничего не
+    # защищает — деньги защищают дневной лимит убытка и лимит просадки, они
+    # проверяются выше в rm.trading_allowed().
+    max_per_day = profile.get("max_trades_per_day", 0)
+    if max_per_day and acc_state.trades_today >= max_per_day:
         sym_state.last_reject_reason = "Достигнут лимит сделок за день"
         return
     if not rm.spread_ok(symbol, atr_value, point):
