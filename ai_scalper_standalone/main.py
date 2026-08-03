@@ -182,6 +182,20 @@ def _refresh_mt5_history_cache():
     if not deals:
         return
 
+    # Когда позиция ОТКРЫЛАСЬ: сделка входа (DEAL_ENTRY_IN) и сделка выхода
+    # (DEAL_ENTRY_OUT) — это две РАЗНЫЕ записи с общим position_id. Без этой
+    # пары нельзя узнать, сколько сделка прожила, а именно время жизни сразу
+    # показывает главную болезнь: сделки, умирающие через 8-10 секунд, — это
+    # стоп, поставленный внутрь рыночного шума, а не «неудачный вход».
+    opened_at = {}
+    open_price = {}
+    for d in deals:
+        if d.entry == mt5.DEAL_ENTRY_IN:
+            pid = getattr(d, "position_id", 0)
+            if pid and (pid not in opened_at or d.time < opened_at[pid]):
+                opened_at[pid] = d.time
+                open_price[pid] = d.price
+
     out_deals = []
     total = 0
     win = 0
@@ -196,6 +210,8 @@ def _refresh_mt5_history_cache():
             gross_profit += d.profit
         else:
             gross_loss += d.profit
+        pid = getattr(d, "position_id", 0)
+        started = opened_at.get(pid)
         out_deals.append({
             "ticket": d.ticket,
             "time": datetime.fromtimestamp(d.time).strftime("%d.%m %H:%M:%S"),
@@ -207,6 +223,14 @@ def _refresh_mt5_history_cache():
             "price": d.price,
             "profit": round(d.profit, 2),
             "is_bot": d.magic == cfg.MAGIC_NUMBER,
+            # Ниже — для разбора убытков и журнала в облаке (cloud_journal.py).
+            "open_time": (datetime.fromtimestamp(started).strftime("%d.%m %H:%M:%S")
+                          if started else ""),
+            "open_price": open_price.get(pid, 0.0),
+            "duration_sec": int(d.time - started) if started else None,
+            "commission": round(getattr(d, "commission", 0.0), 2),
+            "swap": round(getattr(d, "swap", 0.0), 2),
+            "comment": getattr(d, "comment", ""),
         })
 
     out_deals.sort(key=lambda x: x["time_raw"], reverse=True)

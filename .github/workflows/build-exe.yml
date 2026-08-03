@@ -68,6 +68,10 @@ jobs:
           --hidden-import bridge_host
           --hidden-import diagnostics
           --hidden-import updater
+          --hidden-import config_migrate
+          --hidden-import cloud_journal
+          --hidden-import param_help
+          --add-data "config.py.example;."
           --add-data "../mql5;mql5"
           --add-data "../ai_scalper_pro;ai_scalper_pro"
           --collect-all telethon

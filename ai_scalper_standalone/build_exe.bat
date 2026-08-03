@@ -30,7 +30,7 @@ REM file next to the program (needed for hot-reload of settings and so you can
 REM change symbols/profile without rebuilding).
 REM --add-data bundles the MQL5 advisor sources INSIDE the exe, so the program
 REM can install and compile them into MetaTrader by itself on first run.
-python -m PyInstaller --noconfirm --onefile --windowed --name "AI_Scalper_Pro" --exclude-module config --hidden-import accounts_tab --hidden-import accounts --hidden-import account_supervisor --hidden-import telegram_signals --hidden-import telegram_reader --hidden-import trading_schedule --hidden-import mt5_install --hidden-import bridge_host --hidden-import diagnostics --hidden-import updater --add-data "..\mql5;mql5" --add-data "..\ai_scalper_pro;ai_scalper_pro" --collect-all telethon --collect-all MetaTrader5 --collect-all anthropic --collect-all openai --collect-all pystray --collect-all certifi --collect-all cryptography desktop_app.py
+python -m PyInstaller --noconfirm --onefile --windowed --name "AI_Scalper_Pro" --exclude-module config --hidden-import accounts_tab --hidden-import accounts --hidden-import account_supervisor --hidden-import telegram_signals --hidden-import telegram_reader --hidden-import trading_schedule --hidden-import mt5_install --hidden-import bridge_host --hidden-import diagnostics --hidden-import updater --hidden-import config_migrate --hidden-import cloud_journal --hidden-import param_help --add-data "config.py.example;." --add-data "..\mql5;mql5" --add-data "..\ai_scalper_pro;ai_scalper_pro" --collect-all telethon --collect-all MetaTrader5 --collect-all anthropic --collect-all openai --collect-all pystray --collect-all certifi --collect-all cryptography desktop_app.py
 if errorlevel 1 goto :fail
 
 echo.

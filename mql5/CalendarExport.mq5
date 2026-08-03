@@ -187,15 +187,41 @@ int ExportCalendar()
 
    // Пишем во временный файл и переименовываем: программа не должна прочитать
    // файл в момент, когда он записан наполовину.
+   //
+   // ВАЖНО про кодировку. Раньше здесь было FILE_TXT|FILE_ANSI — однобайтовая
+   // запись. Названия событий календаря приходят из терминала на языке
+   // интерфейса (у нас — по-русски), а в однобайтовую ANSI-кодировку русские
+   // буквы не влезают: MQL5 подставляет вместо каждой знак "?". Именно поэтому
+   // на вкладке "Календарь" вместо названий новостей было "??????" — шрифт тут
+   // ни при чём, буквы терялись ещё при записи файла и восстановить их уже
+   // нечем.
+   //
+   // Пишем UTF-8 в двоичном режиме: StringToCharArray с CP_UTF8 превращает
+   // текст в байты UTF-8, FileWriteArray кладёт их как есть. Python читает
+   // файл с encoding="utf-8" (см. news_providers.fetch_mt5) — обе стороны
+   // договорились об одной кодировке.
+   //
+   // Почему не FILE_UNICODE: он пишет UTF-16 с BOM, и тогда Python-читалку
+   // тоже надо было бы переучивать. UTF-8 — то, что она уже ждёт.
    string tmp_name = OutputFileName + ".tmp";
-   int handle = FileOpen(tmp_name, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   uchar bytes[];
+   // Последний аргумент -1 у StringToCharArray добавил бы завершающий нулевой
+   // байт: JSON с \0 на конце Python-парсер не примет. Поэтому копируем ровно
+   // StringLen символов.
+   int byte_count = StringToCharArray(json, bytes, 0, StringLen(json), CP_UTF8);
+   if(byte_count <= 0)
+     {
+      Print("CalendarExport: не удалось перевести текст в UTF-8");
+      return -1;
+     }
+   int handle = FileOpen(tmp_name, FILE_WRITE | FILE_BIN);
    if(handle == INVALID_HANDLE)
      {
       PrintFormat("CalendarExport: не могу создать файл %s, ошибка %d",
                   tmp_name, GetLastError());
       return -1;
      }
-   FileWriteString(handle, json);
+   FileWriteArray(handle, bytes, 0, byte_count);
    FileClose(handle);
 
    if(FileIsExist(OutputFileName))

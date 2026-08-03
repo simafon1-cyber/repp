@@ -130,7 +130,9 @@ def fetch_mt5(api_key: str, from_date: str, to_date: str) -> list:
             f"Календарь не обновлялся {int(age / 60)} мин — похоже, сервис "
             f"CalendarExport остановлен или терминал закрыт.")
 
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    # utf-8-sig, а не utf-8: если файл вдруг придёт с меткой BOM в начале,
+    # обычный utf-8 отдал бы её первым символом и json.load споткнулся бы.
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
         data = json.load(f)
 
     offset = int(data.get("server_utc_offset_seconds", 0))
@@ -155,6 +157,41 @@ def fetch_mt5(api_key: str, from_date: str, to_date: str) -> list:
             "prev": item.get("prev", ""),
         })
     return events
+
+
+def looks_like_broken_encoding(events) -> bool:
+    """Названия новостей превратились в "??????"?
+
+    Старая версия сервиса CalendarExport писала файл в однобайтовой кодировке
+    ANSI, куда русские буквы не помещаются: терминал подставлял вместо каждой
+    буквы знак вопроса. Восстановить такой текст нельзя — буквы потеряны в
+    файле, а не в шрифте. Единственное лечение: обновить и перезапустить сервис
+    в терминале. Эта проверка нужна, чтобы программа сказала об этом прямо, а
+    не показывала молча строку из вопросительных знаков.
+
+    Признак: у события есть название, но в нём нет ни одной буквы или цифры —
+    одни "?" (и, возможно, пробелы и знаки препинания)."""
+    damaged = 0
+    named = 0
+    for item in events or []:
+        name = str(item.get("event", "") or "").strip()
+        if not name:
+            continue
+        named += 1
+        if "?" in name and not any(ch.isalnum() for ch in name):
+            damaged += 1
+    if named == 0:
+        return False
+    return damaged * 2 > named   # больше половины названий нечитаемы
+
+
+BROKEN_ENCODING_HINT = (
+    "Названия новостей приходят из терминала как «??????». Это старая версия "
+    "сервиса CalendarExport: он записывал файл в кодировке, где нет русских "
+    "букв. Лечится так: вкладка «Система» → «Установить в MetaTrader» "
+    "(файл обновится и соберётся заново), затем в терминале MT5: Навигатор → "
+    "Сервисы → CalendarExport → правой кнопкой → Перезапустить."
+)
 
 
 # Реестр провайдеров — добавляй сюда новые по образцу fetch_finnhub (например

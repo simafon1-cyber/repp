@@ -140,7 +140,23 @@ def decrypt_value(stored: str, password: str, salt_hex: str) -> str:
 
 
 # Простые строковые поля config.py, которые могут быть зашифрованы.
-_SECRET_STR_FIELDS = ("MT5_PASSWORD", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+#
+# ВАЖНО: список должен совпадать с тем, что программа ШИФРУЕТ при записи
+# (protect_secret в desktop_app.py). Поле, которое шифруется при сохранении,
+# но отсутствует здесь, после перезапуска остаётся строкой вида "enc:gAAA..."
+# — и уходит в таком виде туда, где ждут настоящий ключ. Именно так молча
+# ломались вход в Telegram (TELEGRAM_API_HASH) и обновление из закрытого
+# репозитория (UPDATE_TOKEN): GitHub и Telegram получали зашифрованный текст
+# вместо ключа и отвечали «неверные данные». В приватном режиме этого не было
+# видно — там secure_store хранит секреты открыто, и расшифровывать нечего.
+_SECRET_STR_FIELDS = (
+    "MT5_PASSWORD",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "TELEGRAM_API_HASH",
+    "UPDATE_TOKEN",
+    "JOURNAL_TOKEN",
+)
 
 
 def unlock_config(cfg_module, password: str):

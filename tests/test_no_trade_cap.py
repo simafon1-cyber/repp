@@ -234,8 +234,23 @@ def test_money_protections_still_enforced() -> None:
     for fn in ("daily_loss_limit_hit", "max_drawdown_hit"):
         check(fn in risk_src, f"Функция {fn} на месте")
 
-    check(CFG.USE_DAILY_LOSS_LIMIT is True, "Дневной лимит убытка включён")
-    check(CFG.USE_MAX_DRAWDOWN_LIMIT is True, "Лимит просадки включён")
+    # Дневной порог убытка владелец попросил снять: он останавливал бота до
+    # завтра, а бот должен отрабатывать всё торговое время. Механизм остался в
+    # коде и включается галочкой — выключена только сама остановка по дню.
+    check(CFG.USE_DAILY_LOSS_LIMIT is False,
+          "Дневной порог убытка выключен — бот работает всю сессию")
+
+    # А это — то, что защищает деньги вместо него. Все четыре обязаны остаться.
+    check(CFG.USE_MAX_DRAWDOWN_LIMIT is True,
+          "Лимит общей просадки остался — последний рубеж")
+    profile = CFG.RISK_PROFILES[CFG.RiskProfile(CFG.RISK_PROFILE)]
+    check(float(profile["risk_percent"]) > 0,
+          "Риск на сделку ограничен процентом от счёта", str(profile["risk_percent"]))
+    check(float(profile["max_total_risk_pct"]) > 0,
+          "Совокупный риск по открытым сделкам ограничен",
+          str(profile["max_total_risk_pct"]))
+    check("apply_min_stop_floor" in risk_src,
+          "Стоп-лосс обязан быть дальше спреда и шума")
 
 
 def test_stop_not_inside_noise() -> None:

@@ -62,6 +62,9 @@ KNOWN_API = {
     "ArrayRemove", "ArrayCopy", "ArrayInitialize", "ArraySort",
     "FileOpen", "FileClose", "FileWrite", "FileSeek", "FileIsExist",
     "FileWriteString", "FileDelete", "FileMove", "FileReadString", "FileSize",
+    # Двоичная запись UTF-8: календарь пишется байтами, иначе русские
+    # названия событий превращаются в "??????" (см. CalendarExport.mq5)
+    "FileWriteArray", "StringToCharArray",
     "ObjectCreate", "ObjectDelete", "ObjectSetInteger", "ObjectSetString",
     "ObjectsDeleteAll", "ObjectFind", "ChartRedraw", "ChartGetInteger",
     "iTime", "iBarShift", "Bars", "CopyRates", "CopyTime", "CopyClose",

@@ -182,23 +182,41 @@ def count_open_positions(symbol: str = None, positions=None) -> int:
 # ПРОСАДКА / ДНЕВНОЙ ЛИМИТ (общие на счёт)
 # =====================================================================
 def daily_loss_limit_hit(acc_state: AccountState, equity: float) -> bool:
+    """Достигнут ли дневной порог убытка.
+
+    Порог можно снять двумя способами: снять галочку USE_DAILY_LOSS_LIMIT или
+    поставить daily_loss_limit_pct = 0 в профиле риска. Ноль раньше означал
+    «останавливаться при ЛЮБОМ минусе» (0 <= -0 верно) — это ровно
+    противоположно тому, чего от нуля ждёт человек, который хочет убрать
+    порог. Теперь 0 честно значит «порога нет»."""
     profile = get_profile()
-    if not cfg.USE_DAILY_LOSS_LIMIT or acc_state.day_start_equity <= 0:
+    if not getattr(cfg, "USE_DAILY_LOSS_LIMIT", False) or acc_state.day_start_equity <= 0:
+        return False
+    limit = abs(float(profile.get("daily_loss_limit_pct", 0) or 0))
+    if limit <= 0:
         return False
     diff = (equity - acc_state.day_start_equity) / acc_state.day_start_equity * 100.0
-    return diff <= -abs(profile["daily_loss_limit_pct"])
+    return diff <= -limit
 
 
 def max_drawdown_hit(acc_state: AccountState, equity: float) -> bool:
+    """Лимит общей просадки счёта — последний рубеж защиты денег.
+
+    Он остаётся включённым даже когда дневного порога убытка нет: дневной
+    порог мешает боту доработать день, а этот срабатывает только когда счёт
+    уже потерял заметную часть от своего максимума. 0 = без лимита."""
     profile = get_profile()
-    if not cfg.USE_MAX_DRAWDOWN_LIMIT:
+    if not getattr(cfg, "USE_MAX_DRAWDOWN_LIMIT", False):
         return False
     if equity > acc_state.peak_equity:
         acc_state.peak_equity = equity
     if acc_state.peak_equity <= 0:
         return False
+    limit = abs(float(profile.get("max_drawdown_pct", 0) or 0))
+    if limit <= 0:
+        return False
     dd = (acc_state.peak_equity - equity) / acc_state.peak_equity * 100.0
-    return dd >= profile["max_drawdown_pct"]
+    return dd >= limit
 
 
 def loss_streak_pause_minutes() -> float:

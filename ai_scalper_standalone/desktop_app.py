@@ -79,6 +79,9 @@ import news_calendar
 import news_providers
 import trading_schedule as tsched
 import mt5_install
+import param_help
+import config_migrate
+import cloud_journal
 import bridge_host
 import diagnostics
 import updater
@@ -248,10 +251,11 @@ ADVANCED_PARAMS = [
     ("POSITION_MONITOR_SECONDS", "float", "Profit Lock",
      "Как часто (сек) проверять УЖЕ открытые позиции между полными проходами по всем парам", None),
 
-    ("USE_DAILY_LOSS_LIMIT", "bool", "Просадка / серии убытков", "Дневной лимит убытка", None),
+    ("USE_DAILY_LOSS_LIMIT", "bool", "Просадка / серии убытков",
+     "Дневной порог убытка (выключен: бот работает всё торговое время)", None),
     ("USE_MAX_DRAWDOWN_LIMIT", "bool", "Просадка / серии убытков", "Лимит общей просадки", None),
     ("MAX_CONSECUTIVE_LOSSES", "int", "Просадка / серии убытков", "Серия убытков подряд до паузы", None),
-    ("PAUSE_HOURS_AFTER_LOSS_STREAK", "int", "Просадка / серии убытков", "Пауза после серии убытков, часы", None),
+    ("PAUSE_MINUTES_AFTER_LOSS_STREAK", "int", "Просадка / серии убытков", "Пауза после серии убытков, минут (0 = без паузы)", None),
     ("USE_LOSS_STREAK_RISK_SCALING", "bool", "Просадка / серии убытков", "Снижать риск при серии убытков", None),
     ("MIN_LOSS_STREAK_RISK_MULTIPLIER", "float", "Просадка / серии убытков",
      "Мин. множитель риска при серии убытков", None),
@@ -302,6 +306,8 @@ ADVANCED_PARAMS = [
     ("TP_TIGHTEN_MIN_FRACTION", "float", "Фиксация прибыли", "Ниже какой доли стартовой цели не опускаться", None),
     ("TP_TIGHTEN_MIN_PROFIT_POINTS", "int", "Фиксация прибыли", "Мин. прибыль от входа, пункты (TP всегда в плюсе)", None),
     ("TP_TIGHTEN_STEP_POINTS", "int", "Фиксация прибыли", "Мин. шаг переноса TP, пункты", None),
+    ("TP_TIGHTEN_MIN_R", "float", "Фиксация прибыли",
+     "КРИТИЧНО: цель не может стать меньше риска сделки x это число (1.0 = не меньше стопа)", None),
 
     ("USE_BREAK_EVEN_RESCUE", "bool", "Фиксация прибыли",
      "Спасать в безубыток сделку, которая просела и вернулась к нулю (стоп-лосс НЕ трогается)", None),
@@ -330,12 +336,33 @@ RISK_PROFILE_FIELD_DEFS = [
     ("min_score_to_trade", "int", "Порог score для входа"),
     ("max_open_positions", "int", "Макс. одновременных сделок"),
     ("max_trades_per_day", "int", "Макс. сделок в день"),
-    ("daily_loss_limit_pct", "float", "Дневной лимит убытка, %"),
+    ("daily_loss_limit_pct", "float", "Дневной порог убытка, % (0 = без порога)"),
     ("max_drawdown_pct", "float", "Лимит просадки, %"),
     ("max_total_risk_pct", "float", "Лимит совокупного риска, %"),
     ("ignore_soft_filters", "bool", "Игнорировать мягкие фильтры"),
     ("hedge_both_directions", "bool", "Хедж: при сигнале открывать сразу BUY и SELL (обычный SL на каждой ноге)"),
 ]
+
+
+_MISSING = object()
+
+
+def param_current_value(key: str):
+    """Значение параметра для показа в поле вкладки «Настройка».
+
+    Если параметра в вашем config.py ещё нет (он появился в новой версии, а
+    файл настроек остался старым), берём значение по умолчанию из
+    config.py.example. Раньше в этом случае подставлялась пустая строка: поле
+    выглядело пустым, а «Сохранить» отвечал «Некорректные значения в полях:
+    PROFIT_LOCK_START_R_FRACTION, ...» — пустоту нельзя превратить в число.
+    config_migrate.sync() дописывает такие настройки в файл при запуске, а это
+    — вторая линия обороны на случай, если файл не удалось изменить (нет прав,
+    файл только для чтения)."""
+    value = getattr(cfg, key, _MISSING)
+    if value is not _MISSING:
+        return value
+    default = param_help.default_of(key)
+    return "" if default is None else default
 
 
 def _write_config_value(key: str, value_literal: str):
@@ -1612,6 +1639,31 @@ class App:
 
         # ---- Плоские параметры, сгруппированные по разделам (как в config.py) ----
 
+    def _scrollable(self, parent):
+        """Возвращает рамку с вертикальной прокруткой. Складывать содержимое
+        нужно уже в неё. Нужна там, где блоков заведомо больше, чем помещается
+        в окно: без прокрутки нижние блоки не видны вовсе, а не «обрезаны»."""
+        outer = ttk.Frame(parent)
+        outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, bg="#1b1b1b", highlightthickness=0)
+        vscroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        window = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        # Содержимое тянется по ширине окна: иначе блоки с fill="x" остались бы
+        # шириной в один символ.
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
+        canvas.configure(yscrollcommand=vscroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vscroll.pack(side="right", fill="y")
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        return inner
+
     def _build_tab_params(self, parent, only_groups=None):
         """only_groups=None — все параметры; список — только эти группы."""
         title = "Точная настройка" if only_groups is None else "Параметры раздела"
@@ -1657,7 +1709,7 @@ class App:
             for row_i, (key, ptype, label, choices) in enumerate(items):
                 ttk.Label(box, text=label, wraplength=340, justify="left").grid(
                     row=row_i, column=0, sticky="w", padx=6, pady=3)
-                current = getattr(cfg, key, "")
+                current = param_current_value(key)
                 if ptype == "bool":
                     var = tk.BooleanVar(value=bool(current))
                     ttk.Checkbutton(box, variable=var).grid(row=row_i, column=1, sticky="w", padx=6, pady=3)
@@ -1676,12 +1728,65 @@ class App:
                     ttk.Entry(box, textvariable=var, width=18).grid(row=row_i, column=1, sticky="w", padx=6, pady=3)
                 self.param_vars[key] = (ptype, var)
 
+                # Кнопка «?» рядом с каждым параметром: что делает, значение по
+                # умолчанию и что будет, если изменить. Справка лежит в
+                # param_help.py, здесь только показ.
+                if param_help.has_help(key):
+                    ttk.Button(box, text="?", width=3,
+                               command=lambda k=key, l=label: self._show_param_help(k, l)).grid(
+                        row=row_i, column=2, sticky="w", padx=(2, 6), pady=3)
+
         btn_frame = ttk.Frame(inner)
         btn_frame.pack(fill="x", padx=6, pady=14)
         ttk.Button(btn_frame, text="Сохранить все параметры", command=self.save_advanced_params).grid(
             row=0, column=0, padx=4)
         ttk.Button(btn_frame, text="Обновить из файла", command=self.reload_advanced_params).grid(
             row=0, column=1, padx=4)
+
+    def _show_param_help(self, key: str, label: str):
+        """Окно справки по одному параметру."""
+        window = tk.Toplevel(self.root)
+        window.title(f"Справка: {key}")
+        window.geometry("640x520")
+        window.configure(bg="#1b1b1b")
+
+        ttk.Label(window, text=label, font=("Segoe UI", 11, "bold"),
+                  wraplength=600, justify="left").pack(anchor="w", padx=14, pady=(12, 2))
+        ttk.Label(window, text=key, foreground="#888").pack(anchor="w", padx=14)
+
+        item = param_help.entry(key)
+        # Полоса прокрутки обязательна: у части параметров есть ещё и блок
+        # «Внимание», и без прокрутки он оказывался за нижним краем окна —
+        # то есть предупреждение было не видно именно там, где оно важнее всего.
+        body_frame = ttk.Frame(window)
+        body_frame.pack(fill="both", expand=True, padx=14, pady=10)
+        body = tk.Text(body_frame, wrap="word", height=16, bg="#242424", fg="#ddd",
+                       relief="flat", padx=10, pady=8)
+        body_scroll = ttk.Scrollbar(body_frame, command=body.yview)
+        body.configure(yscrollcommand=body_scroll.set)
+        body.pack(side="left", fill="both", expand=True)
+        body_scroll.pack(side="right", fill="y")
+
+        body.tag_configure("head", foreground="#9ad", spacing1=6)
+        body.tag_configure("warn", foreground="#e0a355")
+        body.insert("end", item["what"] + "\n\n")
+
+        default = param_help.default_of(key)
+        if default is not None:
+            body.insert("end", "Значение по умолчанию\n", "head")
+            body.insert("end", f"{default!r}\n\n")
+        if item["more"]:
+            body.insert("end", "Если увеличить / включить\n", "head")
+            body.insert("end", item["more"] + "\n\n")
+        if item["less"]:
+            body.insert("end", "Если уменьшить / выключить\n", "head")
+            body.insert("end", item["less"] + "\n\n")
+        if item["warn"]:
+            body.insert("end", "Внимание\n", "head")
+            body.insert("end", item["warn"] + "\n", "warn")
+        body.configure(state="disabled")
+
+        ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=(0, 12))
 
     def _build_profile_fields(self, parent):
         for row_i, (field, ftype, label) in enumerate(RISK_PROFILE_FIELD_DEFS):
@@ -1762,6 +1867,15 @@ class App:
         errors = []
         for key, (ptype, var) in self.param_vars.items():
             raw = var.get()
+            # Пустое числовое поле — не ошибка ввода, а параметр, которого ещё
+            # не было в вашем config.py. Подставляем значение по умолчанию из
+            # config.py.example вместо того, чтобы отказывать в сохранении
+            # ВСЕХ настроек из-за одного нового поля. Секреты не трогаем:
+            # там пустота означает «ключ не меняли».
+            if ptype in ("int", "float") and str(raw).strip() == "":
+                default = param_help.default_of(key)
+                if default is not None:
+                    raw = default
             try:
                 if ptype == "bool":
                     new_values[key] = bool(raw)
@@ -1774,7 +1888,11 @@ class App:
             except (TypeError, ValueError):
                 errors.append(key)
         if errors:
-            messagebox.showerror(APP_TITLE, "Некорректные значения в полях: " + ", ".join(errors))
+            messagebox.showerror(
+                APP_TITLE,
+                "Некорректные значения в полях: " + ", ".join(errors) +
+                "\n\nВ этих полях ждут число. Нажмите «?» рядом с полем — там "
+                "написано, что означает параметр и какое значение стандартное.")
             return
 
         tf_rank = {"M1": 1, "M5": 2, "M15": 3, "M30": 4, "H1": 5, "H4": 6, "D1": 7}
@@ -1808,9 +1926,14 @@ class App:
 
     def reload_advanced_params(self):
         for key, (ptype, var) in self.param_vars.items():
-            current = getattr(cfg, key, "")
+            current = param_current_value(key)
             if ptype == "bool":
                 var.set(bool(current))
+            elif ptype == "secret":
+                # Ключ в поле не возвращаем — только заглушку, как при
+                # построении вкладки. Иначе «Обновить из файла» выкладывал бы
+                # секрет на экран.
+                var.set(SECRET_PLACEHOLDER if current else "")
             else:
                 var.set(str(current))
         self._load_profile_fields()
@@ -1937,6 +2060,11 @@ class App:
         получить свежую версию»."""
         pad = {"padx": 12, "pady": 4}
 
+        # Блоков на этой вкладке больше, чем помещается в окно: без прокрутки
+        # нижние (журнал в облаке, таблица проверок) просто не видны, и человек
+        # решает, что их нет.
+        parent = self._scrollable(parent)
+
         ttk.Label(parent, text="Состояние системы",
                   font=("Segoe UI", 12, "bold")).pack(anchor="w", **pad)
 
@@ -2007,6 +2135,62 @@ class App:
 
         self.update_status_var = tk.StringVar(value="")
         ttk.Label(up, textvariable=self.update_status_var, foreground="#888",
+                  wraplength=780, justify="left").grid(
+            row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
+
+        # ---------- Журнал сделок в облаке ----------
+        jr = ttk.LabelFrame(parent, text=" Журнал сделок в облаке ")
+        jr.pack(fill="x", padx=12, pady=(6, 4))
+
+        ttk.Label(jr, foreground="#888", wraplength=780, justify="left", text=
+                  "История сделок выкладывается в папку journal/ вашего ЗАКРЫТОГО "
+                  "репозитория GitHub: можно открыть с телефона или показать, когда "
+                  "компьютер выключен. Три файла — журнал бота, реальные закрытые "
+                  "сделки из MetaTrader и разбор словами (винрейт, средний плюс/минус, "
+                  "сколько сделок умерло за секунды, какая пара даёт минус).\n"
+                  "Пароли, ключи и токены туда НЕ попадают — только сделки."
+                  ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
+
+        self.journal_enabled_var = tk.BooleanVar(
+            value=getattr(cfg, "JOURNAL_CLOUD_ENABLED", False))
+        ttk.Checkbutton(jr, text="Выкладывать журнал в облако",
+                        variable=self.journal_enabled_var).grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=8, pady=2)
+
+        ttk.Label(jr, text="Репозиторий:").grid(row=2, column=0, sticky="w", padx=8, pady=3)
+        self.journal_repo_var = tk.StringVar(value=getattr(cfg, "JOURNAL_REPO", ""))
+        ttk.Entry(jr, textvariable=self.journal_repo_var, width=44).grid(
+            row=2, column=1, sticky="w", padx=8)
+        ttk.Label(jr, foreground="#666",
+                  text="пусто = тот же, что для обновлений").grid(
+            row=3, column=1, sticky="w", padx=8)
+
+        ttk.Label(jr, text="Токен GitHub (запись):").grid(row=4, column=0, sticky="w", padx=8, pady=3)
+        self.journal_token_var = tk.StringVar(
+            value=SECRET_PLACEHOLDER if getattr(cfg, "JOURNAL_TOKEN", "") else "")
+        ttk.Entry(jr, textvariable=self.journal_token_var, width=44, show="*").grid(
+            row=4, column=1, sticky="w", padx=8)
+        ttk.Label(jr, foreground="#666", wraplength=420, justify="left",
+                  text="Fine-grained token на этот репозиторий, права "
+                       "Contents: Read and write. Пустое поле = не менять").grid(
+            row=5, column=1, sticky="w", padx=8)
+
+        ttk.Label(jr, text="Как часто, минут:").grid(row=6, column=0, sticky="w", padx=8, pady=3)
+        self.journal_minutes_var = tk.StringVar(
+            value=str(getattr(cfg, "JOURNAL_UPLOAD_MINUTES", 15)))
+        ttk.Entry(jr, textvariable=self.journal_minutes_var, width=10).grid(
+            row=6, column=1, sticky="w", padx=8)
+
+        jrbtn = ttk.Frame(jr)
+        jrbtn.grid(row=7, column=0, columnspan=2, sticky="w", padx=8, pady=6)
+        ttk.Button(jrbtn, text="Сохранить", command=self.save_system_settings).grid(row=0, column=0)
+        ttk.Button(jrbtn, text="Выложить сейчас",
+                   command=self.upload_journal_now).grid(row=0, column=1, padx=6)
+        ttk.Button(jrbtn, text="Открыть в браузере",
+                   command=self.open_journal_in_browser).grid(row=0, column=2)
+
+        self.journal_status_var = tk.StringVar(value="")
+        ttk.Label(jr, textvariable=self.journal_status_var, foreground="#888",
                   wraplength=780, justify="left").grid(
             row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
 
@@ -2082,6 +2266,57 @@ class App:
         except Exception:
             pass
 
+    def upload_journal_now(self):
+        """Выложить журнал сделок в облако прямо сейчас.
+
+        Сеть — в фоне: окно не должно замирать, пока GitHub принимает файлы."""
+        ok, reason = cloud_journal.ready()
+        if not ok:
+            messagebox.showwarning(APP_TITLE, reason)
+            return
+        if not messagebox.askyesno(
+            APP_TITLE,
+            f"Выложить историю сделок в репозиторий {cloud_journal.repo()} "
+            f"(ветка {cloud_journal.branch()}, папка {cloud_journal.folder()}/)?\n\n"
+            f"Уйдут только сделки. Пароли, ключи и токены не отправляются.",
+        ):
+            return
+
+        self.journal_status_var.set("Отправляю...")
+
+        def worker():
+            try:
+                result = cloud_journal.upload(ds.get_snapshot())
+            except Exception as e:  # noqa: BLE001
+                log.exception("Журнал в облако: %s", e)
+                result = {"ok": False, "error": cloud_journal.explain_error(e),
+                          "files": [], "analysis": {}}
+            self.root.after(0, lambda: self._apply_journal_result(result))
+
+        threading.Thread(target=worker, daemon=True, name="cloud-journal").start()
+
+    def _apply_journal_result(self, result):
+        # Вкладка «Система» могла быть не построена (простой режим интерфейса) —
+        # тогда показывать статус негде, но выгрузка всё равно нужна.
+        if not hasattr(self, "journal_status_var"):
+            return
+        if not result.get("ok"):
+            self.journal_status_var.set("Не отправлено: " + result.get("error", ""))
+            return
+        analysis = result.get("analysis") or {}
+        self.journal_status_var.set(
+            f"Готово: {len(result.get('files', []))} файла в {cloud_journal.repo()} "
+            f"({time.strftime('%H:%M:%S')}). Сделок в разборе: "
+            f"{analysis.get('trades', 0)}, итог {analysis.get('net', 0)}. "
+            f"Открыть: {cloud_journal.web_url()}")
+
+    def open_journal_in_browser(self):
+        url = cloud_journal.web_url()
+        if not url:
+            messagebox.showwarning(APP_TITLE, "Сначала укажите репозиторий.")
+            return
+        webbrowser.open(url)
+
     def save_system_settings(self):
         try:
             port = int(self.bridge_port_var.get().strip() or 8080)
@@ -2091,6 +2326,14 @@ class App:
         if not (1024 <= port <= 65535):
             messagebox.showwarning(APP_TITLE, "Порт должен быть в диапазоне 1024-65535.")
             return
+
+        try:
+            journal_minutes = int(float(self.journal_minutes_var.get().strip() or 15))
+        except ValueError:
+            messagebox.showwarning(APP_TITLE, "«Как часто, минут» — должно быть числом.")
+            return
+        if journal_minutes < 1:
+            journal_minutes = 1
 
         pw = control.get_session_password()
         salt = getattr(cfg, "SECURITY_SALT", "")
@@ -2103,6 +2346,19 @@ class App:
         _write_config_value("UPDATE_REPO", repr(self.update_repo_var.get().strip()))
         _write_config_value("UPDATE_BRANCH", repr(self.update_branch_var.get().strip() or "main"))
         _write_config_value("UPDATE_TOKEN", repr(token))
+
+        _write_config_value("JOURNAL_CLOUD_ENABLED", repr(bool(self.journal_enabled_var.get())))
+        _write_config_value("JOURNAL_REPO", repr(self.journal_repo_var.get().strip()))
+        _write_config_value("JOURNAL_UPLOAD_MINUTES", repr(journal_minutes))
+        # Пустое поле или заглушка = токен не меняли. Иначе затирали бы
+        # сохранённый токен каждый раз, когда сохраняются любые другие
+        # настройки на этой вкладке.
+        journal_token = self.journal_token_var.get().strip()
+        if journal_token and journal_token != SECRET_PLACEHOLDER:
+            _write_config_value(
+                "JOURNAL_TOKEN",
+                repr(secure_store.protect_secret(journal_token, pw, salt)))
+            self.journal_token_var.set(SECRET_PLACEHOLDER)
         try:
             _reload_cfg()
         except Exception:
@@ -2685,6 +2941,8 @@ class App:
                        f"{nxt['end'].strftime('%H:%M')} ({nxt['event']}).")
         elif status["trading"]:
             detail += "  Известных пауз по новостям впереди нет."
+        if news_providers.looks_like_broken_encoding(events):
+            detail += "\n\n" + news_providers.BROKEN_ENCODING_HINT
         self.sched_detail_var.set(detail)
 
         for item in self.sched_tree.get_children():
@@ -2863,6 +3121,10 @@ class App:
         source_txt = news_providers.PROVIDER_TITLES.get(used, used) if used else ""
         if error:
             self.news_status_var.set(error)
+        elif news_providers.looks_like_broken_encoding(events):
+            # Названия пришли как "??????" — файл записан старой версией
+            # сервиса. Молчать нельзя: человек будет думать, что дело в шрифте.
+            self.news_status_var.set(news_providers.BROKEN_ENCODING_HINT)
         elif not events:
             self.news_status_var.set(
                 f"Источник: {source_txt}. Важных событий в ближайшие 3 дня нет.")
@@ -3008,7 +3270,14 @@ class App:
           "Lock, просадка/серии убытков, издержки, новости, автообучение, "
           "автообновление, часы торговли, лот, частичное закрытие — плюс отдельный "
           "редактор каждого профиля риска и корреляций контекста рынка по символам. "
-          "«Сохранить» применяет изменения сразу, без перезапуска программы.")
+          "«Сохранить» применяет изменения сразу, без перезапуска программы.\n\n"
+          "Рядом с КАЖДЫМ полем есть кнопка «?». Она открывает описание: что "
+          "параметр делает, какое значение стандартное и что изменится, если "
+          "его увеличить или уменьшить. Если сомневаетесь — верните "
+          "стандартное значение, оно написано в той же справке.\n\n"
+          "Настройки, появившиеся в новой версии программы, дописываются в ваш "
+          "файл настроек сами, со стандартными значениями. Ваши собственные "
+          "значения при этом не трогаются.")
 
         h2("9. Новости (продвинутый режим)")
         p("Источник экономического календаря (провайдер + API-ключ) и таблица "
@@ -3018,6 +3287,22 @@ class App:
         h2("10. Chat AI (продвинутый режим)")
         p("Обычный чат с Claude прямо в программе — можно спросить что угодно про "
           "рынок или настройки, не переключаясь на другое окно.")
+
+        h2("11. Система: журнал сделок в облаке")
+        p("Вкладка «Система» → «Журнал сделок в облаке». Программа выкладывает "
+          "историю сделок в папку journal/ вашего ЗАКРЫТОГО репозитория "
+          "GitHub — три файла: журнал бота, реальные закрытые сделки из "
+          "MetaTrader (с временем жизни каждой сделки) и разбор обычными "
+          "словами: винрейт, средний плюс и средний минус, сколько сделок "
+          "умерло за секунды, какая пара даёт минус.\n\n"
+          "Зачем: историю можно открыть с телефона или показать, когда рабочий "
+          "компьютер выключен. Время жизни сделки — главная улика: сделки, "
+          "закрывающиеся за 8-11 секунд, означают стоп внутри рыночного шума, "
+          "а не «неудачный вход».\n\n"
+          "Выключено по умолчанию. Нужен токен GitHub с правом записи "
+          "(Contents: Read and write). В облако уходят ТОЛЬКО сделки: ни "
+          "паролей от счёта, ни ключей, ни токенов, ни файла настроек. Номер "
+          "счёта можно скрыть галочкой в настройках (JOURNAL_MASK_ACCOUNT).")
 
         h2("Значок в трее и автозапуск")
         p("Закрытие окна крестиком сворачивает программу в трей, а не закрывает её — "
@@ -3104,9 +3389,41 @@ class App:
 
             for title, message in control.drain_notifications():
                 self._show_toast(title, message)
+
+            self._upload_journal_if_due()
         except Exception:
             log.exception("Ошибка обновления интерфейса")
         self.root.after(3000, self._refresh_loop)
+
+    def _upload_journal_if_due(self):
+        """Плановая выгрузка журнала в облако. Сама отправка — в отдельном
+        потоке: этот цикл рисует окно, и ждать в нём ответа GitHub нельзя,
+        иначе программа замрёт на несколько секунд каждые N минут."""
+        if not cloud_journal.enabled():
+            return
+        if getattr(self, "_journal_uploading", False):
+            return
+        if (time.time() - cloud_journal.last_upload_ts()
+                < cloud_journal.upload_interval_seconds()):
+            return
+
+        self._journal_uploading = True
+        snapshot = ds.get_snapshot()
+
+        def worker():
+            try:
+                result = cloud_journal.upload_if_due(snapshot)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Плановая выгрузка журнала не удалась: %s", e)
+                result = None
+
+            def finish():
+                self._journal_uploading = False
+                if result:
+                    self._apply_journal_result(result)
+            self.root.after(0, finish)
+
+        threading.Thread(target=worker, daemon=True, name="cloud-journal-auto").start()
 
     # ---- уведомления --------------------------------------------------------------
     def _show_toast(self, title: str, message: str):
@@ -3433,6 +3750,22 @@ def main():
     # бесконечно открывать саму себя, пока не кончится память.
     # Вызывать нужно ПЕРВЫМ делом, до любой другой работы.
     multiprocessing.freeze_support()
+
+    # Дописываем в config.py настройки, появившиеся в новой версии. Без этого
+    # новые поля на вкладке «Настройка» были бы пустыми, а «Сохранить» ругался
+    # бы «Некорректные значения в полях: ...». Существующие значения не
+    # трогаются — только добавляются недостающие (см. config_migrate.py).
+    try:
+        added = config_migrate.sync()
+        changed = config_migrate.apply_one_time()
+        if added or changed:
+            _reload_cfg()
+        if added:
+            log.info("Добавлены новые настройки: %s", ", ".join(added))
+        for note in changed:
+            log.info("Настройка изменена при обновлении: %s", note)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось дописать новые настройки в config.py: %s", e)
 
     _migrate_legacy_secrets()
     _harden_files()
