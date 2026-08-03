@@ -57,6 +57,10 @@ jobs:
           --hidden-import accounts_tab
           --hidden-import accounts
           --hidden-import account_supervisor
+          --hidden-import telegram_signals
+          --hidden-import telegram_reader
+          --hidden-import trading_schedule
+          --collect-all telethon
           --collect-all MetaTrader5
           --collect-all anthropic
           --collect-all openai

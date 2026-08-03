@@ -2056,11 +2056,15 @@ class App:
         self.refresh_telegram_tab()
 
     def telegram_login(self):
-        """Одноразовый вход по номеру телефона. Вынесен в отдельную кнопку:
-        просить код подтверждения посреди запуска торгового цикла, где его
-        никто не увидит, — верный способ получить зависший запуск."""
-        problem = tgr.preflight()
-        if problem and "Вход" not in problem:
+        """Одноразовый вход по номеру телефона.
+
+        Сам вход идёт в ФОНОВОМ потоке, а вопросы (код, пароль) задаются в
+        потоке интерфейса через root.after. Раньше вход выполнялся прямо
+        здесь, в потоке интерфейса: окно замирало на всё время входа, и
+        диалог ввода кода мог не показаться вовсе — со стороны это выглядело
+        как «программа зависла» или «войти не получается»."""
+        problem = tgr.login_preflight()
+        if problem:
             messagebox.showwarning(APP_TITLE, problem)
             return
 
@@ -2070,22 +2074,63 @@ class App:
         if not phone:
             return
 
-        def ask_code():
-            return simpledialog.askstring(
-                APP_TITLE, "Код подтверждения из Telegram:", parent=self.root) or ""
+        def ask_in_gui(prompt: str, secret: bool = False) -> str:
+            """Задать вопрос из фонового потока и дождаться ответа.
 
-        def ask_password():
-            return simpledialog.askstring(
-                APP_TITLE, "Пароль двухфакторной защиты (если включён):",
-                parent=self.root, show="*") or ""
+            Диалоги Tk можно открывать только в потоке интерфейса, поэтому
+            вопрос ставится в его очередь, а фоновый поток ждёт на событии."""
+            answer = {}
+            done = threading.Event()
 
-        error = tgr.login(phone.strip(), ask_code, ask_password)
+            def ask():
+                try:
+                    answer["value"] = simpledialog.askstring(
+                        APP_TITLE, prompt, parent=self.root,
+                        show="*" if secret else None) or ""
+                except Exception:
+                    answer["value"] = ""
+                finally:
+                    done.set()
+
+            self.root.after(0, ask)
+            done.wait()
+            return answer.get("value", "")
+
+        def worker():
+            error = tgr.login(
+                phone.strip(),
+                lambda: ask_in_gui("Код подтверждения из Telegram:"),
+                lambda: ask_in_gui("Облачный пароль Telegram (двухфакторная защита):",
+                                   secret=True),
+            )
+            self.root.after(0, lambda: self._after_telegram_login(error))
+
+        self._set_tg_status("Вход в Telegram: ждём подтверждения...")
+        threading.Thread(target=worker, daemon=True, name="telegram-login").start()
+
+    def _set_tg_status(self, text: str):
+        """Строка состояния Telegram есть на двух вкладках — обновляем обе,
+        какая бы из них ни была построена."""
+        for name in ("tg_src_status_var", "tg_status_var"):
+            var = getattr(self, name, None)
+            if var is not None:
+                try:
+                    var.set(text)
+                except Exception:
+                    pass
+
+    def _after_telegram_login(self, error: str):
         if error:
             messagebox.showerror(APP_TITLE, error)
+            self._set_tg_status(error)
         else:
             messagebox.showinfo(APP_TITLE, "Вход выполнен. Код больше не понадобится.")
             tgr.start()
         self.refresh_telegram_tab()
+        try:
+            self.refresh_sources_tab()
+        except Exception:
+            pass
 
     def refresh_telegram_tab(self):
         if not tgs.enabled():

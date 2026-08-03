@@ -328,6 +328,246 @@ def test_wiring() -> None:
     check("telegram_session" in gitignore, "Файл сессии Telegram не попадает в git")
 
 
+def test_login_calls() -> None:
+    print("\n[Вход: правильный вызов Telethon]")
+
+    src = (APP / "telegram_reader.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    login = None
+    run = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "login":
+            login = ast.get_source_segment(src, node)
+        if isinstance(node, ast.FunctionDef) and node.name == "_run":
+            run = ast.get_source_segment(src, node)
+
+    check(login is not None and run is not None, "Функции входа и чтения найдены")
+    if not (login and run):
+        return
+
+    def code_only(text: str) -> str:
+        """Только код, без комментариев: в комментариях этого модуля старая
+        ошибка описана дословно, и проверка ловила бы её описание."""
+        out = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            out.append(line.split("  #")[0])
+        return "\n".join(out)
+
+    login = code_only(login)
+    run = code_only(run)
+
+    # ГЛАВНОЕ. start() и disconnect() у Telethon двухрежимные: вне запущенного
+    # цикла они крутят его САМИ и возвращают не корутину. Обернуть их в
+    # run_until_complete = TypeError "a coroutine or an awaitable is required".
+    # Из-за этого вход не работал вообще.
+    check("run_until_complete(client.start" not in login,
+          "start() не обёрнут в run_until_complete — иначе вход падает всегда")
+    check("await client.start(" in login,
+          "start() вызывается через await внутри async-функции")
+    check("await client.disconnect()" in login, "disconnect() тоже через await")
+
+    check("run_until_complete(client.disconnect" not in run,
+          "В фоновом чтении disconnect() не обёрнут — вне цикла он вернул бы None")
+    # А вот connect() и is_user_authorized() — обычные корутины, их оборачивать
+    # правильно
+    check("run_until_complete(client.connect())" in run,
+          "connect() — обычная корутина, обёртка тут уместна")
+
+    # Устаревший параметр loop= убран: в новых версиях Telethon его нет
+    check("loop=loop" not in src, "Устаревший параметр loop= не передаётся")
+
+    # Вход не должен требовать включённого чтения: логично войти ДО включения
+    check("login_preflight" in src, "У входа своя, более мягкая проверка")
+    lp = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "login_preflight":
+            lp = ast.get_source_segment(src, node)
+    check(lp is not None and "tgs.enabled()" not in lp,
+          "Вход не требует, чтобы чтение уже было включено")
+    check(lp is not None and "sources()" not in lp,
+          "Вход не требует заранее заполненного списка источников")
+
+
+def test_login_runs_end_to_end() -> None:
+    """Прогоняем НАСТОЯЩУЮ login() на поддельном Telethon, который ведёт себя
+    в точности как настоящий: start() и disconnect() двухрежимные — вне
+    запущенного цикла крутят его сами и возвращают не корутину.
+
+    Это тест-«ловушка» именно на ту ошибку, из-за которой вход не работал:
+    прежний код оборачивал результат start() в run_until_complete второй раз
+    и падал с TypeError. Разбор исходника такое не поймал бы, если завтра
+    кто-то напишет ошибку иначе."""
+    print("\n[Вход целиком, на поддельном Telethon]")
+
+    import asyncio
+    import importlib.machinery
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, session, api_id, api_hash, **kw):
+            if "loop" in kw:
+                raise TypeError("__init__() got an unexpected keyword argument 'loop'")
+            calls.append("init")
+
+        def _dual(self, coro):
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return coro
+            return loop.run_until_complete(coro)
+
+        def start(self, **kw):
+            async def _s():
+                calls.append("start")
+                kw["phone"]()
+                kw["code_callback"]()
+                return self
+            return self._dual(_s())
+
+        def disconnect(self):
+            async def _d():
+                calls.append("disconnect")
+            return self._dual(_d())
+
+    fake = types.ModuleType("telethon")
+    fake.__spec__ = importlib.machinery.ModuleSpec("telethon", None)
+    fake.TelegramClient = FakeClient
+    fake.events = types.SimpleNamespace(NewMessage=lambda **k: None)
+
+    saved = sys.modules.get("telethon")
+    sys.modules["telethon"] = fake
+
+    CFG.TELEGRAM_API_ID = 12345
+    CFG.TELEGRAM_API_HASH = "abc"
+    CFG.TELEGRAM_ENABLED = False      # вход обязан работать и при выключенном чтении
+    CFG.TELEGRAM_SOURCES = []
+    try:
+        error = tgr.login("+79990001122", lambda: "12345", lambda: "")
+        check(error == "", "Вход проходит без ошибки", repr(error))
+        check(calls == ["init", "start", "disconnect"],
+              "Клиент создан, запущен и корректно отключён", str(calls))
+
+        # Ошибка Telethon доходит до пользователя переведённой
+        calls.clear()
+
+        def boom(self, **kw):     # присваивается классу -> вызывается как метод
+            raise type("PhoneCodeInvalidError", (Exception,), {})("bad code")
+
+        FakeClient.start = boom
+        error = tgr.login("+79990001122", lambda: "00000", lambda: "")
+        check("код" in error.lower(), "Ошибка возвращается по-русски", error)
+    finally:
+        if saved is not None:
+            sys.modules["telethon"] = saved
+        else:
+            sys.modules.pop("telethon", None)
+
+
+def test_login_preflight_rules() -> None:
+    print("\n[Проверка перед входом]")
+
+    CFG.TELEGRAM_ENABLED = False
+    CFG.TELEGRAM_API_ID = 12345
+    CFG.TELEGRAM_API_HASH = "abc"
+    CFG.TELEGRAM_SOURCES = []
+
+    msg = tgr.login_preflight()
+    check("выключен" not in msg.lower(),
+          "Выключенное чтение НЕ мешает войти", msg)
+    check("источник" not in msg.lower(),
+          "Пустой список источников НЕ мешает войти", msg)
+
+    CFG.TELEGRAM_API_ID = 0
+    check("my.telegram.org" in tgr.login_preflight(),
+          "Без api_id подсказывает, где его взять")
+
+    CFG.TELEGRAM_API_ID = 12345
+    CFG.TELEGRAM_API_HASH = ""
+    check("my.telegram.org" in tgr.login_preflight(), "Без api_hash — то же самое")
+
+    CFG.TELEGRAM_API_HASH = "abc"
+    CFG.TELEGRAM_ENABLED = True
+    check("источник" in tgr.preflight().lower(),
+          "А вот ЧТЕНИЕ без источников не запускается", tgr.preflight())
+
+
+def test_error_messages() -> None:
+    print("\n[Понятные ошибки вместо английских имён классов]")
+
+    class FakeErr(Exception):
+        pass
+
+    for name, expect in (
+            ("PhoneNumberInvalidError", "номер"),
+            ("PhoneCodeInvalidError", "код"),
+            ("PhoneCodeExpiredError", "устарел"),
+            ("SessionPasswordNeededError", "двухфакторн"),
+            ("ApiIdInvalidError", "api_id"),
+            ("AuthKeyDuplicatedError", "telegram_session"),
+    ):
+        exc = type(name, (Exception,), {})("boom")
+        msg = tgr.explain_error(exc)
+        check(expect.lower() in msg.lower(), f"{name} -> по-русски", msg)
+
+    flood = type("FloodWaitError", (Exception,), {})("wait")
+    flood.seconds = 300
+    msg = tgr.explain_error(flood)
+    check("6 мин" in msg, "FloodWait переводится в минуты", msg)
+
+    # Та самая ошибка, из-за которой вход не работал — тоже объясняется
+    msg = tgr.explain_error(TypeError("An asyncio.Future, a coroutine or an awaitable is required"))
+    check("Обновите программу" in msg, "Старая внутренняя ошибка распознаётся", msg)
+
+    msg = tgr.explain_error(OSError("нет сети"))
+    check("связи" in msg, "Сетевая ошибка понятна", msg)
+
+    # Незнакомая ошибка не теряется
+    msg = tgr.explain_error(FakeErr("что-то пошло не так"))
+    check("что-то пошло не так" in msg, "Незнакомая ошибка показывается как есть", msg)
+
+
+def test_login_not_on_gui_thread() -> None:
+    print("\n[Вход не морозит окно]")
+
+    gui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    tree = ast.parse(gui)
+    fn = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "telegram_login":
+            fn = ast.get_source_segment(gui, node)
+    check(fn is not None, "Обработчик кнопки найден")
+    if not fn:
+        return
+
+    check("threading.Thread" in fn,
+          "Вход выполняется в фоновом потоке — иначе окно замирает и диалог "
+          "ввода кода может не показаться")
+    check("self.root.after(0, ask)" in fn,
+          "Вопросы задаются в потоке интерфейса: диалоги Tk из другого потока открывать нельзя")
+    check("done.wait()" in fn, "Фоновый поток ждёт ответа пользователя")
+    check("tgr.login_preflight()" in fn, "Используется мягкая проверка для входа")
+
+    # Результат обрабатывается тоже в потоке интерфейса
+    check("_after_telegram_login" in gui, "Результат возвращается в поток интерфейса")
+
+
+def test_exe_build_includes_telethon() -> None:
+    print("\n[Сборка .exe]")
+
+    wf = (BASE.parent / ".github" / "workflows" / "build-exe.yml").read_text(encoding="utf-8")
+    check("--collect-all telethon" in wf,
+          "telethon попадает в .exe — иначе в собранной программе входа не будет вовсе")
+    for mod in ("telegram_signals", "telegram_reader", "trading_schedule"):
+        check(f"--hidden-import {mod}" in wf, f"{mod} виден сборщику")
+
+    req = (APP / "requirements.txt").read_text(encoding="utf-8")
+    check("telethon" in req.lower(), "telethon есть в requirements.txt")
+
+
 def test_sources_tab() -> None:
     print("\n[Вкладка «Источники» — одно место для выключателей]")
 
@@ -411,6 +651,12 @@ def main() -> int:
     test_no_dangerous_code()
     test_wiring()
     test_sources_tab()
+    test_login_calls()
+    test_login_runs_end_to_end()
+    test_login_preflight_rules()
+    test_error_messages()
+    test_login_not_on_gui_thread()
+    test_exe_build_includes_telethon()
     test_reader_preflight()
 
     print("\n" + "=" * 62)

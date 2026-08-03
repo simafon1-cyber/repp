@@ -65,23 +65,77 @@ def credentials():
     return api_id, str(api_hash or "")
 
 
-def preflight() -> str:
-    """Проверяет, можно ли вообще запускаться. Возвращает "" если всё в
-    порядке, иначе понятную человеку причину отказа."""
-    if not tgs.enabled():
-        return "Telegram выключен в настройках (TELEGRAM_ENABLED = False)."
+def login_preflight() -> str:
+    """Что нужно ИМЕННО ДЛЯ ВХОДА. Возвращает "" если всё готово.
+
+    Намеренно НЕ требует TELEGRAM_ENABLED и списка источников: войти логично
+    до того, как включать чтение, и раньше эта проверка отказывала человеку,
+    который просто нажал «Войти в Telegram» первым делом."""
     api_id, api_hash = credentials()
     if not api_id or not api_hash:
-        return ("Не заданы api_id / api_hash. Их выдают бесплатно на "
-                "https://my.telegram.org -> API development tools.")
-    if not sources():
-        return "Не указано ни одного источника (TELEGRAM_SOURCES)."
+        return ("Не заданы api_id / api_hash. Впишите их на вкладке «Источники». "
+                "Выдают бесплатно на https://my.telegram.org -> API development tools.")
     # find_spec, а не import: проверить наличие библиотеки нужно, а тащить её
-    # в память на каждый вызов preflight() — нет.
+    # в память на каждый вызов — нет.
     if importlib.util.find_spec("telethon") is None:
         return ("Не установлена библиотека telethon. Установите её командой: "
                 "pip install telethon")
     return ""
+
+
+def preflight() -> str:
+    """Что нужно для ЧТЕНИЯ сообщений в фоне."""
+    if not tgs.enabled():
+        return "Telegram выключен в настройках (TELEGRAM_ENABLED = False)."
+    problem = login_preflight()
+    if problem:
+        return problem
+    if not sources():
+        return "Не указано ни одного источника (TELEGRAM_SOURCES)."
+    return ""
+
+
+def explain_error(exc: Exception) -> str:
+    """Ошибку Telethon — в понятную фразу.
+
+    Без этого человек видел английское имя класса исключения и не мог понять,
+    что именно от него хотят."""
+    name = type(exc).__name__
+    text = str(exc)
+
+    known = {
+        "PhoneNumberInvalidError":
+            "Неверный номер телефона. Нужен международный формат, например +79991234567.",
+        "PhoneNumberBannedError":
+            "Этот номер заблокирован в Telegram.",
+        "PhoneCodeInvalidError":
+            "Неверный код подтверждения. Проверьте и попробуйте ещё раз.",
+        "PhoneCodeExpiredError":
+            "Код устарел — Telegram даёт на ввод ограниченное время. Начните вход заново.",
+        "SessionPasswordNeededError":
+            "У аккаунта включена двухфакторная защита — нужен облачный пароль Telegram.",
+        "PasswordHashInvalidError":
+            "Неверный пароль двухфакторной защиты.",
+        "ApiIdInvalidError":
+            "Неверные api_id / api_hash. Проверьте их на my.telegram.org.",
+        "AuthKeyDuplicatedError":
+            "Файл сессии использовался на другом компьютере. Удалите telegram_session "
+            "рядом с программой и войдите заново.",
+    }
+    if name in known:
+        return known[name]
+    if name == "FloodWaitError":
+        seconds = getattr(exc, "seconds", 0)
+        return (f"Telegram временно ограничил попытки входа. Подождите "
+                f"{seconds // 60 + 1} мин и попробуйте снова.")
+    if isinstance(exc, TypeError) and "awaitable" in text:
+        # Ровно та ошибка, из-за которой вход не работал вовсе: результат
+        # client.start() оборачивался в run_until_complete второй раз.
+        return ("Внутренняя ошибка запуска Telegram-клиента. Обновите программу "
+                "до последней версии.")
+    if isinstance(exc, (OSError, ConnectionError)):
+        return f"Нет связи с Telegram: {text}"
+    return f"{name}: {text}" if text else name
 
 
 def _run():
@@ -94,7 +148,9 @@ def _run():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    client = TelegramClient(session_path(), api_id, api_hash, loop=loop)
+    # loop= не передаём: параметр объявлен устаревшим, клиент сам берёт
+    # текущий цикл событий потока.
+    client = TelegramClient(session_path(), api_id, api_hash)
 
     @client.on(events.NewMessage(chats=sources()))
     async def handler(event):                       # pragma: no cover - нужен живой Telegram
@@ -117,7 +173,10 @@ def _run():
             tgs.set_status(False, "Вход не выполнен — запустите вход по номеру телефона "
                                   "(кнопка «Войти в Telegram» на вкладке «Сигналы»).")
             log.warning("Telegram: сессия не авторизована — чтение не запущено.")
-            loop.run_until_complete(client.disconnect())
+            # disconnect() без обёртки: цикл сейчас НЕ запущен, поэтому
+            # Telethon крутит его сам и возвращает None — обернуть значило бы
+            # получить run_until_complete(None) и TypeError.
+            client.disconnect()
             return
 
         tgs.set_status(True, f"Подключено. Источники: {', '.join(sources())}")
@@ -126,9 +185,9 @@ def _run():
         while not _stop.is_set():
             loop.run_until_complete(asyncio.sleep(1))
 
-        loop.run_until_complete(client.disconnect())
+        client.disconnect()
     except Exception as e:
-        tgs.set_status(False, f"Ошибка подключения: {e}")
+        tgs.set_status(False, explain_error(e))
         log.warning("Telegram: чтение остановлено из-за ошибки: %s", e)
     finally:
         tgs.set_status(False, "Отключено")
@@ -166,11 +225,16 @@ def login(phone: str, code_callback, password_callback=None) -> str:
 
     code_callback() должен вернуть код, который Telegram пришлёт в приложение;
     password_callback() — пароль двухфакторной защиты, если он включён.
+
+    ВЫЗЫВАТЬ ИЗ ФОНОВОГО ПОТОКА. Функция блокирует поток на всё время входа —
+    включая ожидание, пока человек введёт код. Если запустить её в потоке
+    интерфейса, окно замрёт и диалог ввода кода может не показаться вовсе.
+
     Отдельная функция, а не часть start(): просить код посреди запуска
     торгового цикла, где никто его не увидит, — верный способ получить
     зависший запуск."""
-    problem = preflight()
-    if problem and "Вход" not in problem:
+    problem = login_preflight()
+    if problem:
         return problem
 
     import asyncio
@@ -180,17 +244,29 @@ def login(phone: str, code_callback, password_callback=None) -> str:
     api_id, api_hash = credentials()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    client = TelegramClient(session_path(), api_id, api_hash, loop=loop)
-    try:
-        loop.run_until_complete(client.start(
+    client = TelegramClient(session_path(), api_id, api_hash)
+
+    async def do_login():
+        # ВАЖНО: и start(), и disconnect() у Telethon двухрежимные — если цикл
+        # событий НЕ запущен, они сами его крутят и возвращают уже готовый
+        # результат, а не корутину. Раньше здесь стояло
+        # loop.run_until_complete(client.start(...)), и внутрь попадал уже
+        # объект клиента -> TypeError "a coroutine or an awaitable is required".
+        # Вход не работал НИКОГДА. Внутри async-функции цикл запущен, поэтому
+        # start() отдаёт корутину и await корректен.
+        await client.start(
             phone=lambda: phone,
             code_callback=code_callback,
             password=password_callback or (lambda: ""),
-        ))
-        loop.run_until_complete(client.disconnect())
+        )
+        await client.disconnect()
+
+    try:
+        loop.run_until_complete(do_login())
         return ""
     except Exception as e:
-        return f"Не удалось войти: {e}"
+        log.warning("Telegram: вход не удался: %s: %s", type(e).__name__, e)
+        return explain_error(e)
     finally:
         try:
             loop.close()
