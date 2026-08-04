@@ -159,6 +159,35 @@ _SECRET_STR_FIELDS = (
 )
 
 
+def is_locked(value) -> bool:
+    """Значение ЕЩЁ ЗАШИФРОВАНО, то есть пользоваться им нельзя.
+
+    Так выглядит секрет, который лежит в config.py как "enc:...", но не был
+    расшифрован в этой сессии: unlock_config() вызывается только когда есть
+    пароль входа, а по умолчанию REQUIRE_LOGIN = False и программа открывается
+    без него. Отправить такую строку туда, где ждут настоящий ключ, — это
+    гарантированный отказ с сообщением, которое уводит совсем не в ту сторону
+    ("нужен токен", хотя токен есть). Поэтому каждое место, которое СОБИРАЕТСЯ
+    воспользоваться секретом, обязано сначала спросить здесь."""
+    return isinstance(value, str) and value.startswith(ENC_PREFIX)
+
+
+def locked_fields(cfg_module) -> list:
+    """Имена секретов, которые сейчас недоступны (лежат зашифрованными, а
+    расшифровать нечем). Нужно, чтобы сказать это человеку ОДИН раз и по
+    делу, а не выдавать по отдельной непонятной ошибке из каждого модуля."""
+    names = []
+    for field in _SECRET_STR_FIELDS:
+        if is_locked(getattr(cfg_module, field, "")):
+            names.append(field)
+    raw_news = getattr(cfg_module, "NEWS_API_KEYS", {}) or {}
+    if isinstance(raw_news, dict):
+        for key, value in raw_news.items():
+            if is_locked(value):
+                names.append(f"NEWS_API_KEYS[{key}]")
+    return names
+
+
 def unlock_config(cfg_module, password: str):
     """Расшифровывает секреты config.py ПРЯМО В ПАМЯТИ модуля (на время работы
     процесса) — на диске они остаются зашифрованными. Нужно вызывать один раз

@@ -49,6 +49,7 @@ import urllib.error
 import urllib.request
 
 import config as cfg
+import secure_store
 
 log = logging.getLogger("cloud_journal")
 
@@ -79,11 +80,27 @@ def branch() -> str:
     return str(getattr(cfg, "JOURNAL_BRANCH", "") or "main").strip() or "main"
 
 
+def token_locked() -> bool:
+    """Токен сохранён, но в этой сессии не расшифрован (программа открылась
+    без пароля входа) — пользоваться им нельзя."""
+    return secure_store.is_locked(
+        str(getattr(cfg, "JOURNAL_TOKEN", "") or "").strip())
+
+
 def token() -> str:
     """Токен с правом ЗАПИСИ. Отдельный от токена обновлений: тому хватает
     чтения, и смешивать их — значит без нужды дать право записи туда, где оно
-    не требуется."""
-    return str(getattr(cfg, "JOURNAL_TOKEN", "") or "").strip()
+    не требуется.
+
+    Зашифрованную строку не отдаём: она уходила бы в заголовок Authorization,
+    GitHub отвечал бы 401, а причина выглядела бы как «нет прав на запись»
+    вместо настоящей — «секрет не расшифрован». В отличие от обновления, здесь
+    работать без токена нельзя вовсе: запись в репозиторий всегда требует прав,
+    открытый он или нет."""
+    raw = str(getattr(cfg, "JOURNAL_TOKEN", "") or "").strip()
+    if secure_store.is_locked(raw):
+        return ""
+    return raw
 
 
 def folder() -> str:
@@ -120,6 +137,10 @@ def ready() -> tuple:
         return False, ("Не указан репозиторий. Впишите его в виде "
                        "владелец/название на вкладке «Система».")
     if not token():
+        if token_locked():
+            return False, ("Токен GitHub сохранён, но не расшифрован: программа "
+                           "открылась без пароля входа. Либо войдите с паролем, "
+                           "либо впишите токен заново на вкладке «Система».")
         return False, ("Не указан токен GitHub с правом записи (Contents: "
                        "Read and write). Без него выкладывать некуда.")
     return True, ""

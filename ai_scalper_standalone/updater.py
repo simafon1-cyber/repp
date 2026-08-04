@@ -67,6 +67,7 @@ import urllib.request
 import zipfile
 
 import config as cfg
+import secure_store
 
 log = logging.getLogger("updater")
 
@@ -151,8 +152,48 @@ def branch() -> str:
     return configured or repo_default_branch()
 
 
+def token_locked() -> bool:
+    """Токен сохранён, но в этой сессии не расшифрован (программа открылась
+    без пароля входа). Пользоваться им нельзя — см. secure_store.is_locked."""
+    return secure_store.is_locked(
+        str(getattr(cfg, "UPDATE_TOKEN", "") or "").strip())
+
+
 def token() -> str:
-    return str(getattr(cfg, "UPDATE_TOKEN", "") or "").strip()
+    """Токен для GitHub — только если им действительно можно пользоваться.
+
+    Зашифрованную строку сюда пропускать нельзя: она уходила в заголовок
+    Authorization, GitHub отвечал 401, а человек читал «нужен токен GitHub» —
+    хотя токен у него как раз был. Пустая строка честнее: без заголовка
+    ОТКРЫТЫЙ репозиторий читается прекрасно, а для закрытого мы отдельно
+    объясним настоящую причину (см. auth_hint)."""
+    raw = str(getattr(cfg, "UPDATE_TOKEN", "") or "").strip()
+    if secure_store.is_locked(raw):
+        return ""
+    return raw
+
+
+# Токен был, но GitHub его не принял, а без токена всё получилось — значит
+# репозиторий открытый и токен вообще не нужен. Показываем это в интерфейсе:
+# молча игнорировать настройку пользователя нельзя.
+_token_ignored = {"value": False}
+
+
+def token_was_ignored() -> bool:
+    return _token_ignored["value"]
+
+
+def auth_hint() -> str:
+    """Настоящая причина отказа по правам — словами, а не «нужен токен»."""
+    if token_locked():
+        return ("Токен GitHub сохранён, но не расшифрован: программа открылась "
+                "без пароля входа. Либо войдите с паролем, либо впишите токен "
+                "заново на вкладке «Система» и нажмите «Сохранить».")
+    if not token():
+        return ("Токен GitHub не задан. Для ОТКРЫТОГО репозитория он и не "
+                "нужен; для закрытого — обязателен (права Contents: Read-only).")
+    return ("Токен GitHub не принят: возможно, истёк, отозван или выдан не на "
+            "этот репозиторий.")
 
 
 def current_version() -> str:
@@ -166,13 +207,37 @@ def app_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
-def _request(url: str, accept: str = "application/vnd.github+json", timeout: int = 20):
-    """Запрос к GitHub с токеном, если он задан."""
+def _open(url: str, accept: str, timeout: int, use_token: bool):
     headers = {"Accept": accept, "User-Agent": "AI-Scalper-Updater"}
-    if token():
+    if use_token and token():
         headers["Authorization"] = f"Bearer {token()}"
     req = urllib.request.Request(url, headers=headers)
     return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _request(url: str, accept: str = "application/vnd.github+json", timeout: int = 20):
+    """Запрос к GitHub с токеном, если он задан и пригоден.
+
+    Если токен есть, но GitHub его не принял (401/403) — пробуем ТОТ ЖЕ запрос
+    без токена. Для открытого репозитория это срабатывает: чтение публичных
+    файлов не требует никаких прав, а неверный заголовок Authorization ломает
+    даже их. Без этого одна испорченная настройка (истёкший токен, опечатка,
+    нерасшифрованная строка) намертво останавливала обновление программы,
+    которому токен вообще не был нужен. Если и без токена отказ — репозиторий
+    действительно закрытый, отдаём исходную ошибку про права."""
+    try:
+        return _open(url, accept, timeout, use_token=True)
+    except urllib.error.HTTPError as e:
+        if e.code not in (401, 403) or not token():
+            raise
+        try:
+            response = _open(url, accept, timeout, use_token=False)
+        except urllib.error.HTTPError:
+            raise e
+        _token_ignored["value"] = True
+        log.warning("GitHub не принял токен, но репозиторий открывается и без "
+                    "него — продолжаю без токена (%s)", url)
+        return response
 
 
 def explain_error(exc: Exception) -> str:
@@ -184,8 +249,7 @@ def explain_error(exc: Exception) -> str:
                     "«Ветка» пустым, чтобы программа сама взяла главную ветку "
                     "репозитория. Для закрытого репозитория нужен токен.")
         if exc.code in (401, 403):
-            return ("Нет доступа к репозиторию. Для закрытого нужен токен GitHub "
-                    "с правом Contents: Read-only.")
+            return "Нет доступа к репозиторию. " + auth_hint()
         if exc.code == 429:
             return "GitHub временно ограничил число запросов. Попробуйте позже."
         return f"GitHub ответил ошибкой {exc.code}."
@@ -469,12 +533,29 @@ class _DropAuthOnRedirect(urllib.request.HTTPRedirectHandler):
         return new_req
 
 
-def _open_binary(url: str, accept: str, timeout: int = 300):
+def _open_binary_once(url: str, accept: str, timeout: int, use_token: bool):
     headers = {"Accept": accept, "User-Agent": "AI-Scalper-Updater"}
-    if token():
+    if use_token and token():
         headers["Authorization"] = f"Bearer {token()}"
     opener = urllib.request.build_opener(_DropAuthOnRedirect)
     return opener.open(urllib.request.Request(url, headers=headers), timeout=timeout)
+
+
+def _open_binary(url: str, accept: str, timeout: int = 300):
+    """Скачивание файла. Тот же запасной путь, что и у _request: непринятый
+    токен не должен мешать скачать то, что и так лежит открыто."""
+    try:
+        return _open_binary_once(url, accept, timeout, use_token=True)
+    except urllib.error.HTTPError as e:
+        if e.code not in (401, 403) or not token():
+            raise
+        try:
+            response = _open_binary_once(url, accept, timeout, use_token=False)
+        except urllib.error.HTTPError:
+            raise e
+        _token_ignored["value"] = True
+        log.warning("GitHub не принял токен при скачивании — продолжаю без него (%s)", url)
+        return response
 
 
 def download_binary(url: str, destination: str, accept: str,

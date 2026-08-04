@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import io
+import json
 import os
 import sys
 import tempfile
@@ -412,6 +413,175 @@ class FakeResponse:
         self.url = url
 
 
+def test_locked_token_is_never_sent() -> None:
+    """Реальная жалоба владельца: «Нет доступа к репозиторию. Для закрытого
+    нужен токен GitHub» — при том, что токен у него как раз БЫЛ вписан.
+
+    Причина: по умолчанию REQUIRE_LOGIN=False, программа открывается без
+    пароля входа, и secure_store.unlock_config() не вызывается вовсе. Токен
+    остаётся в памяти строкой "enc:gAAAAAB..." — и ровно в таком виде уходил
+    в заголовок Authorization. GitHub отвечал 401, а текст ошибки уводил в
+    противоположную сторону: «нужен токен», хотя нужен был не токен, а
+    пароль входа."""
+    print("\n[Зашифрованный токен не уходит в GitHub]")
+    import secure_store as ss
+
+    saved = CFG.UPDATE_TOKEN
+    try:
+        CFG.UPDATE_TOKEN = ss.encrypt_value("настоящий-токен", "пароль", "aabb")
+        check(ss.is_locked(CFG.UPDATE_TOKEN) is True,
+              "Строка опознана как ещё зашифрованная")
+        check(up.token_locked() is True, "Обновление видит, что токен недоступен")
+        check(up.token() == "",
+              "Наружу отдаётся ПУСТО, а не зашифрованная строка", repr(up.token()))
+
+        hint = up.auth_hint()
+        check("не расшифрован" in hint,
+              "Причина названа настоящая, а не «нужен токен»", hint)
+        check("парол" in hint.lower(), "Сказано, что делать", hint)
+
+        # Обычный (расшифрованный) токен по-прежнему используется как есть
+        CFG.UPDATE_TOKEN = "github_pat_ОБЫЧНЫЙ"
+        check(up.token_locked() is False, "Обычный токен не считается запертым")
+        check(up.token() == "github_pat_ОБЫЧНЫЙ", "И передаётся как есть")
+    finally:
+        CFG.UPDATE_TOKEN = saved
+
+
+def test_bad_token_falls_back_to_no_token() -> None:
+    """Открытый репозиторий читается вообще без прав, но НЕВЕРНЫЙ заголовок
+    Authorization ломает даже его. Значит одна испорченная настройка (истёкший
+    токен, опечатка, нерасшифрованная строка) намертво останавливала
+    обновление, которому токен был не нужен. Проверяем запасной путь."""
+    print("\n[Непринятый токен не блокирует открытый репозиторий]")
+
+    class _Json:
+        """Мини-заглушка ответа urllib: `with _request(...) as r: r.read()`."""
+
+        def __init__(self, payload):
+            self._body = json.dumps(payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return self._body
+
+    saved_open = up._open
+    saved_token = CFG.UPDATE_TOKEN
+    up._token_ignored["value"] = False
+    try:
+        CFG.UPDATE_TOKEN = "истёкший-токен"
+        attempts = []
+
+        def fake(url, accept, timeout, use_token):
+            attempts.append(use_token)
+            if use_token:
+                raise urllib.error.HTTPError(url, 401, "Bad credentials", None, None)
+            return _Json({"default_branch": "рабочая-ветка"})
+
+        up._open = fake
+        data = b""
+        try:
+            with up._request("https://api.github.com/repos/o/r") as response:
+                data = response.read()
+        except urllib.error.HTTPError as e:
+            check(False, "Ответ всё-таки получен",
+                  f"вместо запасной попытки без токена пришла ошибка {e.code}")
+        check(b"default_branch" in data, "Ответ всё-таки получен")
+        check(attempts == [True, False],
+              "Сначала с токеном, потом без него — именно в таком порядке",
+              str(attempts))
+        check(up.token_was_ignored() is True,
+              "Факт игнорирования токена запомнен — покажем человеку")
+
+        # ЗАКРЫТЫЙ репозиторий: без токена тоже отказ -> отдаём ИСХОДНУЮ причину
+        up._token_ignored["value"] = False
+
+        def fake_private(url, accept, timeout, use_token):
+            raise urllib.error.HTTPError(url, 401 if use_token else 404,
+                                         "no", None, None)
+
+        up._open = fake_private
+        try:
+            up._request("https://api.github.com/repos/o/r")
+            check(False, "Закрытый репозиторий обязан вернуть ошибку")
+        except urllib.error.HTTPError as e:
+            check(e.code == 401,
+                  "Отдана исходная ошибка про права (401), а не 404 от второй попытки",
+                  str(e.code))
+        check(up.token_was_ignored() is False,
+              "Ложного «токен не нужен» при закрытом репозитории нет")
+
+        # Без токена вовсе второй попытки быть не должно
+        CFG.UPDATE_TOKEN = ""
+        attempts.clear()
+
+        def fake_404(url, accept, timeout, use_token):
+            attempts.append(use_token)
+            raise urllib.error.HTTPError(url, 403, "no", None, None)
+
+        up._open = fake_404
+        try:
+            up._request("https://api.github.com/repos/o/r")
+        except urllib.error.HTTPError:
+            pass
+        check(attempts == [True],
+              "Токена нет — повторять нечего, лишнего запроса не делаем",
+              str(attempts))
+    finally:
+        up._open = saved_open
+        CFG.UPDATE_TOKEN = saved_token
+        up._token_ignored["value"] = False
+
+
+def test_journal_reports_locked_token() -> None:
+    """У журнала запасного пути нет — запись в репозиторий требует прав всегда.
+    Значит он обязан хотя бы назвать НАСТОЯЩУЮ причину."""
+    print("\n[Журнал в облаке объясняет запертый токен]")
+    import cloud_journal as cj
+    import secure_store as ss
+
+    saved = (CFG.JOURNAL_CLOUD_ENABLED, CFG.JOURNAL_REPO, CFG.JOURNAL_TOKEN)
+    try:
+        CFG.JOURNAL_CLOUD_ENABLED = True
+        CFG.JOURNAL_REPO = "owner/repo"
+        CFG.JOURNAL_TOKEN = ss.encrypt_value("токен-записи", "пароль", "aabb")
+        check(cj.token_locked() is True, "Журнал видит запертый токен")
+        check(cj.token() == "", "И не отправляет зашифрованную строку")
+        ok, reason = cj.ready()
+        check(ok is False, "Выгрузка не начинается")
+        check("не расшифрован" in reason,
+              "Причина настоящая, а не «токен не указан»", reason)
+    finally:
+        (CFG.JOURNAL_CLOUD_ENABLED, CFG.JOURNAL_REPO, CFG.JOURNAL_TOKEN) = saved
+
+
+def test_locked_fields_are_listed() -> None:
+    print("\n[Программа знает полный список недоступных секретов]")
+    import secure_store as ss
+
+    probe = types.ModuleType("probe")
+    probe.SECURITY_SALT = "aabb"
+    enc = ss.encrypt_value("x", "пароль", "aabb")
+    probe.MT5_PASSWORD = enc
+    probe.UPDATE_TOKEN = enc
+    probe.ANTHROPIC_API_KEY = "обычный-ключ"
+    probe.NEWS_API_KEYS = {"finnhub": enc, "other": "открытый"}
+
+    locked = ss.locked_fields(probe)
+    check("MT5_PASSWORD" in locked, "Пароль MT5 попал в список")
+    check("UPDATE_TOKEN" in locked, "Токен обновления попал в список")
+    check("ANTHROPIC_API_KEY" not in locked, "Расшифрованный ключ не попал")
+    check("NEWS_API_KEYS[finnhub]" in locked, "Ключ новостей внутри словаря найден")
+    check("NEWS_API_KEYS[other]" not in locked, "Открытый ключ новостей не попал")
+    check(ss.locked_fields(types.ModuleType("empty")) == [],
+          "Пустой конфиг — пустой список")
+
+
 def test_token_not_sent_to_storage() -> None:
     print("\n[Токен GitHub не уходит на сторонний сервер]")
     handler = up._DropAuthOnRedirect()
@@ -501,6 +671,10 @@ def main() -> int:
     test_not_during_open_positions()
     test_auto_apply_off_by_default()
 
+    test_locked_token_is_never_sent()
+    test_bad_token_falls_back_to_no_token()
+    test_journal_reports_locked_token()
+    test_locked_fields_are_listed()
     test_token_not_sent_to_storage()
 
     test_build_request_needs_token()
