@@ -381,12 +381,25 @@ def test_not_during_open_positions() -> None:
 
 
 def test_auto_apply_off_by_default() -> None:
-    print("\n[Само ничего не ставится, пока не разрешили]")
+    """Проверка обновления включена "из коробки" (UPDATE_ENABLED=True,
+    UPDATE_REPO заполнен) — программа всегда обновляется сама собой из того
+    репозитория, откуда приехала, вписывать ничего не нужно. Это безопасно,
+    потому что означает только "проверить", а не "поставить без спроса": для
+    установки нужна ЛИБО отдельная галочка UPDATE_AUTO_APPLY (по умолчанию
+    выключена), ЛИБО явное согласие в диалоге."""
+    print("\n[Проверка включена по умолчанию, установка — только с согласия]")
     fresh = types.ModuleType("fresh")
     exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
-    check(fresh.UPDATE_ENABLED is False, "Обновление выключено по умолчанию")
+    check(fresh.UPDATE_ENABLED is True,
+          "Проверка обновлений включена по умолчанию")
+    check(fresh.UPDATE_REPO == "simafon1-cyber/repp",
+          "Репозиторий заполнен по умолчанию — свой репозиторий программы",
+          fresh.UPDATE_REPO)
+    check(fresh.UPDATE_BRANCH == "",
+          "Ветка по умолчанию пустая — определяется автоматически",
+          fresh.UPDATE_BRANCH)
     check(fresh.UPDATE_AUTO_APPLY is False,
-          "Автоустановка выключена по умолчанию")
+          "Автоустановка выключена по умолчанию — включённой проверки для этого мало")
     check(fresh.UPDATE_REQUEST_BUILD is False,
           "Заказ сборки выключен по умолчанию")
 

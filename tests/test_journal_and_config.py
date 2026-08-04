@@ -213,6 +213,70 @@ def test_config_migrate_clears_stale_update_branch() -> None:
               "Без UPDATE_BRANCH в файле — миграции ветки просто нечего делать")
 
 
+def test_config_migrate_defaults_update_repo() -> None:
+    """«Пропиши все по умолчанию»: полностью нетронутая настройка обновления
+    (UPDATE_REPO="" и UPDATE_ENABLED=False — оба на старом заводском значении)
+    получает репозиторий программы и включённую проверку сама, без ручного
+    ввода. Если человек уже что-то настроил сам (свой репозиторий или явно
+    выключил проверку) — миграция не имеет права это перезаписать."""
+    print("\n[Обновление настраивается по умолчанию само]")
+
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text(
+            'UPDATE_ENABLED = False\nUPDATE_REPO = ""\nOTHER_SETTING = 1\n',
+            encoding="utf-8")
+        applied = cm.apply_one_time(config_path)
+        check(any("самообновление включено" in a for a in applied),
+              "Миграция отработала", str(applied))
+
+        after = types.ModuleType("after")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        check(after.UPDATE_REPO == "simafon1-cyber/repp",
+              "Репозиторий заполнен сам", after.UPDATE_REPO)
+        check(after.UPDATE_ENABLED is True, "Проверка включена сама")
+        check(after.OTHER_SETTING == 1, "Посторонняя настройка не тронута")
+
+        before = Path(config_path).read_text(encoding="utf-8")
+        cm.apply_one_time(config_path)
+        check(Path(config_path).read_text(encoding="utf-8") == before,
+              "Повторный запуск идемпотентен")
+
+    # Свой репозиторий — не трогаем, даже если проверка выключена
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text(
+            'UPDATE_ENABLED = False\nUPDATE_REPO = "кто-то/чужой-форк"\n',
+            encoding="utf-8")
+        cm.apply_one_time(config_path)
+        after = types.ModuleType("after2")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        check(after.UPDATE_REPO == "кто-то/чужой-форк",
+              "Чужой репозиторий не переписан", after.UPDATE_REPO)
+
+    # Репозиторий уже стоит правильный — галочку включённости не трогаем,
+    # даже если она сейчас False (явный сознательный выбор пользователя)
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text(
+            'UPDATE_ENABLED = False\nUPDATE_REPO = "simafon1-cyber/repp"\n',
+            encoding="utf-8")
+        cm.apply_one_time(config_path)
+        after = types.ModuleType("after3")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        check(after.UPDATE_ENABLED is False,
+              "Осознанно выключенную проверку миграция не включает обратно")
+
+    # Отсутствие настроек вовсе (совсем старый файл) не роняет миграцию
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text('X = 1\n', encoding="utf-8")
+        applied = cm.apply_one_time(config_path)
+        check(any("самообновление включено" in a for a in applied),
+              "Совсем старый файл (без UPDATE_*) тоже получает значения по умолчанию",
+              str(applied))
+
+
 def test_config_migrate_widens_stale_stop_loss() -> None:
     """Владелец: «сделай стоп лосс больше, очень много убытка».
 
@@ -1149,6 +1213,7 @@ def main() -> int:
     test_config_migrate_adds_missing()
     test_config_migrate_never_overwrites()
     test_config_migrate_clears_stale_update_branch()
+    test_config_migrate_defaults_update_repo()
     test_config_migrate_widens_stale_stop_loss()
     test_config_migrate_does_not_touch_customized_stop_loss()
     test_config_migrate_fresh_example_needs_no_stop_loss_migration()

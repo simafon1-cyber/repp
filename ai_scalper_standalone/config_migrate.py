@@ -357,6 +357,44 @@ def _widen_stop_floor(text: str, existing: dict) -> tuple:
     return text, note
 
 
+def _default_update_repo(text: str, existing: dict) -> tuple:
+    """Одноразово включает самообновление "из коробки": программа всегда
+    обновляется САМА СОБОЙ из репозитория, в котором живёт её код, — вписывать
+    владельца/название и включать галочку вручную не нужно.
+
+    Условная правка (не входит в ONE_TIME): трогает UPDATE_REPO/UPDATE_ENABLED,
+    только если ОБА до сих пор на старом заводском значении ("" и False) —
+    это единственный надёжный признак, что настройку обновления вообще никто
+    не открывал. Если человек уже вписал свой репозиторий (пусть даже с
+    опечаткой) или явно включил/выключил проверку — это его осознанный выбор,
+    и трогать нельзя ни в одном из полей."""
+    marker = "MIGRATED_DEFAULT_UPDATE_REPO"
+    if marker in existing:
+        return text, ""
+
+    def _current(name, fallback):
+        node = existing.get(name)
+        if node is None:
+            return fallback
+        value_node = node["value"]
+        if isinstance(value_node, ast.Constant):
+            return value_node.value
+        return fallback
+
+    repo_untouched = _current("UPDATE_REPO", "") == ""
+    enabled_untouched = _current("UPDATE_ENABLED", False) is False
+    if not (repo_untouched and enabled_untouched):
+        return text, ""
+
+    text = _replace_or_append(text, "UPDATE_REPO", repr("simafon1-cyber/repp"))
+    text = _replace_or_append(text, "UPDATE_ENABLED", repr(True))
+    note = ("самообновление включено по умолчанию: программа сама проверяет "
+           "новую версию в simafon1-cyber/repp — вписывать репозиторий и "
+           "включать галочку вручную больше не нужно")
+    text = text.rstrip("\n") + f"\n\n# {note}\n{marker} = True\n"
+    return text, note
+
+
 def apply_one_time(config_path: str = "") -> list:
     """Применить одноразовые изменения из ONE_TIME. Возвращает пояснения к тем,
     что реально применились."""
@@ -380,6 +418,11 @@ def apply_one_time(config_path: str = "") -> list:
     text, branch_note = _clear_stale_update_branch(text, existing)
     if branch_note:
         applied.append(branch_note)
+
+    existing = _top_level_assignments(text)
+    text, repo_note = _default_update_repo(text, existing)
+    if repo_note:
+        applied.append(repo_note)
 
     # Стоп-лосс расширяется в config.py, УЖЕ существующем у пользователя.
     # RISK_PROFILES и MIN_SL_* не входят в generic-миграцию выше (RISK_PROFILES
