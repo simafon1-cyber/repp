@@ -363,7 +363,7 @@ input double TrailingATRMultiplier  = 1.2;    // Множитель ATR для �
 input double TrailingMinPoints      = 40;     // Мин. дистанция трейлинга, пунктов
 input double TrailingStepMinPoints  = 5;      // Не двигать SL, если сдвиг меньше этого (меньше нагрузки на сервер)
 
-input bool   UsePartialClose        = false;  // ВКЛ частичное закрытие при достижении профита
+input bool   UsePartialClose        = true;   // ВКЛ частичное закрытие при достижении профита (нужен лот от 0.02)
 input double PartialCloseTriggerPoints = 150; // Профит для частичного закрытия, пунктов
 input double PartialClosePercent    = 50;     // % объёма, закрываемого частично
 

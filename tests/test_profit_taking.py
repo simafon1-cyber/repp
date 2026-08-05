@@ -568,6 +568,114 @@ def test_end_to_end() -> None:
 # =====================================================================
 # 7. Выученное переживает перезапуск программы
 # =====================================================================
+def test_partial_close() -> None:
+    """Владелец: «пусть ещё делает частичное закрытие сделок для большей
+    фиксации дохода».
+
+    Механизм в программе был, но выключен. Включаем — и сразу проверяем
+    честность: при минимальном лоте 0.01 половина это 0.005, такого объёма
+    у брокера не существует. Молча ничего не делать здесь нельзя: человек
+    будет ждать фиксации, которой физически не может произойти."""
+    print("\n[Частичное закрытие: фиксируем половину прибыли]")
+
+    import MetaTrader5 as mt5
+
+    # Значения по умолчанию берём из ЭТАЛОНА заново: CFG к этому моменту
+    # уже перенастроен предыдущими тестами
+    fresh = types.ModuleType("config_fresh")
+    exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
+    check(fresh.USE_PARTIAL_CLOSE is True,
+          "Частичное закрытие включено по умолчанию")
+    check(0 < fresh.PARTIAL_CLOSE_PERCENT < 100,
+          "Закрывается часть объёма, а не весь и не ноль",
+          str(fresh.PARTIAL_CLOSE_PERCENT))
+
+    saved = {name: getattr(CFG, name) for name in
+             ("LIVE_TRADING", "USE_PARTIAL_CLOSE", "PARTIAL_CLOSE_PERCENT",
+              "PARTIAL_CLOSE_TRIGGER_POINTS", "AUTO_ADAPT_TO_SYMBOL",
+              "USE_BREAK_EVEN", "USE_TRAILING_STOP", "USE_PROFIT_LOCK_TRAILING",
+              "USE_TP_TIGHTEN", "USE_BREAK_EVEN_RESCUE")}
+    saved_info = mt5.symbol_info
+    saved_tick = tm.mt5c.get_tick
+    saved_modify = tm.mt5c.modify_position
+    saved_close = tm.mt5c.close_position_partial
+
+    CFG.LIVE_TRADING = True
+    CFG.USE_PARTIAL_CLOSE = True
+    CFG.PARTIAL_CLOSE_PERCENT = 50
+    CFG.PARTIAL_CLOSE_TRIGGER_POINTS = 100
+    CFG.AUTO_ADAPT_TO_SYMBOL = False
+    for off in ("USE_BREAK_EVEN", "USE_TRAILING_STOP", "USE_PROFIT_LOCK_TRAILING",
+                "USE_TP_TIGHTEN", "USE_BREAK_EVEN_RESCUE"):
+        setattr(CFG, off, False)
+
+    closed: list = []
+    tm.mt5c.modify_position = lambda t, sl, tp: None
+    tm.mt5c.close_position_partial = lambda p, v: (
+        closed.append((p.ticket, round(v, 3))) or
+        types.SimpleNamespace(retcode=mt5.TRADE_RETCODE_DONE))
+
+    def run(volume, vol_min=0.01, vol_step=0.01):
+        """Позиция в плюсе на 150 пунктов при пороге 100."""
+        tm._partial_closed_tickets.clear()
+        tm._partial_impossible_tickets.clear()
+        tm._position_peak_points.clear()
+        tm._position_first_seen.clear()
+        closed.clear()
+        mt5.symbol_info = lambda s: types.SimpleNamespace(
+            trade_stops_level=0, volume_min=vol_min, volume_step=vol_step)
+        run.pos = FakePos(555, True, 2000.0, 1999.0, 0.0, volume=volume)
+        tm.mt5c.get_tick = lambda s: FakeTick(2001.5, 2001.5)
+        tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[run.pos])
+
+    try:
+        # Лот 0.10 — половина (0.05) закрывается
+        run(0.10)
+        check(closed == [(555, 0.05)],
+              "Половина объёма зафиксирована в плюс", str(closed))
+
+        # Второй раз по той же сделке — не закрываем: один раз за сделку
+        before = list(closed)
+        tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[run.pos])
+        check(closed == before, "Повторно ту же сделку не режем", str(closed))
+
+        # Лот 0.03 при шаге 0.01: половина 0.015 округляется вниз до 0.01
+        run(0.03)
+        check(closed == [(555, 0.01)],
+              "Объём округляется вниз до шага брокера", str(closed))
+
+        # ГЛАВНОЕ: минимальный лот 0.01 — закрыть нечего
+        run(0.01)
+        check(closed == [], "Половину минимального лота брокеру не шлём",
+              str(closed))
+        check(555 in tm._partial_impossible_tickets,
+              "Программа отметила, что закрытие невозможно")
+
+        # ...и сказала об этом ровно один раз, а не на каждом такте
+        source = (APP / "trade_manager.py").read_text(encoding="utf-8")
+        block = source.split("_partial_impossible_tickets.add", 1)[1][:600]
+        check("невозможно" in block, "В логе объяснено, почему не сработало")
+        check("0.02" in block or "vol_min * 2" in block,
+              "Сказано, с какого лота заработает")
+    finally:
+        for name, value in saved.items():
+            setattr(CFG, name, value)
+        mt5.symbol_info = saved_info
+        tm.mt5c.get_tick = saved_tick
+        tm.mt5c.modify_position = saved_modify
+        tm.mt5c.close_position_partial = saved_close
+        tm._partial_closed_tickets.clear()
+        tm._partial_impossible_tickets.clear()
+
+    # Забытые тикеты не копятся: закрытая сделка уходит из обоих наборов
+    tm._partial_impossible_tickets.add(999)
+    tm._partial_closed_tickets.add(999)
+    tm.cleanup_peak_profit(set())
+    check(999 not in tm._partial_impossible_tickets and
+          999 not in tm._partial_closed_tickets,
+          "После закрытия сделки её тикет забывается")
+
+
 def test_learning_persistence() -> None:
     print("\n[Обучение переживает перезапуск]")
 
@@ -726,6 +834,7 @@ def main() -> int:
     test_position_age()
     test_config_params_exist()
     test_end_to_end()
+    test_partial_close()
     test_learning_persistence()
     test_target_never_below_own_risk()
 

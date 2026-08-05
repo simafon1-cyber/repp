@@ -23,6 +23,10 @@ log = logging.getLogger("trade_manager")
 
 _position_peak_points: dict = {}   # ticket -> peak profit, в пунктах
 _partial_closed_tickets: set = set()
+# Тикеты, по которым частичное закрытие включено и порог прибыли пройден, но
+# закрыть нечего: половина минимального лота брокеру не отправляется. Нужен
+# только чтобы написать об этом ОДИН раз на сделку, а не на каждом такте.
+_partial_impossible_tickets: set = set()
 # ticket -> изначальный риск сделки (price_open<->SL при первом же взгляде на
 # позицию, до того как BE/трейлинг/лок успели её подтянуть), в пунктах — она
 # же "1R". См. update_position_risk() и диагноз в manage_open_positions().
@@ -150,6 +154,9 @@ def cleanup_peak_profit(open_tickets: set):
     for ticket in list(_partial_closed_tickets):
         if ticket not in open_tickets:
             _partial_closed_tickets.discard(ticket)
+    for ticket in list(_partial_impossible_tickets):
+        if ticket not in open_tickets:
+            _partial_impossible_tickets.discard(ticket)
     for ticket in list(_position_risk_points.keys()):
         if ticket not in open_tickets:
             _position_risk_points.pop(ticket, None)
@@ -404,7 +411,24 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                 if vol_step > 0:
                     close_volume = math.floor(close_volume / vol_step) * vol_step
                 close_volume = max(0.0, min(p.volume, close_volume))
-                if close_volume >= vol_min and close_volume > 0:
+                if close_volume < vol_min or close_volume <= 0:
+                    # Молчать здесь нельзя. Настройка включена, прибыль до
+                    # порога дошла — а закрытия не будет: половина от
+                    # минимального лота (0.005 при 0.01) брокеру не
+                    # отправишь. Человек будет ждать частичной фиксации,
+                    # которой физически не может произойти. Пишем один раз
+                    # на сделку, чтобы не залить лог повторами.
+                    if p.ticket not in _partial_impossible_tickets:
+                        _partial_impossible_tickets.add(p.ticket)
+                        log.info(
+                            "%s тикет %s: частичное закрытие невозможно — "
+                            "%.0f%% от %.2f лота это %.3f, а брокер принимает "
+                            "не меньше %.2f и шагом %.2f. Заработает при лоте "
+                            "от %.2f (сейчас лот минимальный).",
+                            symbol, p.ticket, close_pct, p.volume,
+                            p.volume * close_pct / 100.0, vol_min, vol_step,
+                            vol_min * 2)
+                elif close_volume >= vol_min and close_volume > 0:
                     if cfg.LIVE_TRADING:
                         result = mt5c.close_position_partial(p, close_volume)
                         if result is not None and result.retcode == mt5c.RETCODE_DONE:
