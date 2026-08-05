@@ -25,6 +25,14 @@ jobs:
     # нужна именно Windows-машина
     runs-on: windows-latest
 
+    # Право записи нужно, чтобы выложить готовый .exe в Releases.
+    # Без Releases единственным местом сборки остаются артефакты Actions,
+    # а их GitHub отдаёт ТОЛЬКО по токену — даже для открытого
+    # репозитория (проверено: список артефактов 200, файл 403). Именно на
+    # это упиралось самообновление у владельца.
+    permissions:
+      contents: write
+
     # Программа лежит в своей папке — все шаги выполняются оттуда
     defaults:
       run:
@@ -129,10 +137,22 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-      - name: Опубликовать в Releases (только для тегов v*)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Опубликовать в Releases
+        # Раньше релиз выпускался ТОЛЬКО по тегу v*, а обычный запуск
+        # (кнопка «Собрать новую версию» в программе, она же Run workflow)
+        # оставлял сборку лежать в артефактах Actions. Скачать её оттуда без
+        # токена нельзя, поэтому самообновление у владельца упиралось в
+        # «нет доступа к репозиторию», хотя репозиторий открытый. Теперь
+        # ЛЮБАЯ сборка попадает в Releases, откуда .exe скачивается обычной
+        # ссылкой без всякого токена.
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: >-
+            ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name
+                || format('build-{0}', github.run_number) }}
+          name: >-
+            ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name
+                || format('Сборка {0}', github.run_number) }}
           files: |
             ai_scalper_standalone/dist/AI_Scalper_Pro.exe
             ai_scalper_standalone/dist/config.py

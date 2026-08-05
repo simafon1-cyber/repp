@@ -685,6 +685,21 @@ def test_artifact_download_explains_real_reason() -> None:
     check(fn.index("latest_release_exe") < fn.index("latest_build_artifact"),
           "Релиз пробуется РАНЬШЕ сборки из Actions")
 
+    # И релиз обязан появляться от ЛЮБОЙ сборки, а не только от тега v*:
+    # иначе кнопка «Собрать новую версию» кладёт результат в артефакты,
+    # откуда программа его без токена не достанет — тот самый тупик
+    workflow = (APP.parent / ".github" / "workflows"
+                / up.BUILD_WORKFLOW).read_text(encoding="utf-8")
+    release_step = workflow.split("Опубликовать в Releases", 1)
+    check(len(release_step) == 2, "Шаг публикации релиза есть")
+    if len(release_step) == 2:
+        step = release_step[1]
+        check("if: startsWith(github.ref, 'refs/tags/v')\n" not in step,
+              "Релиз выпускается не только по тегу v*")
+        check("tag_name" in step, "Имя тега задаётся для любой сборки")
+        check("contents: write" in workflow,
+              "У сборки есть право выложить файл в Releases")
+
 
 def test_update_everything_covers_both() -> None:
     print("\n[Одна кнопка обновляет и советники, и программу]")
