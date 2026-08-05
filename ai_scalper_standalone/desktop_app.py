@@ -274,6 +274,9 @@ ADVANCED_PARAMS = [
 
     ("USE_AUTO_LEARNING", "bool", "Автообучение", "Адаптировать вес AI / порог по винрейту", None),
     ("AUTO_LEARNING_WINDOW", "int", "Автообучение", "Окно последних сделок по символу", None),
+    ("USE_SYMBOL_AUTO_OFF", "bool", "Автообучение", "Отключать инструмент, который стабильно в минусе", None),
+    ("SYMBOL_AUTO_OFF_MIN_TRADES", "int", "Автообучение", "Сколько сделок нужно, прежде чем судить об инструменте", None),
+    ("SYMBOL_AUTO_OFF_LOSS_PERCENT", "float", "Автообучение", "Потерял больше % счёта за окно — отключить инструмент", None),
     ("AUTO_LEARNING_MIN_TRADES", "int", "Автообучение", "Мин. сделок для начала адаптации", None),
     ("AI_WEIGHT_MULT_MIN", "float", "Автообучение", "Мин. множитель веса AI", None),
     ("AI_WEIGHT_MULT_MAX", "float", "Автообучение", "Макс. множитель веса AI", None),

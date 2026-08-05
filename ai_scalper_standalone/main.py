@@ -343,6 +343,15 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     if not rm.trading_allowed(acc_state, sym_state, equity):
         sym_state.last_reject_reason = "Торговля приостановлена (лимит/просадка/пауза)"
         return
+
+    # Инструмент, который стабильно тянет счёт вниз, отключается САМ. Это
+    # не остановка торговли: остальные инструменты работают как обычно —
+    # отсекается ровно тот, который приносит убыток. См. пояснение и живые
+    # числа в auto_learning.symbol_auto_off_reason().
+    auto_off = al.symbol_auto_off_reason(sym_state, equity)
+    if auto_off:
+        sym_state.last_reject_reason = auto_off
+        return
     if rm.count_open_positions(symbol, positions=all_positions) >= profile["max_open_positions"]:
         sym_state.last_reject_reason = "Достигнут лимит одновременных сделок"
         return

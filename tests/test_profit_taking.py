@@ -676,6 +676,101 @@ def test_partial_close() -> None:
           "После закрытия сделки её тикет забывается")
 
 
+def test_symbol_auto_off() -> None:
+    """Владелец: «опять минуса».
+
+    По его настоящему отчёту (148 сделок, депозит 65) видно, откуда они:
+    ОДИН инструмент — золото — дал 85% всех потерь, минус 29.56 за 37
+    сделок, пока остальные пары были в плюсе. Заметить это можно было
+    только вручную по отчёту. Теперь такой инструмент отключается сам."""
+    print("\n[Убыточный инструмент отключается сам]")
+
+    fresh = types.ModuleType("config_fresh")
+    exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
+    check(fresh.USE_SYMBOL_AUTO_OFF is True, "Включено по умолчанию")
+    check(fresh.SYMBOL_AUTO_OFF_MIN_TRADES >= 5,
+          "Судим не по двум сделкам", str(fresh.SYMBOL_AUTO_OFF_MIN_TRADES))
+    check(0 < fresh.SYMBOL_AUTO_OFF_LOSS_PERCENT < 100,
+          "Порог убытка — осмысленная доля счёта",
+          str(fresh.SYMBOL_AUTO_OFF_LOSS_PERCENT))
+
+    saved = {n: getattr(CFG, n, None) for n in
+             ("USE_SYMBOL_AUTO_OFF", "SYMBOL_AUTO_OFF_MIN_TRADES",
+              "SYMBOL_AUTO_OFF_LOSS_PERCENT", "AUTO_LEARNING_WINDOW")}
+    CFG.USE_SYMBOL_AUTO_OFF = True
+    CFG.SYMBOL_AUTO_OFF_MIN_TRADES = 10
+    CFG.SYMBOL_AUTO_OFF_LOSS_PERCENT = 8.0
+    CFG.AUTO_LEARNING_WINDOW = 20
+    try:
+        def state_with(profits):
+            st = SymbolState(symbol="XAUUSD")
+            for value in profits:
+                al.record_trade_result(st, value)
+            return st
+
+        # Мало сделок — не судим, даже если минус огромный
+        few = state_with([-5.0] * 3)
+        check(al.symbol_auto_off_reason(few, 65.0) == "",
+              "Три сделки — рано судить")
+
+        # Ровно случай владельца: золото, минус почти половина счёта
+        gold = state_with([-1.5] * 12)          # −18 при счёте 65 = 27%
+        reason = al.symbol_auto_off_reason(gold, 65.0)
+        check(reason != "", "Инструмент, съевший 27% счёта, отключён")
+        check("возобновится" in reason,
+              "Сказано, что отключение не навсегда", reason)
+        check("Другие инструменты" in reason,
+              "Сказано, что остальные пары работают", reason)
+
+        # Тот же минус на большом счёте — это шум, отключать нечего
+        check(al.symbol_auto_off_reason(gold, 10000.0) == "",
+              "На счёте 10 000 тот же минус ничего не значит")
+
+        # Инструмент в плюсе не трогаем никогда
+        good = state_with([1.0] * 12)
+        check(al.symbol_auto_off_reason(good, 65.0) == "",
+              "Прибыльный инструмент не отключается")
+
+        # Винрейт высокий, но деньги в минусе — отключаем ПО ДЕНЬГАМ:
+        # десять плюсов по 0.2 не перекрывают два минуса по 5
+        tricky = state_with([0.2] * 10 + [-5.0, -5.0])
+        check(al.recent_win_rate(tricky) > 0.5, "Винрейт выше 50% (проверка теста)")
+        check(al.symbol_auto_off_reason(tricky, 65.0) != "",
+              "Судим по деньгам, а не по доле выигрышей")
+
+        # Выключатель работает
+        CFG.USE_SYMBOL_AUTO_OFF = False
+        check(al.symbol_auto_off_reason(gold, 65.0) == "",
+              "Выключенная настройка ничего не отключает")
+        CFG.USE_SYMBOL_AUTO_OFF = True
+
+        # Убытки выпадают из окна — инструмент возвращается сам
+        recovering = state_with([-1.5] * 12)
+        for _ in range(20):
+            al.record_trade_result(recovering, 0.5)
+        check(al.symbol_auto_off_reason(recovering, 65.0) == "",
+              "Старые убытки вышли из окна — торговля возобновилась сама")
+
+        # Ворота стоят в главном цикле, а не только в теории
+        main_src = (APP / "main.py").read_text(encoding="utf-8")
+        check("symbol_auto_off_reason" in main_src,
+              "Проверка вызывается из главного цикла")
+        gate = main_src.split("symbol_auto_off_reason", 1)[1][:250]
+        check("last_reject_reason" in gate and "return" in gate,
+              "Причина видна в интерфейсе, вход отменяется")
+    finally:
+        for name, value in saved.items():
+            if value is not None:
+                setattr(CFG, name, value)
+
+    # Окно денег должно переживать перезапуск, иначе оно всегда пустое
+    learning = (APP / "auto_learning.py").read_text(encoding="utf-8")
+    check('"profits"' in learning.split("def save_learning_state", 1)[1][:800],
+          "Деньги по сделкам сохраняются на диск")
+    check("recent_profits" in learning.split("def load_learning_state", 1)[1],
+          "И восстанавливаются при запуске")
+
+
 def test_learning_persistence() -> None:
     print("\n[Обучение переживает перезапуск]")
 
@@ -835,6 +930,7 @@ def main() -> int:
     test_config_params_exist()
     test_end_to_end()
     test_partial_close()
+    test_symbol_auto_off()
     test_learning_persistence()
     test_target_never_below_own_risk()
 

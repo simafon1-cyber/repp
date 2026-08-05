@@ -70,6 +70,54 @@ def record_trade_result(sym_state, profit: float):
     sym_state.recent_results.append(profit >= 0)
     if len(sym_state.recent_results) > cfg.AUTO_LEARNING_WINDOW:
         sym_state.recent_results.pop(0)
+    # То же окно, но в деньгах: по нему инструмент, который стабильно
+    # тянет счёт вниз, отключается сам (см. symbol_auto_off_reason).
+    sym_state.recent_profits.append(float(profit))
+    if len(sym_state.recent_profits) > cfg.AUTO_LEARNING_WINDOW:
+        sym_state.recent_profits.pop(0)
+
+
+def symbol_recent_money(sym_state) -> float:
+    """Сколько ЭТОТ инструмент дал за последние сделки, в деньгах счёта."""
+    return float(sum(sym_state.recent_profits or []))
+
+
+def symbol_auto_off_reason(sym_state, equity: float) -> str:
+    """Пустая строка — инструментом можно торговать. Иначе причина отказа.
+
+    Зачем это вообще. Владелец несколько раз писал «опять минуса», и по его
+    настоящему отчёту видно, откуда они: из 148 сделок ОДИН инструмент
+    (золото) дал 85% всех потерь — минус 29.56 при депозите 65, то есть
+    почти половину счёта, за 37 сделок. Остальные пары в это время были в
+    плюсе. Просить человека каждый раз замечать это по отчёту и вручную
+    убирать пару из списка — значит перекладывать на него работу, которую
+    программа может сделать сама: у неё результат каждой сделки уже есть.
+
+    Отключение НЕ вечное и не требует нажатий: окно скользящее, старые
+    убытки из него выпадают, и как только инструмент перестанет быть
+    убыточным, торговля по нему возобновится сама.
+
+    Порог считается от РАЗМЕРА СЧЁТА, а не в абсолютных деньгах: минус 30
+    для депозита 65 — это катастрофа, для депозита 10 000 — обычный шум."""
+    if not getattr(cfg, "USE_SYMBOL_AUTO_OFF", False):
+        return ""
+    min_trades = int(getattr(cfg, "SYMBOL_AUTO_OFF_MIN_TRADES", 12) or 0)
+    if min_trades <= 0 or len(sym_state.recent_profits) < min_trades:
+        return ""      # рано судить: пара сделок ни о чём не говорит
+    limit_percent = float(getattr(cfg, "SYMBOL_AUTO_OFF_LOSS_PERCENT", 0) or 0)
+    if limit_percent <= 0 or equity <= 0:
+        return ""
+    money = symbol_recent_money(sym_state)
+    if money >= 0:
+        return ""
+    limit_money = equity * limit_percent / 100.0
+    if -money < limit_money:
+        return ""
+    return (f"Инструмент отключён сам: за последние "
+            f"{len(sym_state.recent_profits)} сделок он дал {money:.2f} — это "
+            f"больше {limit_percent:.1f}% счёта. Торговля по нему возобновится "
+            f"сама, когда эти убытки выйдут из окна последних сделок. Другие "
+            f"инструменты работают как обычно.")
 
 
 def learning_status_text(sym_state) -> str:
@@ -159,6 +207,10 @@ def save_learning_state(sym_states: dict) -> bool:
             sym: {
                 "results": [bool(r) for r in st.recent_results],
                 "peaks": [float(p) for p in st.recent_peaks],
+                # Деньги по каждой сделке. Без сохранения самоотключение
+                # убыточного инструмента не работало бы вовсе: окно живёт
+                # в памяти процесса и обнулялось бы при каждом запуске.
+                "profits": [float(p) for p in st.recent_profits],
             }
             for sym, st in sym_states.items()
         },
@@ -202,14 +254,19 @@ def load_learning_state(sym_states: dict) -> int:
             continue
         results = saved.get("results", [])
         peaks = saved.get("peaks", [])
+        profits = saved.get("profits", [])
         if not isinstance(results, list) or not isinstance(peaks, list):
             continue
+        if not isinstance(profits, list):
+            profits = []   # файл со старой версии программы — это не ошибка
         # Обрезаем по ТЕКУЩЕМУ окну: пользователь мог уменьшить
         # AUTO_LEARNING_WINDOW между запусками, и старый длинный хвост
         # тогда сделал бы настройку бессмысленной.
         st.recent_results = [bool(r) for r in results][-window:]
         st.recent_peaks = [max(0.0, float(p)) for p in peaks
                            if isinstance(p, (int, float))][-window:]
+        st.recent_profits = [float(p) for p in profits
+                             if isinstance(p, (int, float))][-window:]
         restored += 1
     if restored:
         log.info("Восстановлена статистика обучения по %d символам из %s", restored, path)
