@@ -305,6 +305,45 @@ def test_daily_loss_migration_for_saved_accounts() -> None:
           "Миграция вызывается при запуске программы")
 
 
+def test_accounts_saved_without_pressing_buttons() -> None:
+    """Владелец: «пытался сохранить счёт, пусть сразу сохраняет».
+
+    Он нажал «☁ Сохранить счета в облако» и увидел «Не указан токен GitHub» —
+    и понял это как «счёт не сохранился». На самом деле счёт к тому моменту
+    уже лежал на диске, а облако — только запасная копия. Здесь проверяем
+    обе стороны: список уезжает в облако сам, а без облака ничего не
+    ломается и текст об этом честный."""
+    print("\n=== 3и. Счета сохраняются сами ===")
+    ui = (APP / "accounts_tab.py").read_text(encoding="utf-8")
+
+    check("def _autobackup" in ui, "Автосохранение в облако есть")
+    for place in ("self.store.add(dialog.result, password, salt)",
+                  "self.store.replace(account.login, dialog.result, password, salt)",
+                  "self.store.remove(account.login, password, salt)"):
+        tail = ui.split(place, 1)[1][:200]
+        check("_autobackup()" in tail,
+              f"После «{place.split('.')[1].split('(')[0]}» список уходит в облако сам")
+    saver = ui.split("def _save_accounts", 1)[1][:300]
+    check("_autobackup()" in saver,
+          "Галочка «включён/выключен» тоже сохраняется в облако сама")
+
+    # Без облака автосохранение молчит: ругаться окном на каждый щелчок нельзя
+    body = ui.split("def _autobackup", 1)[1].split("\n    def ", 1)[0]
+    check("ready()" in body, "Сначала проверяется, настроено ли облако")
+    check("return" in body.split("ready()", 1)[1][:200],
+          "Не настроено — просто выходим, без окна с ошибкой")
+    check("messagebox" not in body, "Автосохранение не показывает окон вовсе")
+    check("Thread" in body, "Отправка в фоне — окно не подвисает")
+
+    after = ui.split("def _after_autobackup", 1)[1].split("\n    def ", 1)[0]
+    check("messagebox" not in after, "И об итоге сообщает строкой, а не окном")
+
+    # Текст про ненастроенное облако обязан начинаться с главного
+    warn = ui.split('"Облако не настроено",', 1)[1][:600]
+    check("уже сохранены" in warn,
+          "Первым делом сказано, что счета уже сохранены на компьютере")
+
+
 def test_locked_password_survives_other_saves() -> None:
     """Реальная жалоба владельца: "не должен удалять счета при перезапуске".
 
@@ -774,6 +813,7 @@ def main_run() -> int:
     test_delete_button_exists()
     test_no_daily_loss_stop()
     test_daily_loss_migration_for_saved_accounts()
+    test_accounts_saved_without_pressing_buttons()
     test_locked_password_survives_other_saves()
     test_locked_account_not_confused_with_empty()
     test_correcting_password_still_works()

@@ -257,6 +257,46 @@ class AccountsTab:
     def _save_accounts(self):
         password, salt = self._credentials()
         self.store.save(password, salt)
+        self._autobackup()
+
+    def _autobackup(self):
+        """Выложить свежий список счетов в облако САМО, без нажатия кнопки.
+
+        Владелец: «пусть сразу сохраняет». Кнопка «☁ Сохранить счета в
+        облако» остаётся — но нажимать её больше не обязательно: список
+        уезжает в облако после каждого изменения (добавили, изменили,
+        удалили, включили/выключили счёт).
+
+        Молча и в фоне. Если облако не настроено (нет токена с правом
+        записи) — ничего не происходит: на диске счета уже сохранены, а
+        облако здесь только запасная копия, и ругаться на её отсутствие
+        при каждом щелчке нельзя. Сеть тоже не должна подвешивать окно,
+        поэтому отправка идёт отдельным потоком."""
+        ok, _reason = accounts_backup.ready()
+        if not ok or not self.store.accounts:
+            return
+
+        def worker():
+            result = accounts_backup.upload()
+            self.root.after(0, lambda: self._after_autobackup(result))
+
+        threading.Thread(target=worker, daemon=True,
+                         name="accounts-autobackup").start()
+
+    def _after_autobackup(self, result: dict):
+        """Итог автосохранения — строкой состояния, без окон с ошибками:
+        человек в этот момент занят своим делом, а не облаком."""
+        status = getattr(self, "cloud_status", None)
+        if status is None:
+            return
+        if result.get("ok"):
+            status.configure(
+                text=f"Сохранено в облако само ({time.strftime('%H:%M:%S')})",
+                fg=PROFIT)
+        else:
+            status.configure(
+                text="Облако недоступно, на компьютере счета сохранены: "
+                     + result.get("error", ""), fg=FG_MUTED)
 
     # ---------- построение ----------
     def _build(self, parent):
@@ -470,6 +510,7 @@ class AccountsTab:
         password, salt = self._credentials()
         self.store.add(dialog.result, password, salt)
         self.selected_login = dialog.result.login
+        self._autobackup()
         self._refresh_list()
 
     def _edit(self):
@@ -487,6 +528,7 @@ class AccountsTab:
         password, salt = self._credentials()
         self.store.replace(account.login, dialog.result, password, salt)
         self.selected_login = dialog.result.login
+        self._autobackup()
         self._refresh_list()
 
     def _delete(self):
@@ -501,6 +543,7 @@ class AccountsTab:
         password, salt = self._credentials()
         self.store.remove(account.login, password, salt)
         self.selected_login = None
+        self._autobackup()
         self._refresh_list()
 
     def _toggle(self):
@@ -580,11 +623,20 @@ class AccountsTab:
     def _backup_to_cloud(self):
         ok, reason = accounts_backup.ready()
         if not ok:
+            # Главное сказать ПЕРВОЙ строкой: счета уже сохранены. Прежний
+            # текст начинался с «Не указан токен GitHub», и это читалось как
+            # «счёт не сохранился» — хотя облако здесь только ЗАПАСНАЯ копия
+            # на случай переустановки или переноса на другой компьютер.
             messagebox.showwarning(
                 "Облако не настроено",
-                reason + "\n\nНастраивается на вкладке «Система», раздел "
-                        "«Журнал сделок в облаке» — те же репозиторий и токен "
-                        "используются для резервной копии счетов.")
+                "Счета уже сохранены на этом компьютере — рядом с программой, "
+                "и никуда не денутся при перезапуске. Облако нужно только как "
+                "запасная копия: чтобы вернуть список счетов после "
+                "переустановки Windows или на другом компьютере.\n\n"
+                + reason + "\n\nНастраивается на вкладке «Система», раздел "
+                "«Журнал сделок в облаке» — те же репозиторий и токен "
+                "используются для резервной копии счетов. Пока токена нет, "
+                "программа просто работает без облака.")
             return
         if not self.store.accounts:
             messagebox.showinfo("Нечего сохранять", "Список счетов пуст.")
