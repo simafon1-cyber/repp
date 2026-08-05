@@ -540,9 +540,13 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     sl_dist = rm.apply_min_stop_floor(symbol, sl_dist, atr_value, point)
     lot = rm.calc_lot(symbol, sl_dist, equity, sym_state)
     if lot <= 0:
+        # Точную причину (сколько рискует минимальный лот и какой стоит
+        # потолок) уже посчитал calc_lot — показываем её, а не общую фразу:
+        # человеку нужно понять, что делать, а не что «что-то не так».
         sym_state.last_reject_reason = (
-            "Минимальный лот брокера рискует больше разрешённого — депозит мал "
-            "для этого инструмента")
+            sym_state.last_risk_warning
+            or "Минимальный лот брокера рискует больше разрешённого — депозит "
+               "мал для этого инструмента")
         return
     if getattr(cfg, "USE_MAX_PROFIT_RIDE", False):
         # "Тянуть максимальную прибыль" — без фиксированного TP, сделку от сих

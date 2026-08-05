@@ -349,7 +349,42 @@ def calc_lot(symbol: str, sl_dist: float, equity: float, sym_state: SymbolState)
     else:
         sym_state.last_risk_warning = ""
 
-    return max(min_lot, min(max_lot, lot))
+    final_lot = max(min_lot, min(max_lot, lot))
+
+    # ЖЁСТКИЙ ПОТОЛОК РИСКА НА ОДНУ СДЕЛКУ, в процентах от счёта.
+    #
+    # Зачем он отдельно от risk_percent профиля. risk_percent — это ЦЕЛЬ, и
+    # обычно её достаточно: объём считается так, чтобы потеря по стопу
+    # равнялась заданному проценту. Но у брокера есть минимальный лот, ниже
+    # которого опуститься нельзя. Когда расчётный объём оказывается меньше
+    # минимального, цель перестаёт работать вовсе, и реальный риск определяет
+    # уже не настройка, а цена инструмента.
+    #
+    # Что это дало на практике (разбор реального отчёта владельца, счёт $65):
+    # золото при минимальном лоте 0.01 и стопе ~4.5 доллара цены рисковало
+    # 6.9% счёта за сделку — в 69 раз больше настроенных 0.1%. За два дня 37
+    # сделок по золоту дали -29.56 при общем убытке -34.74: 85% всех потерь на
+    # ОДНОМ инструменте, который этому депозиту просто не по размеру. Все
+    # остальные пары вместе потеряли -5.18, а GBPUSD вообще в плюсе.
+    #
+    # Почему нельзя было обойтись флагом ALLOW_MIN_LOT_OVER_RISK: он сравнивает
+    # с risk_percent (здесь 0.1%), и с ним не прошла бы НИ ОДНА сделка — даже
+    # EURUSD с риском 0.47% счёта. Нужен именно потолок «сколько не жалко
+    # потерять за раз», а не «попади в цель точно».
+    cap_percent = float(getattr(cfg, "MAX_TRADE_RISK_PERCENT_OF_EQUITY", 0) or 0)
+    if cap_percent > 0 and equity > 0:
+        cap_money = equity * cap_percent / 100.0
+        final_risk = final_lot * loss_per_lot
+        if final_risk > cap_money:
+            sym_state.last_risk_warning = (
+                f"Сделка рискует {final_risk:.2f} ({final_risk / equity * 100.0:.1f}% "
+                f"счёта) при потолке {cap_percent:.1f}% ({cap_money:.2f}) — отменена. "
+                f"Минимальный лот {min_lot:.2f} по {symbol} слишком велик для "
+                f"депозита {equity:.2f}.")
+            log.warning("%s: %s", symbol, sym_state.last_risk_warning)
+            return 0.0
+
+    return final_lot
 
 
 def min_stop_distance(symbol: str, atr_value: float, point: float) -> float:

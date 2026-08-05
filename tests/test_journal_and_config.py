@@ -560,6 +560,94 @@ def test_nothing_halts_trading() -> None:
           "Длительность паузы — ноль", str(rm.loss_streak_pause_minutes()))
 
 
+def test_trade_risk_cap_blocks_too_expensive_symbol() -> None:
+    """Разбор РЕАЛЬНОГО отчёта владельца (счёт $65.26, профиль «Истеричка»,
+    risk_percent 0.1%): золото минимальным лотом 0.01 рисковало 6.9% счёта за
+    сделку — в 69 раз больше настроенного. 37 сделок по золоту дали -29.56 при
+    общем убытке -34.74, то есть 85% всех потерь на ОДНОМ инструменте. Все
+    остальные пары вместе потеряли -5.18, а GBPUSD был в плюсе.
+
+    Причина не в сигнале, а в размере: ниже минимального лота брокера
+    опуститься нельзя, поэтому risk_percent на таком депозите просто
+    перестаёт действовать. Потолок MAX_TRADE_RISK_PERCENT_OF_EQUITY отсекает
+    инструмент, который депозиту не по размеру, и при этом НЕ мешает торговать
+    тем, что помещается."""
+    print("\n[Слишком дорогой инструмент не торгуется на малом депозите]")
+    from state import SymbolState
+    import control as ctl
+
+    saved_info = rm._symbol_info
+    saved_override = ctl.control.get_lot_override
+    saved_cap = getattr(CFG, "MAX_TRADE_RISK_PERCENT_OF_EQUITY", 2.0)
+    ctl.control.get_lot_override = lambda s: 0
+
+    class Gold:      # 1 лот = 100 унций: шаг 0.01 цены стоит 1$
+        volume_min = 0.01; volume_max = 100.0; volume_step = 0.01
+        trade_tick_value = 1.0; trade_tick_size = 0.01
+
+    class FX:        # 1 лот = 100 000: шаг 0.00001 стоит 1$
+        volume_min = 0.01; volume_max = 100.0; volume_step = 0.01
+        trade_tick_value = 1.0; trade_tick_size = 0.00001
+
+    rm._symbol_info = lambda s: Gold() if s == "XAUUSD" else FX()
+    try:
+        CFG.MAX_TRADE_RISK_PERCENT_OF_EQUITY = 2.0
+        equity = 65.26     # ровно как в отчёте владельца
+
+        # Золото: минимальный лот рискует 4.50 = 6.9% -> отказ
+        st = SymbolState("XAUUSD")
+        check(rm.calc_lot("XAUUSD", 4.5, equity, st) == 0.0,
+              "Золото при стопе 4.5 не торгуется (6.9% счёта за сделку)")
+        check("отменена" in st.last_risk_warning,
+              "Причина отказа записана", st.last_risk_warning)
+        check("6.9" in st.last_risk_warning and "2.0" in st.last_risk_warning,
+              "В причине названы и реальный риск, и потолок", st.last_risk_warning)
+
+        # И со СТАРЫМ, узким стопом тоже: дело не в стопе, а в размере лота
+        st2 = SymbolState("XAUUSD")
+        check(rm.calc_lot("XAUUSD", 2.0, equity, st2) == 0.0,
+              "И со старым узким стопом золото всё равно не по размеру (3.1%)")
+
+        # Валютные пары помещаются в потолок и торгуются как раньше
+        st3 = SymbolState("EURUSD")
+        lot = rm.calc_lot("EURUSD", 0.00030, equity, st3)
+        check(lot > 0, "EURUSD торгуется (0.5% счёта)", str(lot))
+
+        st4 = SymbolState("EURUSD")
+        check(rm.calc_lot("EURUSD", 0.00110, equity, st4) > 0,
+              "И с более широким стопом тоже (1.7% — под потолком)")
+
+        # На БОЛЬШОМ счёте золото снова доступно: потолок в процентах, а не
+        # запрет инструмента навсегда
+        st5 = SymbolState("XAUUSD")
+        check(rm.calc_lot("XAUUSD", 4.5, 1000.0, st5) > 0,
+              "На счёте $1000 золото торгуется — потолок относительный")
+
+        # Потолок 0 = выключен (для тех, кто хочет как раньше)
+        CFG.MAX_TRADE_RISK_PERCENT_OF_EQUITY = 0
+        st6 = SymbolState("XAUUSD")
+        check(rm.calc_lot("XAUUSD", 4.5, equity, st6) > 0,
+              "Потолок 0 выключает проверку — поведение как раньше")
+    finally:
+        rm._symbol_info = saved_info
+        ctl.control.get_lot_override = saved_override
+        CFG.MAX_TRADE_RISK_PERCENT_OF_EQUITY = saved_cap
+
+
+def test_trade_risk_cap_reason_reaches_interface() -> None:
+    print("\n[Причина отказа доходит до интерфейса, а не только в журнал]")
+    body = code_only((APP / "main.py").read_text(encoding="utf-8"))
+    block = body.split("lot = rm.calc_lot", 1)[1][:600]
+    check("last_risk_warning" in block,
+          "Показывается точная причина из calc_lot, а не общая фраза")
+
+    fresh = types.ModuleType("fresh_cap")
+    exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
+    check(float(fresh.MAX_TRADE_RISK_PERCENT_OF_EQUITY) == 2.0,
+          "Потолок включён по умолчанию",
+          str(fresh.MAX_TRADE_RISK_PERCENT_OF_EQUITY))
+
+
 def test_risk_is_capped_per_trade() -> None:
     """Остановки убраны — значит защита должна работать НА КАЖДОЙ сделке.
     Если и это исчезнет, счёт останется без ограничений вообще."""
@@ -1224,6 +1312,8 @@ def main() -> int:
     test_daily_loss_limit_off()
     test_zero_means_no_limit()
     test_nothing_halts_trading()
+    test_trade_risk_cap_blocks_too_expensive_symbol()
+    test_trade_risk_cap_reason_reaches_interface()
     test_risk_is_capped_per_trade()
     test_loss_counter_not_reset_without_pause()
     test_no_pauses_left()
