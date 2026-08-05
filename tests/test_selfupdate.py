@@ -632,6 +632,60 @@ def test_build_request_needs_token() -> None:
     check("dispatches" in body, "Сборка заказывается через GitHub API")
 
 
+def test_artifact_download_explains_real_reason() -> None:
+    """Жалоба владельца со снимка экрана: советники обновились, а программа
+    ответила «Нет доступа к репозиторию. Для закрытого нужен токен».
+
+    Репозиторий у него ОТКРЫТЫЙ. Проверено вживую: список сборок в Actions
+    отдаётся без токена (200), а сам файл сборки — только по токену (403).
+    Это правило GitHub, а не признак закрытого репозитория. Прежний текст
+    отправлял заводить токен там, где хватает одного релиза."""
+    print("\n[Отказ по сборке .exe объяснён по-настоящему]")
+
+    saved_release = up.latest_release_exe
+    saved_artifact = up.latest_build_artifact
+    saved_download = up.download_binary
+
+    def denied(url, destination, accept, progress=None):
+        raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+
+    up.latest_release_exe = lambda: {}          # релизов ещё нет
+    up.latest_build_artifact = lambda: {"url": "https://api/artifacts/1/zip",
+                                        "name": up.ARTIFACT_NAME,
+                                        "created": "2026-08-03"}
+    up.download_binary = denied
+    try:
+        result = up.download_new_exe()
+        text = result.get("error", "")
+        check(not result.get("ok"), "Сборка не считается установленной")
+        check("закрыт" not in text.lower(),
+              "Открытый репозиторий больше не называют закрытым", text)
+        check("Actions" in text, "Сказано, ГДЕ лежит сборка", text)
+        check("v1.0" in text or "релиз" in text.lower(),
+              "Назван путь без токена — выпустить релиз", text)
+    finally:
+        up.latest_release_exe = saved_release
+        up.latest_build_artifact = saved_artifact
+        up.download_binary = saved_download
+
+    # Совсем нет сборок — тоже сначала предлагаем релиз, а не токен
+    up.latest_release_exe = lambda: {}
+    up.latest_build_artifact = lambda: {}
+    try:
+        text = up.download_new_exe().get("error", "")
+        check("релиз" in text.lower() or "v1.0" in text,
+              "Когда сборок нет — тоже советуем релиз", text)
+    finally:
+        up.latest_release_exe = saved_release
+        up.latest_build_artifact = saved_artifact
+
+    # Релиз скачивается обычной ссылкой, без токена: это и есть основной путь
+    body = code_only((APP / "updater.py").read_text(encoding="utf-8"))
+    fn = body.split("def download_new_exe", 1)[1].split("\ndef ", 1)[0]
+    check(fn.index("latest_release_exe") < fn.index("latest_build_artifact"),
+          "Релиз пробуется РАНЬШЕ сборки из Actions")
+
+
 def test_update_everything_covers_both() -> None:
     print("\n[Одна кнопка обновляет и советники, и программу]")
     body = code_only((APP / "updater.py").read_text(encoding="utf-8"))
@@ -678,6 +732,7 @@ def main() -> int:
     test_token_not_sent_to_storage()
 
     test_build_request_needs_token()
+    test_artifact_download_explains_real_reason()
     test_update_everything_covers_both()
 
     print("\n" + "=" * 62)

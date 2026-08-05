@@ -817,14 +817,37 @@ def download_new_exe(progress=None) -> dict:
         if not artifact.get("url"):
             result["error"] = (
                 "Готовой сборки нет: ни релиза, ни свежего результата сборки. "
-                "Нажмите «Собрать новую версию» — программа попросит GitHub "
-                "собрать .exe, это занимает несколько минут.")
+                "Надёжнее всего выпустить релиз — создайте в репозитории тег "
+                "вида v1.0, сборка соберётся сама и ляжет в Releases, откуда "
+                "программа скачивает её без токена. Либо нажмите «Собрать "
+                "новую версию» (нужен токен с правом Actions: Read and write).")
             return result
 
         say(f"Скачиваю сборку от {artifact.get('created', '')}...")
         archive_path = temporary + ".zip"
-        download_binary(artifact["url"], archive_path,
-                        accept="application/vnd.github+json", progress=progress)
+        try:
+            download_binary(artifact["url"], archive_path,
+                            accept="application/vnd.github+json", progress=progress)
+        except urllib.error.HTTPError as e:
+            if e.code not in (401, 403):
+                raise
+            # Проверено вживую на ОТКРЫТОМ репозитории: список сборок
+            # отдаётся без токена (200), а сам файл сборки — только по
+            # токену (403). Это правило GitHub, а не признак закрытого
+            # репозитория. Прежний текст «Нет доступа к репозиторию. Для
+            # закрытого нужен токен» отправлял человека заводить токен там,
+            # где токен вообще не нужен: достаточно выпустить релиз.
+            result["error"] = (
+                "Файлы программы и советники обновились, а готовую сборку "
+                ".exe скачать не удалось: она лежит в раз­деле Actions, а "
+                "оттуда GitHub отдаёт файлы ТОЛЬКО по токену — даже для "
+                "открытого репозитория. Токен здесь заводить не обязательно: "
+                "проще выпустить релиз. Создайте в репозитории тег вида v1.0 "
+                "(Releases -> Draft a new release -> Choose a tag -> v1.0 -> "
+                "Publish) — сборка соберётся сама и ляжет в Releases, откуда "
+                "программа скачивает её без всякого токена. Второй путь — "
+                "токен с правом Actions: Read-only.")
+            return result
         try:
             if not _extract_exe(archive_path, temporary):
                 result["error"] = "В сборке не нашёлся .exe."
