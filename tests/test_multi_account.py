@@ -140,6 +140,171 @@ def test_store_operations() -> None:
         check(len(AccountStore(path).load(PASSWORD, SALT)) == 2, "удаление сохранено")
 
 
+def test_accounts_file_survives_restart_in_exe() -> None:
+    """Жалоба владельца: «счета которые я добавляю все время сохранялись» —
+    добавленные счета пропадали при перезапуске.
+
+    Причина: путь к accounts.json брался как Path(__file__).parent —папка
+    САМОГО МОДУЛЯ. В onefile-сборке PyInstaller распаковывает модули во
+    ВРЕМЕННУЮ папку (sys._MEIPASS) и удаляет её при выходе. Значит файл со
+    счетами писался туда же и исчезал вместе с ней при каждом закрытии
+    программы."""
+    print("\n=== 3д. Файл счетов переживает перезапуск .exe ===")
+    import importlib
+
+    saved_frozen = getattr(sys, "frozen", None)
+    saved_exe = sys.executable
+    try:
+        sys.frozen = True
+        sys.executable = "/opt/AI_Scalper/AI_Scalper_Pro.exe"
+        importlib.reload(acc_mod)
+        where = str(acc_mod.app_dir())
+        check(where == "/opt/AI_Scalper",
+              "В собранном .exe файл счетов лежит РЯДОМ С EXE", where)
+        check("MEI" not in where and "emp" not in where.replace("/opt", ""),
+              "И точно не во временной папке PyInstaller", where)
+        check(str(acc_mod.ACCOUNTS_FILE) == "/opt/AI_Scalper/accounts.json",
+              "Полный путь к accounts.json верный", str(acc_mod.ACCOUNTS_FILE))
+    finally:
+        if saved_frozen is None:
+            del sys.frozen
+        else:
+            sys.frozen = saved_frozen
+        sys.executable = saved_exe
+        importlib.reload(acc_mod)
+
+    check(str(acc_mod.app_dir()).endswith("ai_scalper_standalone"),
+          "При запуске из исходников путь прежний — рядом с модулем",
+          str(acc_mod.app_dir()))
+
+
+def test_delete_button_exists() -> None:
+    """Владелец просил кнопку удаления счёта — проверяем, что она есть и
+    реально удаляет из файла, а не только со экрана."""
+    print("\n=== 3е. Кнопка «Удалить» есть и работает ===")
+    ui = (APP / "accounts_tab.py").read_text(encoding="utf-8")
+    check('"Удалить"' in ui, "Кнопка «Удалить» есть на вкладке «Счета»")
+    check("def _delete" in ui, "У неё есть обработчик")
+    check("askyesno" in ui.split("def _delete", 1)[1][:400],
+          "Перед удалением спрашивает подтверждение")
+    check("supervisor.stop" in ui.split("def _delete", 1)[1][:500],
+          "Счёт сначала останавливается, потом удаляется")
+
+    # Удаление должно доходить до диска
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "accounts.json"
+        store = AccountStore(path)
+        store.add(make(1, password="раз"), PASSWORD, SALT)
+        store.add(make(2, password="два"), PASSWORD, SALT)
+        check(store.remove(1, PASSWORD, SALT), "Счёт удалён")
+        again = AccountStore(path).load(PASSWORD, SALT)
+        check([a.login for a in again] == [2], "На диске остался только второй",
+              str([a.login for a in again]))
+        check(again[0].password == "два", "И его пароль не пострадал")
+
+
+def test_no_daily_loss_stop() -> None:
+    """Владелец: «достижения убытка в день убери».
+
+    Дневной порог был ПОСЛЕДНЕЙ работающей остановкой: общий
+    USE_DAILY_LOSS_LIMIT давно выключен, но у каждого счёта в accounts.json
+    свой daily_loss_percent, и глобальную галочку он не читает — поймав
+    −3% за день, счёт закрывал позиции и молчал до завтра."""
+    print("\n=== 3ж. Дневной порог убытка убран ===")
+
+    check(Account().daily_loss_percent == 0,
+          "У нового счёта дневного порога нет",
+          str(Account().daily_loss_percent))
+
+    ui = (APP / "accounts_tab.py").read_text(encoding="utf-8")
+    check("or 3.0" not in ui,
+          "Пустое поле больше не превращается в 3% (было `or 3.0`)")
+
+    sup_src = (APP / "account_supervisor.py").read_text(encoding="utf-8")
+    check('daily_loss_percent", 3.0' not in sup_src,
+          "Старый счёт без этого поля тоже не получает порог из воздуха")
+
+    # Поведение: с нулём остановки нет, с положительным числом — есть
+    # (настройку не удалили, она просто выключена по умолчанию)
+    import account_supervisor as sup_mod
+
+    class _Q:
+        def put_nowait(self, item):
+            pass
+
+    class _FakeMT5:
+        def positions_get(self):
+            return []
+
+    runner = sup_mod.AccountRunner([{"login": 777, "name": "тест"}], _Q(), _Q())
+    saved_mt5 = sup_mod.mt5
+    sup_mod.mt5 = _FakeMT5()
+    try:
+        state = runner.states[777]
+        state.day_start_equity = 1000.0
+        state.daily_pct = -25.0
+        runner.check_daily_limit(777, {"daily_loss_percent": 0.0})
+        check(not state.trading_blocked,
+              "Убыток −25% за день торговлю не останавливает")
+        runner.check_daily_limit(777, {})          # поля вообще нет
+        check(not state.trading_blocked,
+              "Счёт без поля daily_loss_percent тоже не останавливается")
+        runner.check_daily_limit(777, {"daily_loss_percent": 3.0})
+        check(state.trading_blocked,
+              "Если человек сам впишет порог — он по-прежнему работает")
+    finally:
+        sup_mod.mt5 = saved_mt5
+
+
+def test_daily_loss_migration_for_saved_accounts() -> None:
+    """Порог лежит в accounts.json — файле, который обновление не трогает.
+    Значит у УЖЕ добавленных счетов его надо снять отдельно, один раз."""
+    print("\n=== 3з. Старым счетам порог снимается один раз ===")
+    sys.path.insert(0, str(APP))
+    import config_migrate as cm
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "accounts.json"
+        store = AccountStore(path)
+        first = make(1, password="секрет-раз")
+        first.daily_loss_percent = 3.0
+        store.add(first, PASSWORD, SALT)
+
+        note = cm.clear_account_daily_loss(str(path))
+        check(bool(note), "Миграция сработала и объяснила, что сделала", note)
+
+        after = AccountStore(path)
+        loaded = after.load(PASSWORD, SALT)
+        check(loaded[0].daily_loss_percent == 0, "Порог снят",
+              str(loaded[0].daily_loss_percent))
+        check(loaded[0].password == "секрет-раз",
+              "Пароль счёта при этом цел", loaded[0].password)
+
+        # Второй раз — уже ничего не делает
+        check(cm.clear_account_daily_loss(str(path)) == "",
+              "Повторный запуск ничего не меняет")
+
+        # И если человек ОСОЗНАННО впишет порог заново, миграция его не тронет
+        loaded[0].daily_loss_percent = 5.0
+        after.save(PASSWORD, SALT)
+        cm.clear_account_daily_loss(str(path))
+        again = AccountStore(path).load(PASSWORD, SALT)
+        check(again[0].daily_loss_percent == 5.0,
+              "Вписанный вручную порог переживает перезапуск",
+              str(again[0].daily_loss_percent))
+        check(again[0].password == "секрет-раз",
+              "Пароль по-прежнему цел")
+
+    # Нет файла счетов — не падать
+    with tempfile.TemporaryDirectory() as tmp:
+        check(cm.clear_account_daily_loss(str(Path(tmp) / "accounts.json")) == "",
+              "Без файла счетов миграция молчит")
+
+    start = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    check("config_migrate.clear_account_daily_loss()" in start,
+          "Миграция вызывается при запуске программы")
+
+
 def test_locked_password_survives_other_saves() -> None:
     """Реальная жалоба владельца: "не должен удалять счета при перезапуске".
 
@@ -605,6 +770,10 @@ def main_run() -> int:
     test_validation()
     test_parallel_flag()
     test_store_encryption()
+    test_accounts_file_survives_restart_in_exe()
+    test_delete_button_exists()
+    test_no_daily_loss_stop()
+    test_daily_loss_migration_for_saved_accounts()
     test_locked_password_survives_other_saves()
     test_locked_account_not_confused_with_empty()
     test_correcting_password_still_works()

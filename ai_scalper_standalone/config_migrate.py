@@ -29,6 +29,7 @@ config.py.example и молча дописывает в конец только 
 """
 
 import ast
+import json
 import logging
 import os
 import re
@@ -401,6 +402,62 @@ def _default_update_repo(text: str, existing: dict) -> tuple:
            "включать галочку вручную больше не нужно")
     text = text.rstrip("\n") + f"\n\n# {note}\n{marker} = True\n"
     return text, note
+
+
+def accounts_path() -> str:
+    """Список счетов лежит РЯДОМ С ПРОГРАММОЙ, а не в папке модуля — та в
+    собранном .exe временная и удаляется при выходе (см. accounts.app_dir)."""
+    return os.path.join(app_dir(), "accounts.json")
+
+
+def clear_account_daily_loss(path: str = "") -> str:
+    """Одноразово убирает дневной порог убытка у УЖЕ СОХРАНЁННЫХ счетов.
+
+    Этот порог (daily_loss_percent в accounts.json) — единственная дневная
+    остановка, которая ещё срабатывала: общий USE_DAILY_LOSS_LIMIT давно
+    выключён, но счёт хранит СВОЙ порог и глобальную галочку не читает.
+    Поймав −3% за день, счёт закрывал позиции и молчал до завтра, хотя
+    владелец программы просил остановки убрать.
+
+    Правка идёт по JSON, БЕЗ расшифровки паролей: зашифрованные строки
+    (password_encrypted) переписываются как есть — так пароли счетов
+    физически не могут пострадать (именно этим раньше ломался save()).
+    Применяется ровно один раз — в файле остаётся отметка; если человек
+    потом впишет порог заново, миграция его больше не тронет."""
+    path = path or accounts_path()
+    if not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return ""   # испорченный файл чинить вслепую опаснее, чем оставить
+    if not isinstance(data, dict) or data.get("migrated_daily_loss_off"):
+        return ""
+
+    touched = []
+    for item in data.get("accounts", []):
+        if not isinstance(item, dict):
+            continue
+        try:
+            current = float(item.get("daily_loss_percent", 0) or 0)
+        except (TypeError, ValueError):
+            current = 0.0
+        if current > 0:
+            item["daily_loss_percent"] = 0.0
+            touched.append(str(item.get("name") or item.get("login") or "счёт"))
+
+    data["migrated_daily_loss_off"] = True
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    safe_files.atomic_write_text(path, text)
+    try:
+        safe_files.restrict_to_current_user(path)
+    except Exception:  # noqa: BLE001
+        pass
+    if not touched:
+        return ""
+    return ("дневной порог убытка снят у счетов (" + ", ".join(touched) +
+            "): счёт больше не останавливается до завтра, поймав убыток за день")
 
 
 def apply_one_time(config_path: str = "") -> list:

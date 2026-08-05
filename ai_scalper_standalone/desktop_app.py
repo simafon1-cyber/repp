@@ -2156,7 +2156,7 @@ class App:
 
         ttk.Label(up, text="Ветка:").grid(row=4, column=0, sticky="w", padx=8, pady=3)
         self.update_branch_var = tk.StringVar(value=getattr(cfg, "UPDATE_BRANCH", ""))
-        ttk.Entry(up, textvariable=self.update_branch_var, width=24).grid(
+        ttk.Entry(up, textvariable=self.update_branch_var, width=44).grid(
             row=4, column=1, sticky="w", padx=8)
         ttk.Label(up, foreground="#666",
                   text="пусто = программа сама возьмёт главную ветку репозитория"
@@ -2553,8 +2553,60 @@ class App:
                     "нажмите «Стоп» на вкладке «Обзор».")
         return ""
 
+    def _apply_update_fields(self) -> list:
+        """Записать в config.py то, что СЕЙЧАС набрано в полях обновления.
+
+        Обновление читает настройки из сохранённого config.py (updater.repo(),
+        updater.branch()), а не из полей на экране. Человек, вписавший ветку и
+        сразу нажавший «Обновить всё сейчас», справедливо ждёт, что использована
+        будет вписанная ветка — а получал ошибку про старое сохранённое
+        значение и никакого намёка, что надо было сперва нажать «Сохранить».
+        Поэтому перед любым действием с GitHub сами дописываем изменённое.
+
+        Возвращает список того, что поменялось — чтобы сказать об этом вслух."""
+        changed = []
+        pairs = [
+            ("UPDATE_ENABLED", bool(self.update_enabled_var.get())),
+            ("UPDATE_REPO", self.update_repo_var.get().strip()),
+            ("UPDATE_BRANCH", self.update_branch_var.get().strip()),
+        ]
+        for name, value in pairs:
+            if getattr(cfg, name, None) == value:
+                continue
+            _write_config_value(name, repr(value))
+            changed.append(name)
+
+        # Токен: пустое поле и заглушка означают «не менять», иначе затирали бы
+        # сохранённый токен при каждом нажатии кнопки обновления.
+        token_text = self.update_token_var.get().strip()
+        if token_text and token_text != SECRET_PLACEHOLDER:
+            if token_text != getattr(cfg, "UPDATE_TOKEN", ""):
+                pw = control.get_session_password()
+                salt = getattr(cfg, "SECURITY_SALT", "")
+                _write_config_value(
+                    "UPDATE_TOKEN",
+                    repr(secure_store.protect_secret(token_text, pw, salt)))
+                changed.append("UPDATE_TOKEN")
+        elif not token_text and getattr(cfg, "UPDATE_TOKEN", ""):
+            # Поле очистили осознанно — значит токен больше не нужен
+            # (например, репозиторий открытый). Это ОТЛИЧАЕТСЯ от заглушки.
+            _write_config_value("UPDATE_TOKEN", repr(""))
+            changed.append("UPDATE_TOKEN (очищен)")
+
+        if changed:
+            try:
+                _reload_cfg()
+            except Exception as e:  # noqa: BLE001
+                log.warning("Не удалось перечитать настройки обновления: %s", e)
+            updater.reset_caches()
+        return changed
+
     def update_everything_now(self):
         """Одна кнопка: советники + сама программа + новые настройки."""
+        applied = self._apply_update_fields()
+        if applied:
+            self.update_status_var.set(
+                "Сохранены изменённые настройки: " + ", ".join(applied))
         ok_repo = updater.enabled() and updater.repo() and "/" in updater.repo()
         if not ok_repo:
             messagebox.showwarning(
@@ -2641,6 +2693,7 @@ class App:
         messagebox.showinfo(APP_TITLE, text)
 
     def request_build_now(self):
+        self._apply_update_fields()
         if not messagebox.askyesno(
                 APP_TITLE,
                 "Попросить GitHub собрать новую версию программы?\n\n"
@@ -2672,6 +2725,12 @@ class App:
             messagebox.showinfo(APP_TITLE, text)
 
     def check_updates(self, silent: bool = False):
+        if not silent:
+            # Ручная проверка: используем то, что набрано в полях сейчас.
+            # Автопроверка при запуске (silent) полей не трогает — окно ещё
+            # только открылось, менять настройки из-за неё нельзя.
+            self._apply_update_fields()
+
         def worker():
             result = updater.check()
             self.root.after(0, lambda: self._after_update_check(result, silent))
@@ -4117,6 +4176,11 @@ def main():
     try:
         added = config_migrate.sync()
         changed = config_migrate.apply_one_time()
+        # Дневной порог убытка лежит не в config.py, а в accounts.json —
+        # у каждого счёта свой, и глобальную галочку он не читает.
+        accounts_note = config_migrate.clear_account_daily_loss()
+        if accounts_note:
+            changed = list(changed) + [accounts_note]
         if added or changed:
             _reload_cfg()
         if added:

@@ -15,12 +15,30 @@ secure_store (Fernet + PBKDF2, 200 000 итераций), ключ выводи�
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import secure_store
 
-BASE_DIR = Path(__file__).resolve().parent
+def app_dir() -> Path:
+    """Папка, рядом с которой лежат ДАННЫЕ программы (accounts.json).
+
+    КРИТИЧНО для собранного .exe. Раньше здесь было просто
+    Path(__file__).resolve().parent — папка самого модуля. В onefile-сборке
+    PyInstaller распаковывает модули во ВРЕМЕННУЮ папку (sys._MEIPASS) и
+    УДАЛЯЕТ её при выходе из программы. Значит accounts.json записывался туда
+    же и исчезал вместе с ней: добавленные счета пропадали при каждом
+    перезапуске, и выглядело это как «программа удаляет мои счета».
+
+    Рядом с .exe — то место, которое переживает перезапуск. Точно так же
+    считают путь updater, cloud_journal и config_migrate."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+BASE_DIR = app_dir()
 ACCOUNTS_FILE = BASE_DIR / "accounts.json"
 
 # Ниже 10 мс опрос бессмыслен: один запрос к MT5 сам занимает 0.1-1 мс,
@@ -46,7 +64,15 @@ class Account:
     # Лимиты риска — свои у каждого счёта
     risk_percent: float = 0.5
     max_positions: int = 3
-    daily_loss_percent: float = 3.0
+    # 0 = дневного порога убытка НЕТ. Раньше здесь стояло 3.0, и счёт сам
+    # переставал торговать до завтра, поймав −3% за день. Это единственная
+    # дневная остановка, которая ещё работала: общий USE_DAILY_LOSS_LIMIT
+    # уже выключен, а этот порог живёт в accounts.json и глобальную галочку
+    # не читает. Владелец программы просил остановки убрать — бот должен
+    # отрабатывать всё торговое время, а убыток ограничивается размером
+    # каждой сделки (стоп-лосс, риск на сделку, потолок риска), а не
+    # молчанием до следующего дня.
+    daily_loss_percent: float = 0.0
     poll_interval_ms: int = DEFAULT_POLL_MS
 
     def display(self) -> str:
@@ -97,11 +123,19 @@ class AccountStore:
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else ACCOUNTS_FILE
         self.accounts: list[Account] = []
+        # Служебные пометки в том же файле, которые пишет НЕ этот класс
+        # (например, migrated_daily_loss_off от config_migrate). Их надо
+        # сохранить при перезаписи: save() собирает файл заново, и без этого
+        # отметка «миграция уже применялась» терялась бы после любого
+        # действия на вкладке «Счета» — а значит миграция срабатывала бы
+        # снова и снова, стирая то, что человек вписал осознанно.
+        self.extra: dict = {}
 
     # ---------- чтение и запись ----------
     def load(self, password: str, salt: str) -> list[Account]:
         """password/salt — пароль входа в программу и SECURITY_SALT из config."""
         self.accounts = []
+        self.extra = {}
         if not self.path.exists():
             return self.accounts
         try:
@@ -109,6 +143,9 @@ class AccountStore:
         except (json.JSONDecodeError, OSError):
             # Испорченный файл не должен ронять программу
             return self.accounts
+
+        self.extra = {k: v for k, v in data.items()
+                      if k not in ("version", "accounts")}
 
         for item in data.get("accounts", []):
             account = Account()
@@ -137,6 +174,7 @@ class AccountStore:
 
     def save(self, password: str, salt: str) -> None:
         payload = {"version": 1, "accounts": []}
+        payload.update(self.extra)   # чужие пометки не теряются (см. __init__)
         for account in self.accounts:
             item = asdict(account)
             plain = item.pop("password", "")

@@ -76,7 +76,7 @@ class AccountDialog(tk.Toplevel):
         ("symbols", "Инструменты через запятую", "пусто = взять из настроек программы"),
         ("risk_percent", "Риск на сделку, %", "0.5"),
         ("max_positions", "Макс. позиций", "3"),
-        ("daily_loss_percent", "Дневной лимит убытка, %", "3.0"),
+        ("daily_loss_percent", "Дневной лимит убытка, %", "0 = без лимита, торговать весь день"),
         ("poll_interval_ms", "Интервал опроса, мс", "100"),
     ]
 
@@ -195,7 +195,9 @@ class AccountDialog(tk.Toplevel):
             acc.symbols = [s.strip() for s in self.entries["symbols"].get().split(",") if s.strip()]
             acc.risk_percent = float(self.entries["risk_percent"].get().strip() or 0.5)
             acc.max_positions = int(self.entries["max_positions"].get().strip() or 3)
-            acc.daily_loss_percent = float(self.entries["daily_loss_percent"].get().strip() or 3.0)
+            # Пустое поле = 0 = без дневного порога (раньше подставлялось 3.0,
+            # и счёт молча останавливался на весь день после −3%).
+            acc.daily_loss_percent = float(self.entries["daily_loss_percent"].get().strip() or 0.0)
             acc.poll_interval_ms = int(self.entries["poll_interval_ms"].get().strip() or 100)
         except ValueError:
             self.error.configure(text="Проверьте числовые поля — там должны быть только цифры")

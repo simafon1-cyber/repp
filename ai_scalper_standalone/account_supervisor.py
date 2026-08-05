@@ -183,7 +183,10 @@ class AccountRunner:
             state.daily_pct = (equity - state.day_start_equity) / state.day_start_equity * 100.0
 
     def check_daily_limit(self, login: int, account: dict) -> None:
-        limit = float(account.get("daily_loss_percent", 3.0))
+        # Значение по умолчанию — 0, то есть «порога нет». Раньше здесь стояло
+        # 3.0: счёт из старого accounts.json, где поля ещё не было, получал
+        # дневную остановку, которую никто не включал.
+        limit = float(account.get("daily_loss_percent", 0.0) or 0.0)
         state = self.states[login]
         if limit <= 0 or state.day_start_equity <= 0 or state.trading_blocked:
             return
