@@ -20,6 +20,7 @@ import ast
 import json
 import sys
 import types
+import urllib.error
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
@@ -339,6 +340,121 @@ def test_updater_branch_autodetect() -> None:
     up._default_branch_cache.clear()
 
 
+def test_updater_recovers_wrong_branch() -> None:
+    """Жалоба владельца со снимка экрана: он вписал ветку, а обновление всё
+    равно отвечало «Репозиторий или ветка не найдены» на каждый файл.
+
+    Поле «Ветка» на экране узкое: в него влезало «claude/metatrader5-trading»,
+    и человек честно считал, что вписал имя целиком. Проверено вживую:
+    полное имя ветки отдаёт файл (200), обрезанное — 404, как и «main»,
+    которой в репозитории нет вовсе. Теперь на 404 программа спрашивает
+    список веток и сама подбирает ту, что имелась в виду."""
+    print("\n[Неверная ветка исправляется сама]")
+
+    names = ["claude/metatrader5-trading-system-ids42h", "release/1.0"]
+
+    # Подбор имени: обрезали, ошиблись регистром, вписали точно, вписали чушь
+    check(up.best_branch_match("claude/metatrader5-trading", names) == names[0],
+          "Обрезанное имя ветки распознано")
+    check(up.best_branch_match(names[0], names) == names[0],
+          "Точное имя остаётся как есть")
+    check(up.best_branch_match("RELEASE/1.0", names) == "release/1.0",
+          "Регистр не мешает")
+    check(up.best_branch_match("main", names, "release/1.0") == "release/1.0",
+          "Нет похожей — берётся главная ветка репозитория")
+    check(up.best_branch_match("main", names, "main") == "",
+          "Если и главной нет в списке — честно ничего")
+    check(up.best_branch_match("что угодно", []) == "",
+          "Пустой список веток — подбирать не из чего")
+
+    saved_request = up._request
+    CFG.UPDATE_ENABLED = True
+    CFG.UPDATE_REPO = "simafon1-cyber/repp"
+    CFG.UPDATE_BRANCH = "claude/metatrader5-trading"   # обрезанное имя
+    up.reset_caches()
+
+    calls = []
+
+    def fake(url, *a, **k):
+        calls.append(url)
+        if "/branches" in url:
+            return _FakeJSONResponse([{"name": n} for n in names])
+        if "/repos/" in url and url.endswith("/repp"):
+            return _FakeJSONResponse({"default_branch": names[0]})
+        if "claude/metatrader5-trading/" in url:      # обрезанная ветка
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+        return _FakeJSONResponse({"sha": "abc123def456", "commit": {"message": "тест"}})
+
+    up._request = fake
+    try:
+        text = None
+        try:
+            text = up.download_text("mql5/CalendarExport.mq5")
+        except Exception as e:  # noqa: BLE001
+            check(False, "Файл скачан несмотря на обрезанную ветку", str(e))
+        check(text is not None, "Файл скачан несмотря на обрезанную ветку")
+        check(up.branch() == names[0],
+              "Программа перешла на настоящую ветку", up.branch())
+        check(up.branch_was_fixed() == names[0],
+              "Интерфейсу есть что показать человеку")
+        check(any("/branches" in u for u in calls),
+              "Список веток запрошен только после отказа")
+
+        # Второй файл идёт сразу по исправленной ветке — без лишних запросов
+        before = len([u for u in calls if "/branches" in u])
+        second = None
+        try:
+            second = up.download_text("ai_scalper_pro/Config.mqh")
+        except Exception as e:  # noqa: BLE001
+            check(False, "Второй файл тоже скачан", str(e))
+        after = len([u for u in calls if "/branches" in u])
+        check(second is not None, "Второй файл тоже скачан")
+        check(before == after, "Ветку выясняем один раз, а не на каждый файл")
+
+        # 404 на УЖЕ исправленной ветке означает «такого файла нет», а не
+        # «ветка не та»: список веток снова тянуть незачем, а ошибку надо
+        # честно отдать наверх, а не проглотить
+        def missing(url, *a, **k):
+            calls.append(url)
+            if "/branches" in url:
+                return _FakeJSONResponse([{"name": n} for n in names])
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+        up._request = missing
+        before = len([u for u in calls if "/branches" in u])
+        raised = False
+        try:
+            up.download_text("нет/такого/файла.txt")
+        except urllib.error.HTTPError:
+            raised = True
+        after = len([u for u in calls if "/branches" in u])
+        check(raised, "Отсутствующий файл — честная ошибка, а не тишина")
+        check(before == after,
+              "Ветку повторно не переспрашиваем на каждый пропавший файл")
+    finally:
+        up._request = saved_request
+        CFG.UPDATE_BRANCH = ""
+        up.reset_caches()
+
+    # Ошибка 404, когда чинить нечего, объясняется по-человечески: с
+    # названием ветки и списком существующих
+    CFG.UPDATE_BRANCH = "выдуманная"
+    up.reset_caches()
+    up._request = lambda url, *a, **k: (
+        _FakeJSONResponse([{"name": n} for n in names]) if "/branches" in url
+        else (_ for _ in ()).throw(RuntimeError("не должно вызываться")))
+    try:
+        text = up.explain_error(
+            urllib.error.HTTPError("http://x", 404, "Not Found", {}, None))
+        check("выдуманная" in text, "Названа ветка, которой пользовались", text)
+        check(names[0] in text, "Перечислены существующие ветки")
+        check("Сохранить" in text, "Сказано, что делать дальше")
+    finally:
+        up._request = saved_request
+        CFG.UPDATE_BRANCH = ""
+        up.reset_caches()
+
+
 def test_updater_does_not_mix_versions() -> None:
     print("\n[Обновление не смешивает версии]")
 
@@ -484,6 +600,7 @@ def main() -> int:
     test_diagnostics()
     test_updater_rules()
     test_updater_branch_autodetect()
+    test_updater_recovers_wrong_branch()
     test_updater_does_not_mix_versions()
     test_updater_never_silent()
     test_bundled_everything()

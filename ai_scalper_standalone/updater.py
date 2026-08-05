@@ -147,9 +147,93 @@ def repo_default_branch() -> str:
     return value
 
 
+# Ветка, которой программа ПОЛЬЗУЕТСЯ вместо вписанной, потому что вписанной
+# в репозитории нет (см. recover_branch). Ключ — репозиторий.
+_branch_override = {}
+
+
 def branch() -> str:
+    """Ветка, из которой берутся файлы.
+
+    Сети здесь не касаемся, если ветка вписана руками: обновление дёргает
+    branch() на каждый файл, лишний запрос к GitHub на каждом — это и
+    медленно, и упирается в ограничение числа запросов."""
+    if repo() in _branch_override:
+        return _branch_override[repo()]
     configured = str(getattr(cfg, "UPDATE_BRANCH", "") or "").strip()
     return configured or repo_default_branch()
+
+
+def list_branches() -> list:
+    """Имена веток репозитория. Пустой список — спросить не удалось."""
+    try:
+        with _request(f"{API}/repos/{repo()}/branches?per_page=100") as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось получить список веток %s: %s", repo(), e)
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(item.get("name", "")) for item in data if item.get("name")]
+
+
+def best_branch_match(wanted: str, names: list, default: str = "") -> str:
+    """Какая из существующих веток имелась в виду.
+
+    Живой случай: поле «Ветка» на экране было узким, в него влезало
+    «claude/metatrader5-trading», и человек честно считал, что вписал имя
+    целиком. GitHub на обрезанное имя отвечает 404 на КАЖДЫЙ файл — и это
+    выглядит как «нет доступа к репозиторию», хотя доступ есть.
+
+    Порядок: точное совпадение -> без учёта регистра -> ветка, чьё имя
+    НАЧИНАЕТСЯ с вписанного (обрезали) -> ветка по умолчанию. Из нескольких
+    подходящих берём самую короткую: у неё меньше всего лишнего сверх того,
+    что человек вписал."""
+    names = [n for n in names or [] if n]
+    if not names:
+        return ""
+    wanted = (wanted or "").strip()
+    if wanted in names:
+        return wanted
+    if wanted:
+        lowered = [n for n in names if n.lower() == wanted.lower()]
+        if lowered:
+            return min(lowered, key=len)
+        prefixed = [n for n in names if n.startswith(wanted)]
+        if prefixed:
+            return min(prefixed, key=len)
+    if default in names:
+        return default
+    return ""
+
+
+def recover_branch() -> str:
+    """Починить ветку, если вписанной в репозитории нет. Возвращает пояснение
+    (пустая строка — чинить нечего или не вышло).
+
+    Вызывается ТОЛЬКО после отказа 404, а не заранее: пока всё скачивается,
+    лишних запросов к GitHub быть не должно."""
+    if repo() in _branch_override:
+        return ""   # уже чинили в этом сеансе
+    current = branch()
+    names = list_branches()
+    if not names or current in names:
+        return ""
+    fixed = best_branch_match(current, names, repo_default_branch())
+    if not fixed or fixed == current:
+        return ""
+    _branch_override[repo()] = fixed
+    note = (f"Ветки «{current}» в репозитории нет — беру «{fixed}». "
+            f"Впишите её в поле «Ветка» и нажмите «Сохранить» "
+            f"(или очистите поле совсем — тогда программа всегда берёт "
+            f"главную ветку репозитория сама).")
+    log.warning("%s", note)
+    return note
+
+
+def branch_was_fixed() -> str:
+    """Какой веткой программа пользуется вместо вписанной (для интерфейса)."""
+    return _branch_override.get(repo(), "")
 
 
 def reset_caches() -> None:
@@ -159,6 +243,7 @@ def reset_caches() -> None:
     пользоваться веткой по умолчанию, определённой для ПРЕЖНЕГО репозитория, и
     отказ выглядел бы необъяснимо."""
     _default_branch_cache.clear()
+    _branch_override.clear()
     _token_ignored["value"] = False
 
 
@@ -254,10 +339,23 @@ def explain_error(exc: Exception) -> str:
     """Ошибку сети — понятной фразой."""
     if isinstance(exc, urllib.error.HTTPError):
         if exc.code == 404:
-            return ("Репозиторий или ветка не найдены. Проверьте название "
-                    "репозитория (владелец/название) и ветку — оставьте поле "
-                    "«Ветка» пустым, чтобы программа сама взяла главную ветку "
-                    "репозитория. Для закрытого репозитория нужен токен.")
+            # Общими словами («проверьте UPDATE_REPO и UPDATE_BRANCH») эту
+            # ошибку починить нельзя: не видно, ЧЕМ именно программа сейчас
+            # пользуется. Называем ветку и перечисляем существующие — тогда
+            # опечатка или обрезанное имя видны с первого взгляда.
+            existing = list_branches()
+            if existing:
+                names = ", ".join(f"«{n}»" for n in existing[:10])
+                return (f"В репозитории «{repo()}» нет ветки «{branch()}». "
+                        f"Есть такие ветки: {names}. Впишите нужную в поле "
+                        f"«Ветка» и нажмите «Сохранить» — или очистите поле "
+                        f"совсем, тогда программа всегда возьмёт главную ветку "
+                        f"сама.")
+            return (f"Репозиторий «{repo()}» или ветка «{branch()}» не найдены. "
+                    "Проверьте название репозитория (владелец/название) и "
+                    "ветку — оставьте поле «Ветка» пустым, чтобы программа "
+                    "сама взяла главную ветку. Для закрытого репозитория "
+                    "нужен токен.")
         if exc.code in (401, 403):
             return "Нет доступа к репозиторию. " + auth_hint()
         if exc.code == 429:
@@ -285,11 +383,25 @@ def check() -> dict:
                            "владелец/название на вкладке «Обновление».")
         return result
 
-    url = f"{API}/repos/{repo()}/commits/{branch()}"
-    try:
+    def fetch():
+        url = f"{API}/repos/{repo()}/commits/{branch()}"
         with _request(url) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except Exception as e:
+            return json.loads(response.read().decode("utf-8"))
+
+    try:
+        data = fetch()
+    except urllib.error.HTTPError as e:
+        # Ветки нет — подобрать существующую и повторить (см. recover_branch)
+        try:
+            fixed = recover_branch() if e.code == 404 else ""
+            data = fetch() if fixed else None
+        except Exception as retry_error:  # noqa: BLE001
+            result["error"] = explain_error(retry_error)
+            return result
+        if data is None:
+            result["error"] = explain_error(e)
+            return result
+    except Exception as e:  # noqa: BLE001
         result["error"] = explain_error(e)
         return result
 
@@ -314,10 +426,24 @@ def check() -> dict:
 # ПРИМЕНЕНИЕ
 # =====================================================================
 def download_text(path: str) -> str:
-    """Один файл из репозитория как текст."""
-    url = f"{RAW}/{repo()}/{branch()}/{path}"
-    with _request(url, accept="text/plain") as response:
-        return response.read().decode("utf-8", errors="replace")
+    """Один файл из репозитория как текст.
+
+    На 404 один раз пробуем починить ветку (recover_branch) и повторяем. Без
+    этого одна опечатка или обрезанное имя ветки давала «Репозиторий или
+    ветка не найдены» на каждый файл подряд, и починить это можно было
+    только вручную — а инструкция «исправьте ветку» лежала внутри того
+    самого обновления, которое не скачивалось."""
+    def fetch():
+        url = f"{RAW}/{repo()}/{branch()}/{path}"
+        with _request(url, accept="text/plain") as response:
+            return response.read().decode("utf-8", errors="replace")
+
+    try:
+        return fetch()
+    except urllib.error.HTTPError as e:
+        if e.code != 404 or not recover_branch():
+            raise
+        return fetch()
 
 
 def update_advisors(progress=None) -> dict:
@@ -392,9 +518,17 @@ def list_repo_files() -> list:
     Список файлов НЕ зашит в код намеренно: когда в программе появляется
     новый модуль, зашитый список о нём не знает — обновление молча привезло
     бы половину новой версии."""
-    url = f"{API}/repos/{repo()}/git/trees/{branch()}?recursive=1"
-    with _request(url) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    def fetch():
+        url = f"{API}/repos/{repo()}/git/trees/{branch()}?recursive=1"
+        with _request(url) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    try:
+        data = fetch()
+    except urllib.error.HTTPError as e:
+        if e.code != 404 or not recover_branch():
+            raise
+        data = fetch()
     if data.get("truncated"):
         log.warning("GitHub отдал дерево файлов не целиком — репозиторий очень большой.")
     return [item["path"] for item in (data.get("tree") or [])
