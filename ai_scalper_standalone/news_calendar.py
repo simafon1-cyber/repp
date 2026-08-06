@@ -114,10 +114,28 @@ def detect_news_breakout(symbol: str, window_minutes: int):
     if not codes:
         return False, 0, 0.0
 
+    # КАКИЕ новости вообще считаются поводом для входа.
+    #
+    # Владелец: «календарь отрабатывает все новости? я не заметил за ним
+    # этого». Не все — и это было сделано намеренно, но нигде не написано:
+    # входом считалась ТОЛЬКО важность "high". Событий такого уровня по
+    # одной валюте выходит несколько штук в день, остальные (medium, low)
+    # календарь показывал на вкладке «Новости», но торговать по ним не
+    # пытался — со стороны это и выглядит как «новости не отрабатываются».
+    #
+    # Теперь порог задаётся настройкой. По умолчанию остаётся "high":
+    # средние новости двигают рынок слабее, а спред на них расширяется так
+    # же — снижать порог стоит осознанно.
+    rank = {"low": 0, "medium": 1, "high": 2}
+    min_rank = rank.get(
+        str(getattr(cfg, "NEWS_TRADE_MIN_IMPACT", "high") or "high").lower(), 2)
+
     now = datetime.now()
     recent_event = None
     for e in events:
-        if e["currency"] not in codes or e["impact"] != "high":
+        if e["currency"] not in codes:
+            continue
+        if rank.get(e["impact"], 0) < min_rank:
             continue
         minutes_since = (now - e["time"]).total_seconds() / 60.0
         if 0 <= minutes_since <= window_minutes:

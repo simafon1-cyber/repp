@@ -408,6 +408,121 @@ def test_installer() -> None:
     check(b"Install-CalendarExport.ps1" in bat_raw, "Ярлык запускает нужный скрипт")
 
 
+def test_forexfactory_source() -> None:
+    """Новый бесплатный источник без ключа.
+
+    Владелец: «найди другие источники для получения новостной торговли».
+    Календарь MT5 требует запущенного сервиса в терминале, Finnhub — ключ.
+    Получалось, что «из коробки» новостей нет вовсе и новостной режим молчит.
+
+    Живьём ответ сервера здесь не проверить (сеть окружения к этому хосту не
+    пускает), поэтому разбор проверяется на ЗАПИСАННОМ образце ровно того
+    формата, который отдаёт Forex Factory."""
+    print("\n[Forex Factory: бесплатный календарь без ключа]")
+
+    check("forexfactory" in npv.PROVIDERS, "Источник добавлен")
+    check("forexfactory" in npv.KEYLESS_PROVIDERS, "Ключ ему не нужен")
+    check("forexfactory" in npv.PROVIDER_TITLES, "И у него есть понятное название")
+    # Цепочку из настроек берём из ЭТАЛОНА: предыдущие тесты подменяли её
+    # в CFG, чтобы проверить разбор списка источников.
+    fresh = types.ModuleType("config_fresh")
+    exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
+    check("forexfactory" in (fresh.NEWS_PROVIDER_CHAIN or []),
+          "Он стоит в цепочке источников по умолчанию",
+          str(fresh.NEWS_PROVIDER_CHAIN))
+    check(fresh.NEWS_PROVIDER_CHAIN.index("mt5") <
+          fresh.NEWS_PROVIDER_CHAIN.index("forexfactory"),
+          "Встроенный календарь терминала остаётся первым — он подробнее")
+
+    sample = [
+        {"title": "Non-Farm Employment Change", "country": "USD",
+         "date": "2026-08-06T12:30:00+00:00", "impact": "High",
+         "forecast": "185K", "previous": "206K"},
+        {"title": "ECB President Speaks", "country": "EUR",
+         "date": "2026-08-06T14:00:00+00:00", "impact": "Medium",
+         "forecast": "", "previous": ""},
+        {"title": "Bank Holiday", "country": "GBP",
+         "date": "2026-08-06T00:00:00+00:00", "impact": "Holiday",
+         "forecast": "", "previous": ""},
+        {"title": "Слишком старое", "country": "USD",
+         "date": "2020-01-01T10:00:00+00:00", "impact": "High",
+         "forecast": "", "previous": ""},
+        {"нет": "нужных полей"},
+        "вообще не словарь",
+    ]
+    events = npv.parse_forexfactory(sample, "2026-08-05", "2026-08-07")
+    check(len(events) == 3, "Разобрано ровно то, что попадает в окно дат",
+          str(len(events)))
+
+    by_title = {e["event"]: e for e in events}
+    nfp = by_title.get("Non-Farm Employment Change")
+    check(nfp is not None, "Главная новость месяца на месте")
+    if nfp:
+        check(nfp["currency"] == "USD", "Валюта берётся из поля country")
+        check(nfp["impact"] == "high", "Важность приведена к нашему виду")
+        check(nfp["estimate"] == "185K", "Прогноз прочитан")
+        check(nfp["prev"] == "206K", "Предыдущее значение прочитано")
+
+    ecb = by_title.get("ECB President Speaks")
+    check(ecb is not None and ecb["impact"] == "medium", "Средняя важность — medium")
+
+    holiday = by_title.get("Bank Holiday")
+    check(holiday is not None and holiday["impact"] == "low",
+          "Выходной день рынка — не повод для сделки")
+
+    # Часовой пояс: время должно пересчитываться в местное, иначе фильтр
+    # промахнётся на часы (та же ловушка, что и с календарём MT5)
+    utc = npv._parse_ff_time("2026-08-06T12:30:00+00:00")
+    check(utc.tzinfo is None, "Время «наивное», как во всей программе")
+    with_z = npv._parse_ff_time("2026-08-06T12:30:00Z")
+    check(with_z == utc, "Запись через Z понимается так же")
+
+    # Одно и то же мгновение, записанное с разным смещением, обязано дать
+    # ОДНО время. Так проверка не зависит от часового пояса машины: если
+    # смещение игнорировать, разница будет ровно в 4 часа.
+    same_moment = npv._parse_ff_time("2026-08-06T08:30:00-04:00")
+    check(same_moment == utc,
+          "Смещение часового пояса действительно учитывается",
+          f"{same_moment} против {utc}")
+    other = npv._parse_ff_time("2026-08-06T14:30:00+02:00")
+    check(other == utc, "И с положительным смещением тоже",
+          f"{other} против {utc}")
+
+    broken = False
+    try:
+        npv._parse_ff_time("")
+    except (ValueError, TypeError):
+        broken = True
+    check(broken, "Пустое время отвергается, а не превращается в мусор")
+
+    check(npv.parse_forexfactory([], "2026-08-05", "2026-08-07") == [],
+          "Пустой ответ — пустой список, без падения")
+    check(npv.parse_forexfactory(None, "2026-08-05", "2026-08-07") == [],
+          "И на None тоже не падаем")
+
+
+def test_news_entry_threshold() -> None:
+    """Владелец: «календарь отрабатывает все новости? я не заметил за ним
+    этого». Не все — поводом для ВХОДА считались только самые важные, и
+    нигде об этом не было сказано."""
+    print("\n[Какие новости считаются поводом для входа]")
+
+    check(hasattr(CFG, "NEWS_TRADE_MIN_IMPACT"), "Порог важности настраивается")
+    check(CFG.NEWS_TRADE_MIN_IMPACT == "high",
+          "По умолчанию — только самые важные новости",
+          str(CFG.NEWS_TRADE_MIN_IMPACT))
+
+    src = (APP / "news_calendar.py").read_text(encoding="utf-8")
+    check('e["impact"] != "high"' not in src,
+          "Важность больше не зашита в код намертво")
+    check("NEWS_TRADE_MIN_IMPACT" in src, "Берётся из настроек")
+
+    # На вкладке «Новости» видны ВСЕ события, независимо от порога входа
+    upcoming = src.split("def upcoming_events", 1)[1][:600]
+    check("NEWS_TRADE_MIN_IMPACT" not in upcoming,
+          "Список новостей на вкладке порогом входа не режется")
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ ИСТОЧНИКОВ НОВОСТЕЙ")
@@ -418,6 +533,8 @@ def main() -> int:
     test_mt5_staleness()
     test_chain()
     test_chain_config()
+    test_forexfactory_source()
+    test_news_entry_threshold()
     test_exporter_source()
     test_chart_code()
     test_installer()

@@ -69,6 +69,102 @@ def fetch_finnhub(api_key: str, from_date: str, to_date: str) -> list:
 
 
 # =====================================================================
+# FOREX FACTORY — бесплатный календарь без ключа и без регистрации
+# =====================================================================
+# Зачем ещё один источник. Встроенный календарь MT5 бесплатный и подробный,
+# но требует, чтобы в терминале был установлен, собран и ЗАПУЩЕН сервис
+# CalendarExport — а запустить его снаружи нельзя, это делается мышкой один
+# раз. Finnhub требует бесплатный, но всё же ключ. Получалось, что «из
+# коробки» новостей у программы нет вовсе, и новостной режим молчал.
+#
+# Forex Factory отдаёт календарь на неделю обычным JSON-файлом, без ключа и
+# без регистрации. Это тот самый источник, по которому большинство трейдеров
+# и смотрит новости.
+#
+# Формат (по одному событию):
+#   {"title": "ISM Manufacturing PMI", "country": "USD",
+#    "date": "2026-08-06T10:00:00-04:00", "impact": "High",
+#    "forecast": "47.1", "previous": "46.7"}
+#
+# ЧЕСТНО ПРО ПРОВЕРКУ: сеть окружения, где писался этот код, к
+# nfs.faireconomy.media не пускает (запрет политики, а не отказ самого
+# сайта), поэтому вживую ответ сервера здесь не проверялся — разбор написан
+# по документированному формату и покрыт тестами на заранее записанном
+# образце. На вашем компьютере вкладка «Новости» показывает, какой источник
+# ответил на самом деле.
+FOREXFACTORY_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+
+# Forex Factory пишет важность словом. "Holiday" — не новость, а выходной
+# день рынка: торговать по нему нечего, приравниваем к низкой важности.
+_FF_IMPACT = {
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+    "holiday": "low",
+    "non-economic": "low",
+}
+
+
+def _parse_ff_time(raw: str):
+    """Время события Forex Factory -> местное время этого компьютера.
+
+    В файле время со смещением часового пояса ("...-04:00"). Без пересчёта
+    фильтр новостей промахнулся бы на часы — ровно та же ловушка, что и с
+    календарём MT5 (см. _parse_mt5_time)."""
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError("пустое время события")
+    # datetime.fromisoformat в Python 3.11+ понимает и "Z", и смещение
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    moment = datetime.fromisoformat(text)
+    if moment.tzinfo is None:
+        return moment          # без часового пояса — считаем местным
+    return moment.astimezone().replace(tzinfo=None)
+
+
+def parse_forexfactory(data, from_date: str, to_date: str) -> list:
+    """Разбор ответа Forex Factory. Вынесен отдельно, чтобы проверить его
+    тестом на записанном образце, не выходя в сеть."""
+    since = datetime.strptime(from_date, "%Y-%m-%d")
+    until = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+
+    events = []
+    for item in (data or []):
+        if not isinstance(item, dict):
+            continue
+        try:
+            t = _parse_ff_time(item.get("date", ""))
+        except (ValueError, TypeError):
+            continue
+        if not (since <= t <= until):
+            continue
+        impact = str(item.get("impact", "") or "").strip().lower()
+        events.append({
+            "time": t,
+            # У Forex Factory валюта лежит в поле country ("USD", "EUR")
+            "currency": str(item.get("country", "") or "").upper(),
+            "event": item.get("title", ""),
+            "impact": _FF_IMPACT.get(impact, "low"),
+            # Факта в недельном файле нет — он появляется только после выхода
+            "actual": item.get("actual", "") or "",
+            "estimate": item.get("forecast", "") or "",
+            "prev": item.get("previous", "") or "",
+        })
+    return events
+
+
+def fetch_forexfactory(api_key: str, from_date: str, to_date: str) -> list:
+    """Календарь Forex Factory. api_key не нужен (см. KEYLESS_PROVIDERS)."""
+    import requests
+
+    resp = requests.get(FOREXFACTORY_URL, timeout=15,
+                        headers={"User-Agent": "AI-Scalper/1.0"})
+    resp.raise_for_status()
+    return parse_forexfactory(resp.json(), from_date, to_date)
+
+
+# =====================================================================
 # ВСТРОЕННЫЙ КАЛЕНДАРЬ METATRADER 5
 # =====================================================================
 # Полностью бесплатный источник: без API-ключа, без регистрации, без лимитов
@@ -198,15 +294,17 @@ BROKEN_ENCODING_HINT = (
 # fetch_tradingeconomics, fetch_fmp) и впиши их сюда одной строкой.
 PROVIDERS = {
     "mt5": fetch_mt5,
+    "forexfactory": fetch_forexfactory,
     "finnhub": fetch_finnhub,
 }
 
 # Провайдеры, которым API-ключ не нужен вовсе.
-KEYLESS_PROVIDERS = {"mt5"}
+KEYLESS_PROVIDERS = {"mt5", "forexfactory"}
 
 # Понятные человеку названия для интерфейса.
 PROVIDER_TITLES = {
     "mt5": "Календарь MetaTrader 5 (бесплатно, без ключа)",
+    "forexfactory": "Forex Factory (бесплатно, без ключа и регистрации)",
     "finnhub": "Finnhub (нужен бесплатный ключ)",
 }
 
