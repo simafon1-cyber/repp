@@ -81,6 +81,7 @@ import trading_schedule as tsched
 import mt5_install
 import param_help
 import config_migrate
+import news_autostart
 import version as app_version
 import cloud_journal
 import bridge_host
@@ -2003,6 +2004,15 @@ class App:
         btn_frame.pack(anchor="w", **pad)
         ttk.Button(btn_frame, text="Обновить календарь",
                    command=self.refresh_news_tab).grid(row=0, column=0)
+        ttk.Button(btn_frame, text="Проверить и починить источник",
+                   command=self.fix_news_source).grid(row=0, column=1, padx=6)
+
+        # Состояние всей цепочки новостей одной строкой. Без неё понять, почему
+        # новостной режим молчит, было нельзя: бот писал «свежего пробоя нет»
+        # и когда пробоя правда не было, и когда календаря не существует вовсе.
+        self.news_source_var = tk.StringVar(value="Источник новостей: проверяю...")
+        ttk.Label(parent, textvariable=self.news_source_var, wraplength=800,
+                  justify="left", font=("Segoe UI", 9, "bold")).pack(anchor="w", **pad)
 
         self.news_status_var = tk.StringVar(value="")
         ttk.Label(parent, textvariable=self.news_status_var, foreground="#888", wraplength=800,
@@ -3470,8 +3480,44 @@ class App:
                                text="красное — торговля заблокирована",
                                fill="#8a5560", font=("Segoe UI", 7))
 
+    def fix_news_source(self):
+        """Проверить цепочку новостей и починить то, что чинится само.
+
+        Установка и сборка сервиса делаются программой; единственное, что
+        приходится нажать руками, — первый запуск сервиса в Навигаторе
+        терминала: снаружи MetaTrader сервисы запускать не даёт."""
+        self.news_source_var.set("Проверяю источник новостей...")
+
+        def worker():
+            try:
+                news_autostart.reset_checks()
+                done = news_autostart.repair(
+                    progress=lambda t: self.root.after(
+                        0, lambda t=t: self.news_source_var.set(t)))
+                state = news_autostart.check()
+                text = news_autostart.describe(state)
+                if done:
+                    text = "Сделано: " + "; ".join(done) + ". " + text
+            except Exception as e:  # noqa: BLE001
+                text = f"Проверить источник не удалось: {e}"
+            self.root.after(0, lambda: self.news_source_var.set(text))
+
+        threading.Thread(target=worker, daemon=True, name="news-source").start()
+
+    def refresh_news_source_line(self):
+        """Показать состояние источника, ничего не меняя (при открытии вкладки)."""
+        def worker():
+            try:
+                text = news_autostart.describe(news_autostart.check())
+            except Exception as e:  # noqa: BLE001
+                text = f"Состояние источника неизвестно: {e}"
+            self.root.after(0, lambda: self.news_source_var.set(text))
+
+        threading.Thread(target=worker, daemon=True, name="news-source-line").start()
+
     def refresh_news_tab(self):
         self.news_status_var.set("Загружаю...")
+        self.refresh_news_source_line()
         threading.Thread(target=self._refresh_news_worker, daemon=True).start()
 
     def _refresh_news_worker(self):
@@ -4232,6 +4278,18 @@ def main():
             log.info("Настройка изменена при обновлении: %s", note)
     except Exception as e:  # noqa: BLE001
         log.warning("Не удалось дописать новые настройки в config.py: %s", e)
+
+    # Источник новостей налаживается сам: если включён новостной режим, а
+    # сервис календаря в терминале не поставлен или не собран — программа
+    # ставит и собирает его при запуске, не спрашивая. Всё, что нельзя
+    # сделать снаружи (первый запуск сервиса в Навигаторе), честно
+    # называется в интерфейсе на вкладке «Новости».
+    try:
+        news_state = news_autostart.ensure_ready(force=True)
+        if news_state.get("news_mode") and not news_state.get("ready"):
+            log.warning("Новости: %s", news_autostart.describe(news_state))
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось проверить источник новостей: %s", e)
 
     _migrate_legacy_secrets()
     _harden_files()
