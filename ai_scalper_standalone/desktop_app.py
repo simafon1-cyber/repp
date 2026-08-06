@@ -657,6 +657,10 @@ class App:
             self._start_tray()
 
         self._refresh_loop()
+        # Календарь подтягивает новости сам — владелец просил, чтобы он
+        # обновлялся без нажатий. Первый раз с задержкой: при старте окно
+        # ещё рисуется, а связи с терминалом может ещё не быть.
+        self.root.after(8000, self._news_auto_refresh)
 
         # Автозапуск торгового цикла вместе с программой — не нужно нажимать
         # "Старт" руками. Кнопки Старт/Стоп остаются для ручной остановки/
@@ -3514,6 +3518,29 @@ class App:
             self.root.after(0, lambda: self.news_source_var.set(text))
 
         threading.Thread(target=worker, daemon=True, name="news-source-line").start()
+
+    def _news_auto_refresh(self):
+        """Сам обновляет календарь раз в NEWS_AUTO_REFRESH_MINUTES минут.
+
+        Владелец: «и календарь сам обновлялся с новостями». Раньше события
+        подтягивались только по кнопке — если вкладку не открывать, бот
+        работал на календаре, загруженном при запуске, и мог не знать про
+        новость, вышедшую час назад.
+
+        Заодно перепроверяется сам источник (news_autostart): сервис в
+        терминале могли остановить, и календарь тихо протух бы."""
+        minutes = float(getattr(cfg, "NEWS_AUTO_REFRESH_MINUTES", 15) or 0)
+        if minutes <= 0:
+            return          # 0 = обновлять само не нужно
+        try:
+            news_autostart.ensure_ready()
+            self.refresh_news_tab()
+        except Exception as e:  # noqa: BLE001
+            log.warning("Автообновление календаря не прошло: %s", e)
+        finally:
+            # Следующий раз планируем ВСЕГДА, даже после ошибки: временный
+            # сбой сети не должен навсегда отключать автообновление.
+            self.root.after(int(minutes * 60_000), self._news_auto_refresh)
 
     def refresh_news_tab(self):
         self.news_status_var.set("Загружаю...")

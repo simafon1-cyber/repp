@@ -290,6 +290,43 @@ def test_honest_about_manual_step() -> None:
     check("news_source_var" in ui, "Состояние источника видно на вкладке")
 
 
+def test_calendar_refreshes_itself() -> None:
+    """Владелец: «и календарь сам обновлялся с новостями».
+
+    Раньше события подтягивались только по кнопке. Если вкладку не
+    открывать, бот работал на календаре, загруженном при запуске, и мог не
+    знать про новость, вышедшую час назад."""
+    print("\n[Календарь обновляется сам]")
+
+    check(hasattr(CFG, "NEWS_AUTO_REFRESH_MINUTES"),
+          "Настройка периода автообновления есть")
+    minutes = getattr(CFG, "NEWS_AUTO_REFRESH_MINUTES", 0)
+    check(minutes > 0, "По умолчанию включено", str(minutes))
+    check(minutes >= 10,
+          "Не чаще раза в 10 минут — события меняются редко", str(minutes))
+
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    check("_news_auto_refresh" in ui, "Автообновление есть в программе")
+    body = ui.split("def _news_auto_refresh", 1)[1].split("\n    def ", 1)[0]
+    check("refresh_news_tab()" in body, "Оно действительно тянет календарь")
+    check("ensure_ready()" in body,
+          "И заодно перепроверяет сам источник — сервис могли остановить")
+    check("NEWS_AUTO_REFRESH_MINUTES" in body, "Период берётся из настроек")
+    check("if minutes <= 0" in body or "minutes <= 0" in body,
+          "Ноль означает «не обновлять само»")
+
+    # Следующий раз должен планироваться ДАЖЕ после ошибки, иначе один сбой
+    # сети навсегда выключил бы автообновление
+    tail = body.split("finally:", 1)
+    check(len(tail) == 2, "Планирование следующего раза в finally")
+    if len(tail) == 2:
+        check("after(" in tail[1],
+              "Сбой сети не отключает автообновление навсегда")
+
+    check("self.root.after(8000, self._news_auto_refresh)" in ui,
+          "Запускается при старте программы, с задержкой на прорисовку окна")
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ: ИСТОЧНИК НОВОСТЕЙ НАЛАЖИВАЕТСЯ САМ")
@@ -301,6 +338,7 @@ def main() -> int:
     test_repair_installs_itself()
     test_only_when_news_mode()
     test_honest_about_manual_step()
+    test_calendar_refreshes_itself()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
