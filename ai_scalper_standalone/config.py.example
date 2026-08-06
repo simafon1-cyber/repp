@@ -69,6 +69,11 @@ MT5_TERMINAL_PATH = ""   # путь к terminal64.exe, если MT5 устано
 # программа не откроет и объяснит почему (MAX_TRADE_RISK_PERCENT_OF_EQUITY).
 SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
 
+# Оформление окна: "light" — светлая тема (по умолчанию), "dark" — тёмная.
+# Раньше тема была только тёмная, и на чёрном фоне цифры в таблицах читались
+# плохо. Обе темы проверены на контраст по WCAG (см. ui_theme.py).
+UI_THEME = "light"
+
 TIMEFRAME = "M5"         # рабочий ТФ для входов
 TREND_TIMEFRAME = "M15"  # старший ТФ для MTF-тренда (должен быть СТАРШЕ TIMEFRAME)
 

@@ -17,21 +17,25 @@ from tkinter import messagebox, ttk
 
 import accounts_backup
 import config as cfg
+import ui_theme
 from control import control  # объект, а не модуль: см. control.py
 from account_supervisor import AccountSupervisor
 from accounts import (Account, AccountStore, migrate_from_config,
                       resolve_symbols)
 
-# Оформление в тон остальному окну программы
-BG = "#1b1b1b"
-BG_CARD = "#232323"
-FG = "#eeeeee"
-FG_MUTED = "#9a9a9a"
-FG_DIM = "#6a6a6a"
-ACCENT = "#4c8dff"
-PROFIT = "#3fb950"
-LOSS = "#f0574a"
-WARNING = "#d9a441"
+# Оформление берётся из общей палитры (ui_theme.py), а не вписано здесь.
+# Раньше эти девять цветов жили своей жизнью: поменяв тему в главном окне,
+# вкладку «Счета» приходилось править отдельно — и она оставалась чёрной.
+_C = ui_theme.from_config(cfg)
+BG = _C["bg"]
+BG_CARD = _C["card"]
+FG = _C["fg"]
+FG_MUTED = _C["muted"]
+FG_DIM = _C["dim"]
+ACCENT = _C["accent"]
+PROFIT = _C["profit"]
+LOSS = _C["loss"]
+WARNING = _C["warning"]
 
 REFRESH_MS = 250  # как часто забирать состояние из процессов счетов
 
@@ -134,7 +138,7 @@ class AccountDialog(tk.Toplevel):
             self.symbol_pick.pack(side="left", padx=6)
             tk.Button(picker, text="Добавить", command=self._add_picked, bg=BG_CARD,
                       fg=FG, relief="flat", font=("Segoe UI", 8), padx=8, pady=2,
-                      activebackground="#2e2e2e", activeforeground=FG).pack(side="left")
+                      activebackground=_C["tab_active"], activeforeground=FG).pack(side="left")
         else:
             self.symbol_pick = None
             tk.Label(picker, wraplength=430, justify="left", bg=BG, fg=FG_DIM,
@@ -161,10 +165,10 @@ class AccountDialog(tk.Toplevel):
         buttons.grid(row=row + 2, column=0, columnspan=2, sticky="e", padx=18, pady=16)
         tk.Button(buttons, text="Отмена", command=self.destroy, bg=BG_CARD, fg=FG,
                   relief="flat", font=("Segoe UI", 10), padx=14, pady=5,
-                  activebackground="#2e2e2e", activeforeground=FG).pack(side="left", padx=6)
-        tk.Button(buttons, text="Сохранить", command=self._save, bg=ACCENT, fg="white",
+                  activebackground=_C["tab_active"], activeforeground=FG).pack(side="left", padx=6)
+        tk.Button(buttons, text="Сохранить", command=self._save, bg=ACCENT, fg=_C["accent_fg"],
                   relief="flat", font=("Segoe UI Semibold", 10), padx=18, pady=5,
-                  activebackground="#3d7ae8", activeforeground="white").pack(side="left")
+                  activebackground=_C["accent"], activeforeground=_C["accent_fg"]).pack(side="left")
 
         self.columnconfigure(1, weight=1)
         self.entries["name"].focus_set()
@@ -312,9 +316,9 @@ class AccountsTab:
         self.summary.pack(side="left")
 
         tk.Button(top, text="Закрыть всё на всех счетах", command=self._panic,
-                  bg=LOSS, fg="white", relief="flat", font=("Segoe UI Semibold", 9),
-                  padx=14, pady=5, activebackground="#c94438",
-                  activeforeground="white").pack(side="right")
+                  bg=LOSS, fg=_C["accent_fg"], relief="flat", font=("Segoe UI Semibold", 9),
+                  padx=14, pady=5, activebackground=_C["loss"],
+                  activeforeground=_C["accent_fg"]).pack(side="right")
 
         # --- резервная копия списка счетов в облаке ---
         # Список счетов (логины, серверы, зашифрованные пароли) НАРОЧНО не
@@ -328,11 +332,11 @@ class AccountsTab:
         tk.Button(cloud_row, text="☁ Сохранить счета в облако",
                   command=self._backup_to_cloud, bg=BG_CARD, fg=FG,
                   relief="flat", font=("Segoe UI", 8), padx=8, pady=3,
-                  activebackground="#2e2e2e", activeforeground=FG).pack(side="left")
+                  activebackground=_C["tab_active"], activeforeground=FG).pack(side="left")
         tk.Button(cloud_row, text="☁ Восстановить из облака",
                   command=self._restore_from_cloud, bg=BG_CARD, fg=FG,
                   relief="flat", font=("Segoe UI", 8), padx=8, pady=3,
-                  activebackground="#2e2e2e", activeforeground=FG).pack(side="left", padx=(6, 0))
+                  activebackground=_C["tab_active"], activeforeground=FG).pack(side="left", padx=(6, 0))
         self.cloud_status = tk.Label(cloud_row, text="", bg=BG, fg=FG_MUTED,
                                      font=("Segoe UI", 8), anchor="w")
         self.cloud_status.pack(side="left", padx=(10, 0))
@@ -351,7 +355,7 @@ class AccountsTab:
                  font=("Segoe UI", 8)).pack(side="left")
         tk.Button(bar, text="+ Добавить", command=self._add, bg=BG_CARD, fg=FG,
                   relief="flat", font=("Segoe UI", 8), padx=8, pady=3,
-                  activebackground="#2e2e2e", activeforeground=FG).pack(side="right")
+                  activebackground=_C["tab_active"], activeforeground=FG).pack(side="right")
 
         # show="headings" без колонки #0: у неё есть отступ под значок дерева,
         # из-за которого текст в узкой панели обрезался
@@ -375,11 +379,11 @@ class AccountsTab:
         for text, cmd in (("Изменить", self._edit), ("Удалить", self._delete)):
             tk.Button(manage, text=text, command=cmd, bg=BG_CARD, fg=FG_MUTED,
                       relief="flat", font=("Segoe UI", 8), padx=8, pady=4,
-                      activebackground="#2e2e2e", activeforeground=FG).pack(side="left", padx=(0, 5))
+                      activebackground=_C["tab_active"], activeforeground=FG).pack(side="left", padx=(0, 5))
         self.btn_enable = tk.Button(manage, text="Выключить", command=self._toggle,
                                     bg=BG_CARD, fg=FG_MUTED, relief="flat",
                                     font=("Segoe UI", 8), padx=8, pady=4,
-                                    activebackground="#2e2e2e", activeforeground=FG)
+                                    activebackground=_C["tab_active"], activeforeground=FG)
         self.btn_enable.pack(side="left")
 
         right = tk.Frame(body, bg=BG)
@@ -401,9 +405,9 @@ class AccountsTab:
         actions.pack(fill="x", pady=(0, 8))
         self.btn_start = self._action(actions, "Запустить", self._start, ACCENT)
         self.btn_stop = self._action(actions, "Остановить", self._stop, BG_CARD)
-        tk.Frame(actions, bg="#333", width=1).pack(side="left", fill="y", padx=6, pady=2)
+        tk.Frame(actions, bg=_C["border"], width=1).pack(side="left", fill="y", padx=6, pady=2)
         self._action(actions, "Запустить все", self._start_all, BG_CARD)
-        tk.Frame(actions, bg="#333", width=1).pack(side="left", fill="y", padx=6, pady=2)
+        tk.Frame(actions, bg=_C["border"], width=1).pack(side="left", fill="y", padx=6, pady=2)
         self._action(actions, "Закрыть прибыльные", self._close_profit, BG_CARD)
         self._action(actions, "Закрыть убыточные", self._close_loss, BG_CARD)
         self._action(actions, "Закрыть все", self._close_all, BG_CARD)
@@ -440,7 +444,7 @@ class AccountsTab:
         fg = "white" if bg == ACCENT else FG
         btn = tk.Button(master, text=text, command=command, bg=bg, fg=fg, relief="flat",
                         font=("Segoe UI", 9), padx=10, pady=5,
-                        activebackground="#3d7ae8" if bg == ACCENT else "#2e2e2e",
+                        activebackground=_C["accent"] if bg == ACCENT else _C["tab_active"],
                         activeforeground=fg)
         btn.pack(side="left", padx=(0, 5))
         return btn

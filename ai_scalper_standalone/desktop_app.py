@@ -82,6 +82,7 @@ import mt5_install
 import param_help
 import config_migrate
 import news_autostart
+import ui_theme
 import version as app_version
 import cloud_journal
 import bridge_host
@@ -276,6 +277,7 @@ ADVANCED_PARAMS = [
 
     ("USE_AUTO_LEARNING", "bool", "Автообучение", "Адаптировать вес AI / порог по винрейту", None),
     ("AUTO_LEARNING_WINDOW", "int", "Автообучение", "Окно последних сделок по символу", None),
+    ("UI_THEME", "str", "Оформление", "Тема окна: light (светлая) или dark (тёмная)", None),
     ("USE_SYMBOL_AUTO_OFF", "bool", "Автообучение", "Отключать инструмент, который стабильно в минусе", None),
     ("SYMBOL_AUTO_OFF_MIN_TRADES", "int", "Автообучение", "Сколько сделок нужно, прежде чем судить об инструменте", None),
     ("SYMBOL_AUTO_OFF_LOSS_PERCENT", "float", "Автообучение", "Потерял больше % счёта за окно — отключить инструмент", None),
@@ -606,6 +608,7 @@ CONFIG_SECTIONS = [
     ("Защита", ["Защитные проверки", "Новости (пороги)"]),
     ("AI-сигнал", ["AI-сигнал"]),
     ("Обучение", ["Автообучение", "Автообновление"]),
+    ("Вид", ["Оформление"]),
 ]
 
 
@@ -672,26 +675,22 @@ class App:
 
     # ---- тема оформления --------------------------------------------------
     def _apply_theme(self):
+        """Оформление окна. Цвета лежат в ui_theme.py — все в одном месте, с
+        проверенным контрастом. Раньше они были вписаны прямо здесь и ещё в
+        семи десятках мест по коду, а серый текст на почти чёрном фоне
+        читался плохо: «на чёрном фоне очень плохо всё видно»."""
         style = ttk.Style(self.root)
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        bg, fg, field = "#1b1b1b", "#eee", "#242424"
-        self.root.configure(bg=bg)
-        style.configure(".", background=bg, foreground=fg, fieldbackground=field)
-        style.configure("TNotebook", background=bg)
-        style.configure("TNotebook.Tab", background="#2a2a2a", foreground=fg, padding=(12, 6))
-        style.map("TNotebook.Tab", background=[("selected", "#3a3a3a")])
-        style.configure("Treeview", background=field, fieldbackground=field, foreground=fg, rowheight=22)
-        style.configure("Treeview.Heading", background="#2a2a2a", foreground=fg)
-        style.configure("TLabelframe", background=bg, foreground=fg)
-        style.configure("TLabelframe.Label", background=bg, foreground=fg)
+        self.colors = ui_theme.from_config(cfg)
+        ui_theme.apply(self.root, style, self.colors)
 
     # ---- интерфейс: вкладки -------------------------------------------------
     def _build_ui(self):
         credit_label = ttk.Label(self.root, text="made by Viacheslav.Y.",
-                                  foreground="#666", font=("Segoe UI", 8))
+                                  foreground=self.colors["dim"], font=("Segoe UI", 8))
         credit_label.pack(side="bottom", anchor="e", padx=8, pady=2)
 
         self.notebook = ttk.Notebook(self.root)
@@ -812,7 +811,7 @@ class App:
                    command=self.show_changes).grid(row=0, column=1, padx=6)
 
         self.sync_status_var = tk.StringVar(value="")
-        ttk.Label(sync, textvariable=self.sync_status_var, foreground="#888",
+        ttk.Label(sync, textvariable=self.sync_status_var, foreground=self.colors["muted"],
                   wraplength=780, justify="left").pack(anchor="w", padx=8, pady=(0, 6))
         self._refresh_sync_status()
 
@@ -820,7 +819,7 @@ class App:
         # реально есть проблема с разрешением на торговлю (AutoTrading и т.п.).
         self.trade_warning_var = tk.StringVar(value="")
         self.trade_warning_label = ttk.Label(parent, textvariable=self.trade_warning_var,
-                                              foreground="#e57373", wraplength=780, justify="left")
+                                              foreground=self.colors["loss"], wraplength=780, justify="left")
         self.trade_warning_label.pack(**pad)
 
         btn_frame = ttk.Frame(parent)
@@ -854,7 +853,7 @@ class App:
                         command=self._toggle_autostart).pack(**pad)
 
         ttk.Label(parent, text=f"С телефона по Wi-Fi: http://<IP-компьютера>:{cfg.DASHBOARD_PORT}",
-                  foreground="#888", wraplength=600, justify="left").pack(**pad)
+                  foreground=self.colors["muted"], wraplength=600, justify="left").pack(**pad)
 
     # ---- вкладка "Брокер" ----------------------------------------------------
     def _build_tab_broker(self, parent):
@@ -862,7 +861,7 @@ class App:
 
         ttk.Label(parent, text="Подключение к брокеру (любой MT5-брокер)",
                   font=("Segoe UI", 12, "bold")).pack(**pad)
-        ttk.Label(parent, foreground="#888", wraplength=680, justify="left", text=
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=680, justify="left", text=
                   "Впиши сервер/логин/пароль торгового счёта — как при входе в MetaTrader 5. "
                   "Терминал MT5 всё равно должен быть УСТАНОВЛЕН на этом компьютере, но держать его "
                   "открытым и залогиненным заранее уже не обязательно — программа сделает это сама."
@@ -979,7 +978,7 @@ class App:
     def _build_tab_symbols(self, parent):
         ttk.Label(parent, text="Двойной клик по 'Вкл' — включить/выключить пару. По 'Лот' — задать "
                                "фиксированный лот. По 'Символ' — мини-график цены.",
-                  foreground="#888", wraplength=800, justify="left").pack(padx=10, pady=6, anchor="w")
+                  foreground=self.colors["muted"], wraplength=800, justify="left").pack(padx=10, pady=6, anchor="w")
 
         add_frame = ttk.Frame(parent)
         add_frame.pack(fill="x", padx=10, pady=(0, 6))
@@ -1000,7 +999,7 @@ class App:
         self.available_symbols_var = tk.StringVar(
             value="Список пар брокера ещё не загружен (появится, когда бот запущен и подключён к MT5)."
         )
-        ttk.Label(add_frame, textvariable=self.available_symbols_var, foreground="#888").grid(
+        ttk.Label(add_frame, textvariable=self.available_symbols_var, foreground=self.colors["muted"]).grid(
             row=1, column=0, columnspan=4, sticky="w", padx=(0, 6), pady=(4, 0))
 
         self.symbols_columns = ("enabled", "symbol", "lot", "buy", "sell", "regime", "ai", "custom", "multi", "learn", "paused", "reject", "risk")
@@ -1016,7 +1015,7 @@ class App:
         # депозите: ниже минимального лота опуститься нельзя, чем бы ни был
         # задан риск на сделку). Красным — чтобы не потерялось среди колонок.
         self.symbols_tree.column("risk", width=260, anchor="w")
-        self.symbols_tree.tag_configure("risk_over", foreground="#e05561")
+        self.symbols_tree.tag_configure("risk_over", foreground=self.colors["loss"])
         self.symbols_tree.pack(fill="both", expand=True, padx=10, pady=6)
         self.symbols_tree.bind("<Double-1>", self._on_symbols_double_click)
 
@@ -1102,8 +1101,8 @@ class App:
         win = tk.Toplevel(self.root)
         win.title(f"График цены — {symbol}")
         win.geometry("520x320")
-        win.configure(bg="#1b1b1b")
-        canvas = tk.Canvas(win, bg="#1b1b1b", highlightthickness=0)
+        win.configure(bg=self.colors["bg"])
+        canvas = tk.Canvas(win, bg=self.colors["bg"], highlightthickness=0)
         canvas.pack(fill="both", expand=True, padx=10, pady=10)
 
         def redraw():
@@ -1116,7 +1115,7 @@ class App:
             w = canvas.winfo_width() or 480
             h = canvas.winfo_height() or 280
             if len(closes) < 2:
-                canvas.create_text(10, h // 2, anchor="w", text="Копится история цены...", fill="#888")
+                canvas.create_text(10, h // 2, anchor="w", text="Копится история цены...", fill=self.colors["muted"])
             else:
                 lo, hi = min(closes), max(closes)
                 rng = (hi - lo) or 1e-9
@@ -1126,9 +1125,9 @@ class App:
                     x = i * step_x
                     y = h - ((v - lo) / rng) * (h - 30) - 15
                     points.extend([x, y])
-                canvas.create_line(*points, fill="#4caf50", width=2)
-                canvas.create_text(35, h - 10, text=f"мин: {lo:.5f}", fill="#888", anchor="w")
-                canvas.create_text(35, 10, text=f"макс: {hi:.5f}", fill="#888", anchor="w")
+                canvas.create_line(*points, fill=self.colors["profit"], width=2)
+                canvas.create_text(35, h - 10, text=f"мин: {lo:.5f}", fill=self.colors["muted"], anchor="w")
+                canvas.create_text(35, 10, text=f"макс: {hi:.5f}", fill=self.colors["muted"], anchor="w")
             win.after(3000, redraw)
 
         redraw()
@@ -1169,7 +1168,7 @@ class App:
 
     # ---- вкладка "Сделки" ------------------------------------------------------
     def _build_tab_positions(self, parent):
-        ttk.Label(parent, foreground="#888", wraplength=800, justify="left", text=
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=800, justify="left", text=
                   "Показаны ВСЕ открытые позиции счёта — и этого бота, и открытые "
                   "вручную в терминале MT5 (колонка «Источник»)."
                   ).pack(padx=10, pady=(8, 2), anchor="w")
@@ -1286,7 +1285,7 @@ class App:
         ttk.Button(top_row, text="Обновить", command=self._refresh_log_tab).pack(side="right")
 
         self.mt5_history_stats_var = tk.StringVar(value="Синхронизация ещё не выполнялась...")
-        ttk.Label(parent, textvariable=self.mt5_history_stats_var, foreground="#888",
+        ttk.Label(parent, textvariable=self.mt5_history_stats_var, foreground=self.colors["muted"],
                   wraplength=800, justify="left").pack(padx=10, pady=(2, 6), anchor="w")
 
         mt5_cols = ("ticket", "time", "symbol", "type", "volume", "price", "profit", "source")
@@ -1339,7 +1338,7 @@ class App:
 
     # ---- вкладка "Equity" ----------------------------------------------------------
     def _build_tab_equity(self, parent):
-        self.equity_canvas = tk.Canvas(parent, bg="#1b1b1b", highlightthickness=0)
+        self.equity_canvas = tk.Canvas(parent, bg=self.colors["bg"], highlightthickness=0)
         self.equity_canvas.pack(fill="both", expand=True, padx=10, pady=10)
 
     def _redraw_equity_canvas(self):
@@ -1349,7 +1348,7 @@ class App:
         h = c.winfo_height() or 300
         hist = control.get_equity_history()
         if len(hist) < 2:
-            c.create_text(10, h // 2, anchor="w", text="Копится история...", fill="#888")
+            c.create_text(10, h // 2, anchor="w", text="Копится история...", fill=self.colors["muted"])
             return
         values = [p["equity"] for p in hist]
         lo, hi = min(values), max(values)
@@ -1361,9 +1360,9 @@ class App:
             y = h - ((v - lo) / rng) * (h - 30) - 15
             points.extend([x, y])
         if len(points) >= 4:
-            c.create_line(*points, fill="#4caf50", width=2, smooth=False)
-        c.create_text(35, h - 10, text=f"мин: {lo:.2f}", fill="#888", anchor="w")
-        c.create_text(35, 10, text=f"макс: {hi:.2f}", fill="#888", anchor="w")
+            c.create_line(*points, fill=self.colors["profit"], width=2, smooth=False)
+        c.create_text(35, h - 10, text=f"мин: {lo:.2f}", fill=self.colors["muted"], anchor="w")
+        c.create_text(35, 10, text=f"макс: {hi:.2f}", fill=self.colors["muted"], anchor="w")
 
     # ---- вкладка "Настройка" (всегда видима — быстрые настройки + ВСЕ параметры) ----
     def _build_tab_config(self, parent):
@@ -1406,7 +1405,7 @@ class App:
         """Три карточки-режима: один щелчок вместо 118 параметров."""
         ttk.Label(parent, text="Выберите режим торговли",
                   font=("Segoe UI", 13, "bold")).pack(anchor="w", padx=12, pady=(14, 2))
-        ttk.Label(parent, foreground="#888", wraplength=820, justify="left",
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=820, justify="left",
                   text="Режим задаёт сразу всё: риск на сделку, число одновременных "
                        "сделок, потолок совокупного риска и строгость отбора сигналов. "
                        "Точная настройка каждого параметра — на соседних вкладках, "
@@ -1442,13 +1441,13 @@ class App:
             ttk.Label(card, text=summary, wraplength=230, justify="left").pack(
                 anchor="w", padx=8, pady=(0, 4))
             ttk.Label(card, text=details, wraplength=230, justify="left",
-                      foreground="#888", font=("Segoe UI", 8)).pack(
+                      foreground=self.colors["muted"], font=("Segoe UI", 8)).pack(
                 anchor="w", padx=8, pady=(0, 8))
 
         # ---- Стратегия: чем именно торгуем ----
         ttk.Label(parent, text="Стратегия", font=("Segoe UI", 12, "bold")).pack(
             anchor="w", padx=12, pady=(16, 2))
-        ttk.Label(parent, foreground="#888", wraplength=820, justify="left",
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=820, justify="left",
                   text="Режим выше задаёт РИСК, стратегия — ЧТО считать сигналом. "
                        "Ни одна стратегия не отключает защиты счёта: обязательный "
                        "стоп-лосс, риск на сделку, потолок совокупного риска и "
@@ -1467,7 +1466,7 @@ class App:
         ttk.Button(strat_row, text="Применить стратегию",
                    command=self._apply_strategy).pack(side="left", padx=8)
 
-        self.strategy_desc = ttk.Label(parent, foreground="#9a9a9a", wraplength=820,
+        self.strategy_desc = ttk.Label(parent, foreground=self.colors["muted"], wraplength=820,
                                        justify="left", text="")
         self.strategy_desc.pack(anchor="w", padx=12, pady=(6, 0))
         self._on_strategy_pick()
@@ -1479,7 +1478,7 @@ class App:
         ttk.Button(actions, text="Применить и запустить бота",
                    command=self._apply_quick_and_start).pack(side="left", padx=8)
 
-        self.quick_status = ttk.Label(parent, text="", foreground="#3fb950",
+        self.quick_status = ttk.Label(parent, text="", foreground=self.colors["profit"],
                                       wraplength=820, justify="left")
         self.quick_status.pack(anchor="w", padx=12, pady=(4, 10))
 
@@ -1521,7 +1520,7 @@ class App:
             return
         self.quick_status.configure(
             text=f"Стратегия «{strategy.title}» применена: {strategy.idea}. "
-                 f"Изменено параметров: {len(params)}.", foreground="#3fb950")
+                 f"Изменено параметров: {len(params)}.", foreground=self.colors["profit"])
         messagebox.showinfo(APP_TITLE,
                             f"Стратегия «{strategy.title}» применена.\n\n"
                             "Значения видны на вкладках точной настройки — "
@@ -1550,7 +1549,7 @@ class App:
             messagebox.showerror(APP_TITLE, f"Не удалось применить режим: {e}")
             return False
         self.quick_status.configure(
-            text=f"Режим «{title}» применён: {details}", foreground="#3fb950")
+            text=f"Режим «{title}» применён: {details}", foreground=self.colors["profit"])
         return True
 
     def _apply_quick_and_start(self):
@@ -1560,7 +1559,7 @@ class App:
             self.start_bot()
             self.quick_status.configure(
                 text=self.quick_status.cget("text") + "  ·  бот запущен",
-                foreground="#3fb950")
+                foreground=self.colors["profit"])
         except Exception as e:  # noqa: BLE001
             log.exception("Не удалось запустить бота из быстрой настройки")
             messagebox.showerror(APP_TITLE, f"Режим применён, но бот не запустился: {e}")
@@ -1631,7 +1630,7 @@ class App:
 
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True, padx=6, pady=4)
-        canvas = tk.Canvas(outer, bg="#1b1b1b", highlightthickness=0)
+        canvas = tk.Canvas(outer, bg=self.colors["bg"], highlightthickness=0)
         vscroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -1667,7 +1666,7 @@ class App:
         # ---- Контекст рынка — корреляции по инструментам (MARKET_CONTEXT) ----
         context_box = ttk.LabelFrame(inner, text="Контекст рынка — корреляции по инструментам (до 3 на символ)")
         context_box.pack(fill="x", padx=6, pady=(4, 10))
-        ttk.Label(context_box, foreground="#888", wraplength=760, justify="left", text=
+        ttk.Label(context_box, foreground=self.colors["muted"], wraplength=760, justify="left", text=
                   "Для каждого торгуемого символа можно задать до 3 коррелирующих инструментов "
                   "(например, индекс доллара для золота). Пустое поле = слот не используется. "
                   "Работает, только если включён общий флаг «Учитывать коррелирующие инструменты» "
@@ -1699,7 +1698,7 @@ class App:
         в окно: без прокрутки нижние блоки не видны вовсе, а не «обрезаны»."""
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True)
-        canvas = tk.Canvas(outer, bg="#1b1b1b", highlightthickness=0)
+        canvas = tk.Canvas(outer, bg=self.colors["bg"], highlightthickness=0)
         vscroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
         window = canvas.create_window((0, 0), window=inner, anchor="nw")
@@ -1723,7 +1722,7 @@ class App:
         title = "Точная настройка" if only_groups is None else "Параметры раздела"
         ttk.Label(parent, text=title,
                   font=("Segoe UI", 12, "bold")).pack(padx=10, pady=(10, 2), anchor="w")
-        ttk.Label(parent, foreground="#888", wraplength=800, justify="left", text=
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=800, justify="left", text=
                   "Здесь можно вручную выставить КАЖДЫЙ параметр торговой логики — так же, "
                   "как input-параметры MQL5-советника. «Сохранить» применяет изменения сразу, "
                   "бот подхватит их на лету, без перезапуска. Единственное, что сюда не входит — "
@@ -1733,7 +1732,7 @@ class App:
 
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True, padx=6, pady=4)
-        canvas = tk.Canvas(outer, bg="#1b1b1b", highlightthickness=0)
+        canvas = tk.Canvas(outer, bg=self.colors["bg"], highlightthickness=0)
         vscroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -1802,11 +1801,11 @@ class App:
         window = tk.Toplevel(self.root)
         window.title(f"Справка: {key}")
         window.geometry("640x520")
-        window.configure(bg="#1b1b1b")
+        window.configure(bg=self.colors["bg"])
 
         ttk.Label(window, text=label, font=("Segoe UI", 11, "bold"),
                   wraplength=600, justify="left").pack(anchor="w", padx=14, pady=(12, 2))
-        ttk.Label(window, text=key, foreground="#888").pack(anchor="w", padx=14)
+        ttk.Label(window, text=key, foreground=self.colors["muted"]).pack(anchor="w", padx=14)
 
         item = param_help.entry(key)
         # Полоса прокрутки обязательна: у части параметров есть ещё и блок
@@ -1814,15 +1813,15 @@ class App:
         # то есть предупреждение было не видно именно там, где оно важнее всего.
         body_frame = ttk.Frame(window)
         body_frame.pack(fill="both", expand=True, padx=14, pady=10)
-        body = tk.Text(body_frame, wrap="word", height=16, bg="#242424", fg="#ddd",
+        body = tk.Text(body_frame, wrap="word", height=16, bg=self.colors["card"], fg=self.colors["fg"],
                        relief="flat", padx=10, pady=8)
         body_scroll = ttk.Scrollbar(body_frame, command=body.yview)
         body.configure(yscrollcommand=body_scroll.set)
         body.pack(side="left", fill="both", expand=True)
         body_scroll.pack(side="right", fill="y")
 
-        body.tag_configure("head", foreground="#9ad", spacing1=6)
-        body.tag_configure("warn", foreground="#e0a355")
+        body.tag_configure("head", foreground=self.colors["accent"], spacing1=6)
+        body.tag_configure("warn", foreground=self.colors["warning"])
         body.insert("end", item["what"] + "\n\n")
 
         default = param_help.default_of(key)
@@ -2002,7 +2001,7 @@ class App:
         pad = {"padx": 10, "pady": 6}
 
         ttk.Label(parent, text="Предстоящие события", font=("Segoe UI", 12, "bold")).pack(**pad)
-        ttk.Label(parent, foreground="#888", wraplength=800, justify="left", text=
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=800, justify="left", text=
                   "Полный список новостей. Включить и выключить источники — на вкладке "
                   "«Источники». Расписание работы бота — на вкладке «Календарь»."
                   ).pack(anchor="w", padx=10)
@@ -2022,7 +2021,7 @@ class App:
                   justify="left", font=("Segoe UI", 9, "bold")).pack(anchor="w", **pad)
 
         self.news_status_var = tk.StringVar(value="")
-        ttk.Label(parent, textvariable=self.news_status_var, foreground="#888", wraplength=800,
+        ttk.Label(parent, textvariable=self.news_status_var, foreground=self.colors["muted"], wraplength=800,
                   justify="left").pack(anchor="w", **pad)
 
         cols = ("time", "left", "currency", "event", "impact", "actual", "estimate", "prev")
@@ -2092,7 +2091,7 @@ class App:
                   font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=12, pady=(10, 2))
 
         installed = updater.current_version()
-        ttk.Label(window, foreground="#888", wraplength=780, justify="left",
+        ttk.Label(window, foreground=self.colors["muted"], wraplength=780, justify="left",
                   text=("Зелёным помечено то, что уже установлено у вас. "
                         "Выше него — изменения, которых пока нет.")
                   ).pack(anchor="w", padx=12, pady=(0, 6))
@@ -2104,7 +2103,7 @@ class App:
             tree.heading(col, text=head)
             tree.column(col, width=width, anchor="w" if col == "what" else "center")
         tree.pack(fill="both", expand=True, padx=12, pady=6)
-        tree.tag_configure("installed", foreground="#6ab04c")
+        tree.tag_configure("installed", foreground=self.colors["profit"])
 
         for item in entries:
             tag = ("installed",) if item["revision"] == installed else ()
@@ -2135,7 +2134,7 @@ class App:
         br = ttk.LabelFrame(parent, text=" Мост для советников MetaTrader ")
         br.pack(fill="x", padx=12, pady=(6, 4))
 
-        ttk.Label(br, foreground="#888", wraplength=780, justify="left", text=
+        ttk.Label(br, foreground=self.colors["muted"], wraplength=780, justify="left", text=
                   "Советники спрашивают у моста режим рынка. Мост встроен в программу — "
                   "отдельно запускать нечего. Слушает только 127.0.0.1, наружу не "
                   "открывается. Его ответ может лишь УМЕНЬШИТЬ объём сделки."
@@ -2151,7 +2150,7 @@ class App:
             row=1, column=2, sticky="w", padx=4)
 
         self.bridge_status_var = tk.StringVar(value="")
-        ttk.Label(br, textvariable=self.bridge_status_var, foreground="#888",
+        ttk.Label(br, textvariable=self.bridge_status_var, foreground=self.colors["muted"],
                   wraplength=780, justify="left").grid(
             row=2, column=0, columnspan=3, sticky="w", padx=8, pady=(2, 6))
 
@@ -2159,7 +2158,7 @@ class App:
         up = ttk.LabelFrame(parent, text=" Обновление из GitHub ")
         up.pack(fill="x", padx=12, pady=(6, 4))
 
-        ttk.Label(up, foreground="#888", wraplength=780, justify="left", text=
+        ttk.Label(up, foreground=self.colors["muted"], wraplength=780, justify="left", text=
                   "Правки кода приезжают с GitHub сами — переустанавливать программу не "
                   "нужно. Кнопка «Обновить всё» скачивает и ставит: советники в "
                   "MetaTrader (сразу, без перезапуска), файлы самой программы и новые "
@@ -2185,14 +2184,14 @@ class App:
         self.update_repo_var = tk.StringVar(value=getattr(cfg, "UPDATE_REPO", ""))
         ttk.Entry(up, textvariable=self.update_repo_var, width=44).grid(
             row=3, column=1, sticky="w", padx=8)
-        ttk.Label(up, foreground="#666", text="владелец/название, например simafon1-cyber/repp"
+        ttk.Label(up, foreground=self.colors["dim"], text="владелец/название, например simafon1-cyber/repp"
                   ).grid(row=4, column=1, sticky="w", padx=8)
 
         ttk.Label(up, text="Ветка:").grid(row=5, column=0, sticky="w", padx=8, pady=3)
         self.update_branch_var = tk.StringVar(value=getattr(cfg, "UPDATE_BRANCH", ""))
         ttk.Entry(up, textvariable=self.update_branch_var, width=44).grid(
             row=5, column=1, sticky="w", padx=8)
-        ttk.Label(up, foreground="#666",
+        ttk.Label(up, foreground=self.colors["dim"],
                   text="пусто = программа сама возьмёт главную ветку репозитория"
                   ).grid(row=6, column=1, sticky="w", padx=8)
 
@@ -2200,7 +2199,7 @@ class App:
         self.update_token_var = tk.StringVar(value=getattr(cfg, "UPDATE_TOKEN", ""))
         ttk.Entry(up, textvariable=self.update_token_var, width=44, show="*").grid(
             row=7, column=1, sticky="w", padx=8)
-        ttk.Label(up, foreground="#666", wraplength=420, justify="left",
+        ttk.Label(up, foreground=self.colors["dim"], wraplength=420, justify="left",
                   text="Для закрытого репозитория. Права: Contents: Read-only — "
                        "обычное обновление; Actions: Read and write — если хотите, "
                        "чтобы программа сама заказывала сборку .exe"
@@ -2210,7 +2209,7 @@ class App:
         ttk.Checkbutton(up, variable=self.update_auto_var,
                         text="Ставить обновление само при запуске (не спрашивая)").grid(
             row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 0))
-        ttk.Label(up, foreground="#666", wraplength=520, justify="left",
+        ttk.Label(up, foreground=self.colors["dim"], wraplength=520, justify="left",
                   text="При старте торговля ещё не началась и открытых позиций у бота "
                        "нет — подменять его в этот момент безопасно. Посреди работы "
                        "обновление не ставится никогда, даже с этой галочкой.").grid(
@@ -2220,7 +2219,7 @@ class App:
         ttk.Checkbutton(up, variable=self.update_build_var,
                         text="Если готовой сборки нет — заказать её на GitHub самому").grid(
             row=11, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 0))
-        ttk.Label(up, foreground="#666", wraplength=520, justify="left",
+        ttk.Label(up, foreground=self.colors["dim"], wraplength=520, justify="left",
                   text="Раньше это делалось руками: вкладка Actions -> Run workflow. "
                        "Токену нужно право Actions: Read and write.").grid(
             row=12, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 4))
@@ -2236,7 +2235,7 @@ class App:
                    command=self.request_build_now).grid(row=0, column=3, padx=6)
 
         self.update_status_var = tk.StringVar(value="")
-        ttk.Label(up, textvariable=self.update_status_var, foreground="#888",
+        ttk.Label(up, textvariable=self.update_status_var, foreground=self.colors["muted"],
                   wraplength=780, justify="left").grid(
             row=14, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
 
@@ -2244,7 +2243,7 @@ class App:
         jr = ttk.LabelFrame(parent, text=" Журнал сделок в облаке ")
         jr.pack(fill="x", padx=12, pady=(6, 4))
 
-        ttk.Label(jr, foreground="#888", wraplength=780, justify="left", text=
+        ttk.Label(jr, foreground=self.colors["muted"], wraplength=780, justify="left", text=
                   "История сделок выкладывается в папку journal/ вашего ЗАКРЫТОГО "
                   "репозитория GitHub: можно открыть с телефона или показать, когда "
                   "компьютер выключен. Три файла — журнал бота, реальные закрытые "
@@ -2266,7 +2265,7 @@ class App:
         self.journal_repo_var = tk.StringVar(value=getattr(cfg, "JOURNAL_REPO", ""))
         ttk.Entry(jr, textvariable=self.journal_repo_var, width=44).grid(
             row=2, column=1, sticky="w", padx=8)
-        ttk.Label(jr, foreground="#666",
+        ttk.Label(jr, foreground=self.colors["dim"],
                   text="пусто = тот же, что для обновлений").grid(
             row=3, column=1, sticky="w", padx=8)
 
@@ -2275,7 +2274,7 @@ class App:
             value=SECRET_PLACEHOLDER if getattr(cfg, "JOURNAL_TOKEN", "") else "")
         ttk.Entry(jr, textvariable=self.journal_token_var, width=44, show="*").grid(
             row=4, column=1, sticky="w", padx=8)
-        ttk.Label(jr, foreground="#666", wraplength=420, justify="left",
+        ttk.Label(jr, foreground=self.colors["dim"], wraplength=420, justify="left",
                   text="Fine-grained token на этот репозиторий, права "
                        "Contents: Read and write. Пустое поле = не менять").grid(
             row=5, column=1, sticky="w", padx=8)
@@ -2295,7 +2294,7 @@ class App:
                    command=self.open_journal_in_browser).grid(row=0, column=2)
 
         self.journal_status_var = tk.StringVar(value="")
-        ttk.Label(jr, textvariable=self.journal_status_var, foreground="#888",
+        ttk.Label(jr, textvariable=self.journal_status_var, foreground=self.colors["muted"],
                   wraplength=780, justify="left").grid(
             row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
 
@@ -2314,9 +2313,9 @@ class App:
             self.diag_tree.column(col, width=width,
                                   anchor="center" if col == "state" else "w")
         self.diag_tree.pack(fill="both", expand=True, padx=12, pady=(4, 4))
-        self.diag_tree.tag_configure("fail", foreground="#e05561")
-        self.diag_tree.tag_configure("warn", foreground="#e0a355")
-        self.diag_tree.tag_configure("ok", foreground="#6ab04c")
+        self.diag_tree.tag_configure("fail", foreground=self.colors["loss"])
+        self.diag_tree.tag_configure("warn", foreground=self.colors["warning"])
+        self.diag_tree.tag_configure("ok", foreground=self.colors["profit"])
 
         self.diag_summary_var = tk.StringVar(value="")
         ttk.Label(parent, textvariable=self.diag_summary_var, wraplength=800,
@@ -2861,7 +2860,7 @@ class App:
 
         ttk.Label(parent, text="Откуда брать данные",
                   font=("Segoe UI", 12, "bold")).pack(anchor="w", **pad)
-        ttk.Label(parent, foreground="#888", wraplength=820, justify="left", text=
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=820, justify="left", text=
                   "Снимите галочку — источник перестанет использоваться. Календарь и "
                   "сигналы Telegram независимы: выключение одного не трогает другое."
                   ).pack(anchor="w", **pad)
@@ -2870,7 +2869,7 @@ class App:
         mt = ttk.LabelFrame(parent, text=" Установка в MetaTrader 5 ")
         mt.pack(fill="x", padx=12, pady=(8, 4))
 
-        ttk.Label(mt, foreground="#888", wraplength=780, justify="left", text=
+        ttk.Label(mt, foreground=self.colors["muted"], wraplength=780, justify="left", text=
                   "Советники и сервис календаря копируются в терминал и собираются "
                   "автоматически — жать F7 в MetaEditor не нужно. Делается один раз "
                   "при первом запуске; кнопка ниже — если терминал переустановили или "
@@ -2881,14 +2880,14 @@ class App:
                    command=self.install_into_mt5).grid(row=1, column=0, sticky="w",
                                                        padx=8, pady=4)
         self.mt_install_var = tk.StringVar(value="")
-        ttk.Label(mt, textvariable=self.mt_install_var, foreground="#888",
+        ttk.Label(mt, textvariable=self.mt_install_var, foreground=self.colors["muted"],
                   wraplength=600, justify="left").grid(row=1, column=1, sticky="w", padx=8)
 
         # ---------- Календарь новостей ----------
         cal = ttk.LabelFrame(parent, text=" Календарь новостей ")
         cal.pack(fill="x", padx=12, pady=(8, 4))
 
-        ttk.Label(cal, foreground="#888", wraplength=780, justify="left", text=
+        ttk.Label(cal, foreground=self.colors["muted"], wraplength=780, justify="left", text=
                   "Опрашиваются по порядку — берётся первый, который ответил."
                   ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 2))
 
@@ -2904,7 +2903,7 @@ class App:
                 row=row, column=0, sticky="w", padx=8, pady=2)
             status = tk.StringVar(value="")
             self.src_status_vars[name] = status
-            ttk.Label(cal, textvariable=status, foreground="#888").grid(
+            ttk.Label(cal, textvariable=status, foreground=self.colors["muted"]).grid(
                 row=row, column=1, sticky="w", padx=8)
             row += 1
 
@@ -2922,7 +2921,7 @@ class App:
         ttk.Checkbutton(tg, text="Читать сигналы из Telegram", variable=self.tg_enabled_var).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 2))
 
-        ttk.Label(tg, foreground="#888", wraplength=780, justify="left", text=
+        ttk.Label(tg, foreground=self.colors["muted"], wraplength=780, justify="left", text=
                   "Читается входом под ВАШИМ аккаунтом: Telegram запрещает ботам видеть "
                   "сообщения других ботов. Каналы читаются так же, как боты, но на "
                   "закрытый канал нужно быть подписанным."
@@ -2933,7 +2932,7 @@ class App:
             value=", ".join(str(x) for x in (getattr(cfg, "TELEGRAM_SOURCES", []) or [])))
         ttk.Entry(tg, textvariable=self.tg_sources_var, width=54).grid(
             row=2, column=1, sticky="w", padx=8, pady=3)
-        ttk.Label(tg, foreground="#666", text="через запятую, например:  @signals_channel, @my_crypto_signalsbot"
+        ttk.Label(tg, foreground=self.colors["dim"], text="через запятую, например:  @signals_channel, @my_crypto_signalsbot"
                   ).grid(row=3, column=1, sticky="w", padx=8)
 
         ttk.Label(tg, text="api_id:").grid(row=4, column=0, sticky="w", padx=8, pady=3)
@@ -2945,7 +2944,7 @@ class App:
         self.tg_api_hash_var = tk.StringVar(value=getattr(cfg, "TELEGRAM_API_HASH", ""))
         ttk.Entry(tg, textvariable=self.tg_api_hash_var, width=54, show="*").grid(
             row=5, column=1, sticky="w", padx=8, pady=3)
-        ttk.Label(tg, foreground="#666", text="бесплатно на my.telegram.org -> API development tools"
+        ttk.Label(tg, foreground=self.colors["dim"], text="бесплатно на my.telegram.org -> API development tools"
                   ).grid(row=6, column=1, sticky="w", padx=8)
 
         ttk.Label(tg, text="Что сигнал может:").grid(row=7, column=0, sticky="nw", padx=8, pady=(6, 3))
@@ -2959,13 +2958,13 @@ class App:
             ttk.Radiobutton(role_box, text=title, value=value,
                             variable=self.tg_role_var).grid(row=i, column=0, sticky="w")
 
-        ttk.Label(tg, foreground="#e0a355", wraplength=780, justify="left", text=
+        ttk.Label(tg, foreground=self.colors["warning"], wraplength=780, justify="left", text=
                   "Ни в одном режиме чужой сигнал не может открыть сделку, увеличить лот "
                   "или риск, отодвинуть стоп-лосс и обойти лимиты риска."
                   ).grid(row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 6))
 
         self.tg_src_status_var = tk.StringVar(value="")
-        ttk.Label(tg, textvariable=self.tg_src_status_var, foreground="#888",
+        ttk.Label(tg, textvariable=self.tg_src_status_var, foreground=self.colors["muted"],
                   wraplength=780, justify="left").grid(
             row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
 
@@ -3129,7 +3128,7 @@ class App:
 
         ttk.Label(parent, text="Сигналы из Telegram",
                   font=("Segoe UI", 12, "bold")).pack(anchor="w", **pad)
-        ttk.Label(parent, foreground="#888", wraplength=800, justify="left", text=
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=800, justify="left", text=
                   "Что распознано из каналов и ботов. Подключение и выключатель — "
                   "на вкладке «Источники»."
                   ).pack(anchor="w", **pad)
@@ -3140,7 +3139,7 @@ class App:
                    command=self.refresh_telegram_tab).grid(row=0, column=0)
 
         self.tg_status_var = tk.StringVar(value="")
-        ttk.Label(parent, textvariable=self.tg_status_var, foreground="#888",
+        ttk.Label(parent, textvariable=self.tg_status_var, foreground=self.colors["muted"],
                   wraplength=800, justify="left").pack(anchor="w", **pad)
 
         ttk.Label(parent, text="Последние распознанные сигналы",
@@ -3281,20 +3280,20 @@ class App:
                                             font=("Segoe UI", 11, "bold"))
         self.sched_status_label.pack(anchor="w")
         self.sched_detail_var = tk.StringVar(value="")
-        ttk.Label(status_box, textvariable=self.sched_detail_var, foreground="#888",
+        ttk.Label(status_box, textvariable=self.sched_detail_var, foreground=self.colors["muted"],
                   wraplength=780, justify="left").pack(anchor="w")
 
         btns = ttk.Frame(parent)
         btns.pack(anchor="w", **pad)
         ttk.Button(btns, text="Обновить", command=self.refresh_news_tab).grid(row=0, column=0)
         self.sched_updated_var = tk.StringVar(value="")
-        ttk.Label(btns, textvariable=self.sched_updated_var, foreground="#666").grid(
+        ttk.Label(btns, textvariable=self.sched_updated_var, foreground=self.colors["dim"]).grid(
             row=0, column=1, padx=10)
 
         # --- График ---
         ttk.Label(parent, text="Ближайшие 12 часов", font=("Segoe UI", 10, "bold")).pack(
             anchor="w", padx=10)
-        self.news_canvas = tk.Canvas(parent, height=NEWS_CHART_HEIGHT, bg="#1e1e1e",
+        self.news_canvas = tk.Canvas(parent, height=NEWS_CHART_HEIGHT, bg=self.colors["card"],
                                      highlightthickness=0)
         self.news_canvas.pack(fill="x", padx=10, pady=(2, 6))
         # Перерисовываем при изменении ширины окна: координаты считаются от
@@ -3315,10 +3314,10 @@ class App:
                                    anchor="w" if col in ("event", "symbols") else "center")
         self.sched_tree.pack(fill="both", expand=True, padx=10, pady=(2, 4))
         # Идущее прямо сейчас окно подсвечиваем — его легко не заметить в списке
-        self.sched_tree.tag_configure("now", foreground="#e05561")
+        self.sched_tree.tag_configure("now", foreground=self.colors["loss"])
 
         self.sched_free_var = tk.StringVar(value="")
-        ttk.Label(parent, textvariable=self.sched_free_var, foreground="#6ab04c",
+        ttk.Label(parent, textvariable=self.sched_free_var, foreground=self.colors["profit"],
                   wraplength=780, justify="left").pack(anchor="w", padx=10, pady=(0, 8))
 
     def _watched_symbols(self) -> list:
@@ -3338,7 +3337,7 @@ class App:
         if status["trading"]:
             self.sched_status_var.set("Сейчас: торгует")
             try:
-                self.sched_status_label.configure(foreground="#6ab04c")
+                self.sched_status_label.configure(foreground=self.colors["profit"])
             except Exception:
                 pass
         else:
@@ -3346,7 +3345,7 @@ class App:
             # приписывать к ней ещё одно тире незачем.
             self.sched_status_var.set(f"Сейчас: не входит. {status['reason']}")
             try:
-                self.sched_status_label.configure(foreground="#e05561")
+                self.sched_status_label.configure(foreground=self.colors["loss"])
             except Exception:
                 pass
 
@@ -3422,18 +3421,18 @@ class App:
             return left_pad + max(0.0, min(1.0, frac)) * span
 
         # Ось и часовые метки
-        canvas.create_line(left_pad, axis_y, width - right_pad, axis_y, fill="#555")
+        canvas.create_line(left_pad, axis_y, width - right_pad, axis_y, fill=self.colors["dim"])
         step_hours = 1 if NEWS_CHART_HOURS <= 12 else 3
         hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
         while hour <= now + horizon:
             x = x_of(hour)
-            canvas.create_line(x, axis_y - 4, x, axis_y + 4, fill="#555")
+            canvas.create_line(x, axis_y - 4, x, axis_y + 4, fill=self.colors["dim"])
             canvas.create_text(x, axis_y + 11, text=hour.strftime("%H:%M"),
-                               fill="#777", font=("Segoe UI", 7))
+                               fill=self.colors["muted"], font=("Segoe UI", 7))
             hour += timedelta(hours=step_hours)
 
         block_minutes = getattr(cfg, "NEWS_HARD_BLOCK_WINDOW_MIN", 30)
-        colors = {"high": "#e05561", "medium": "#e0a355", "low": "#5a7a8a"}
+        colors = {"high": self.colors["loss"], "medium": self.colors["warning"], "low": self.colors["accent"]}
 
         # Показываем ТОЛЬКО события, затрагивающие ваши пары — ровно те же, что
         # попадают в таблицу расписания. Иначе график рисовал бы красную зону
@@ -3448,7 +3447,7 @@ class App:
             if e.get("impact") == "high":
                 x1 = x_of(e["time"] - timedelta(minutes=block_minutes))
                 x2 = x_of(e["time"] + timedelta(minutes=block_minutes))
-                canvas.create_rectangle(x1, 6, x2, axis_y, fill="#3a2226", outline="")
+                canvas.create_rectangle(x1, 6, x2, axis_y, fill=self.colors["card"], outline="")
 
         # Последняя занятая координата на каждой высоте — чтобы подписи валют
         # у событий, идущих подряд, не наезжали друг на друга.
@@ -3474,18 +3473,18 @@ class App:
                 label_y -= 9
 
         # Отметка "сейчас"
-        canvas.create_line(left_pad, 6, left_pad, axis_y, fill="#6ab04c", width=2)
+        canvas.create_line(left_pad, 6, left_pad, axis_y, fill=self.colors["profit"], width=2)
         canvas.create_text(left_pad + 4, 8, text="сейчас", anchor="nw",
-                           fill="#6ab04c", font=("Segoe UI", 7))
+                           fill=self.colors["profit"], font=("Segoe UI", 7))
 
         if not events:
             canvas.create_text(width / 2, h / 2 - 6,
                                text=f"Ближайшие {NEWS_CHART_HOURS} ч — событий по вашим парам нет",
-                               fill="#666", font=("Segoe UI", 9))
+                               fill=self.colors["dim"], font=("Segoe UI", 9))
         else:
             canvas.create_text(width - right_pad, 8, anchor="ne",
                                text="красное — торговля заблокирована",
-                               fill="#8a5560", font=("Segoe UI", 7))
+                               fill=self.colors["loss"], font=("Segoe UI", 7))
 
     def fix_news_source(self):
         """Проверить цепочку новостей и починить то, что чинится само.
@@ -3612,8 +3611,8 @@ class App:
 
         text_frame = ttk.Frame(parent)
         text_frame.pack(fill="both", expand=True, padx=10, pady=6)
-        self.chat_text = tk.Text(text_frame, wrap="word", state="disabled", bg="#242424", fg="#eee",
-                                  insertbackground="#eee")
+        self.chat_text = tk.Text(text_frame, wrap="word", state="disabled", bg=self.colors["card"], fg=self.colors["fg"],
+                                  insertbackground=self.colors["fg"])
         self.chat_text.pack(side="left", fill="both", expand=True)
         scrollbar = ttk.Scrollbar(text_frame, command=self.chat_text.yview)
         scrollbar.pack(side="right", fill="y")
@@ -3663,16 +3662,16 @@ class App:
     def _build_tab_help(self, parent):
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True, padx=6, pady=6)
-        text = tk.Text(outer, wrap="word", bg="#1b1b1b", fg="#eee", insertbackground="#eee",
+        text = tk.Text(outer, wrap="word", bg=self.colors["bg"], fg=self.colors["fg"], insertbackground=self.colors["fg"],
                         relief="flat", padx=14, pady=10, font=("Segoe UI", 10))
         scrollbar = ttk.Scrollbar(outer, command=text.yview)
         text.configure(yscrollcommand=scrollbar.set)
         text.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        text.tag_configure("h1", font=("Segoe UI", 13, "bold"), foreground="#4caf50", spacing3=6)
-        text.tag_configure("h2", font=("Segoe UI", 11, "bold"), foreground="#e0e0e0", spacing1=10, spacing3=4)
-        text.tag_configure("body", font=("Segoe UI", 10), foreground="#cfcfcf", spacing3=4)
+        text.tag_configure("h1", font=("Segoe UI", 13, "bold"), foreground=self.colors["profit"], spacing3=6)
+        text.tag_configure("h2", font=("Segoe UI", 11, "bold"), foreground=self.colors["fg"], spacing1=10, spacing3=4)
+        text.tag_configure("body", font=("Segoe UI", 10), foreground=self.colors["fg"], spacing3=4)
 
         def h1(s):
             text.insert("end", s + "\n", "h1")
@@ -4015,13 +4014,13 @@ class App:
             toast = tk.Toplevel(self.root)
             toast.overrideredirect(True)
             toast.attributes("-topmost", True)
-            toast.configure(bg="#2a2a2a")
+            toast.configure(bg=self.colors["tab_bg"])
             x = self.root.winfo_x() + max(self.root.winfo_width() - 320, 0)
             y = self.root.winfo_y() + 40
             toast.geometry(f"300x70+{max(x, 0)}+{max(y, 0)}")
-            tk.Label(toast, text=title, bg="#2a2a2a", fg="#4caf50", font=("Segoe UI", 10, "bold"),
+            tk.Label(toast, text=title, bg=self.colors["tab_bg"], fg=self.colors["profit"], font=("Segoe UI", 10, "bold"),
                      anchor="w").pack(fill="x", padx=10, pady=(8, 0))
-            tk.Label(toast, text=message, bg="#2a2a2a", fg="#eee", anchor="w", wraplength=280,
+            tk.Label(toast, text=message, bg=self.colors["tab_bg"], fg=self.colors["fg"], anchor="w", wraplength=280,
                      justify="left").pack(fill="x", padx=10)
             toast.after(4500, toast.destroy)
         except Exception:
@@ -4106,9 +4105,11 @@ class App:
 
     # ---- системный трей -----------------------------------------------------
     def _start_tray(self):
+        # Фон значка в трее НЕ из темы: панель задач Windows тёмная
+        # независимо от того, светлая тема в самой программе или нет.
         image = Image.new("RGB", (64, 64), "#111111")
         d = ImageDraw.Draw(image)
-        d.ellipse((6, 6, 58, 58), fill="#4caf50")
+        d.ellipse((6, 6, 58, 58), fill=self.colors["profit"])
         d.text((20, 24), "AI", fill="white")
 
         menu = pystray.Menu(
@@ -4221,11 +4222,11 @@ def _show_login() -> bool:
     login_root.title(APP_TITLE)
     login_root.geometry("340x260")
     login_root.resizable(False, False)
-    login_root.configure(bg="#1b1b1b")
+    login_root.configure(bg=self.colors["bg"])
     try:
         style = ttk.Style(login_root)
         style.theme_use("clam")
-        style.configure(".", background="#1b1b1b", foreground="#eee", fieldbackground="#242424")
+        style.configure(".", background=self.colors["bg"], foreground=self.colors["fg"], fieldbackground=self.colors["card"])
     except tk.TclError:
         pass
 
@@ -4252,7 +4253,7 @@ def _show_login() -> bool:
     ttk.Checkbutton(login_root, text="Запомнить пароль", variable=remember_var).pack(pady=(8, 0))
 
     status_var = tk.StringVar(value="")
-    ttk.Label(login_root, textvariable=status_var, foreground="#e57373").pack(pady=(8, 0))
+    ttk.Label(login_root, textvariable=status_var, foreground=self.colors["loss"]).pack(pady=(8, 0))
 
     def try_login(*_):
         entered_login = login_var.get()
