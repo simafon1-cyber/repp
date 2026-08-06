@@ -913,6 +913,49 @@ def _cli_unlock_secrets_if_needed():
     raise SystemExit("Не удалось расшифровать config.py — неверный пароль входа. Останов.")
 
 
+# Пульс торгового цикла: время последнего ПРОЙДЕННОГО круга. По нему видно
+# не только «поток жив», но и «поток не завис»: поток может существовать и
+# при этом намертво стоять внутри зависшего запроса к терминалу, а снаружи
+# это выглядит одинаково — сделок нет.
+_heartbeat = {"at": 0.0}
+
+
+def last_heartbeat() -> float:
+    """Когда главный цикл в последний раз завершил круг (time.time()).
+    0 — цикл ещё ни разу не отработал."""
+    return _heartbeat["at"]
+
+
+def seconds_since_heartbeat() -> float:
+    """Сколько секунд назад цикл подавал признаки жизни. Большое число —
+    цикл умер или завис, и сделок не будет, сколько ни жди."""
+    if _heartbeat["at"] <= 0:
+        return 0.0
+    return max(0.0, time.time() - _heartbeat["at"])
+
+
+def watchdog_reason(should_run: bool, thread_alive: bool,
+                    silent_seconds: float, limit_seconds: float) -> str:
+    """Надо ли поднимать торговый цикл заново. Пустая строка — не надо.
+
+    Вынесено отдельной функцией из окна программы намеренно: это решение
+    важно проверить тестами, а всё, что живёт внутри tkinter-класса, на
+    Linux без графики не проверить вовсе.
+
+    should_run     — человек хочет, чтобы бот работал (не нажимал «Стоп»)
+    thread_alive   — поток торгового цикла ещё существует
+    silent_seconds — сколько назад цикл в последний раз прошёл круг
+    limit_seconds  — после какого молчания считаем цикл вставшим
+    """
+    if not should_run:
+        return ""              # нажали «Стоп» — это не поломка
+    if not thread_alive:
+        return "поток торгового цикла завершился"
+    if limit_seconds > 0 and silent_seconds > limit_seconds:
+        return f"цикл не подаёт признаков жизни {int(silent_seconds)} с"
+    return ""
+
+
 def _sleep_interruptible(seconds: float, stop_event):
     """Как time.sleep(), но если передан stop_event (десктоп-приложение нажало
     "Стоп") — просыпается СРАЗУ, а не ждёт полный POLL_SECONDS. Из CLI
@@ -1072,14 +1115,34 @@ def main(stop_event=None, start_dashboard: bool = True):
                     if cfg.USE_WEB_DASHBOARD:
                         control.add_equity_sample(datetime.now().strftime("%H:%M:%S"), equity)
                     last_status_print = datetime.now()
+                # Пульс ставим ТОЛЬКО после полностью пройденного круга: он
+                # должен означать «цикл реально работает», а не «поток ещё
+                # существует».
+                _heartbeat["at"] = time.time()
             except Exception as e:
                 # Защита от падения цикла целиком: одна неожиданная ошибка на итерации
                 # не должна убивать весь процесс — логируем и пробуем на следующем опросе.
                 log.exception("Неожиданная ошибка в главном цикле (продолжаю работу): %s", e)
 
-            _fast_position_monitor(sym_states, stop_event, cfg.POLL_SECONDS)
+            # РАНЬШЕ ЭТОТ ВЫЗОВ СТОЯЛ СНАРУЖИ try/except выше. Любая ошибка
+            # внутри него улетала мимо защиты, а внешний try ловил только
+            # KeyboardInterrupt — то есть цикл молча выходил через finally,
+            # поток умирал, окно продолжало показывать «Работает», и сделки
+            # переставали открываться до перезапуска программы. Ровно на это
+            # жаловался владелец: «работает пару часов и всё, потом надо
+            # перезапуск приложения».
+            try:
+                _fast_position_monitor(sym_states, stop_event, cfg.POLL_SECONDS)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Ошибка в мониторе позиций (продолжаю работу): %s", e)
+                _sleep_interruptible(cfg.POLL_SECONDS, stop_event)
     except KeyboardInterrupt:
         log.info("Остановлено пользователем (Ctrl+C).")
+    except Exception as e:  # noqa: BLE001
+        # Досюда доходить не должно — но если дошло, это надо ВИДЕТЬ, а не
+        # гадать, почему бот замолчал.
+        log.exception("Торговый цикл аварийно завершился: %s", e)
+        raise
     finally:
         # Штатное завершение — сохраняем выученное ещё раз. Основное
         # сохранение идёт по факту каждой закрытой сделки (см.

@@ -623,6 +623,9 @@ class App:
 
         self.stop_event = None
         self.bot_thread = None
+        # Бот ДОЛЖЕН работать (не путать с «работает сейчас»): по этому
+        # флагу сторож отличает нажатый человеком «Стоп» от смерти цикла.
+        self._bot_should_run = False
         self.tray_icon = None
         self._dashboard_started = False
         self.chat_history = []
@@ -3834,9 +3837,53 @@ class App:
         text.config(state="disabled")
 
     # ---- запуск/остановка торгового движка --------------------------------
+    # Сколько секунд без признаков жизни считаем «цикл встал». Круг цикла
+    # занимает POLL_SECONDS (обычно 5 с) плюс запросы к терминалу; берём с
+    # большим запасом, чтобы медленный ответ брокера не считался смертью.
+    WATCHDOG_SILENCE_SECONDS = 180
+
+    def _watchdog_tick(self):
+        """Сторож торгового цикла.
+
+        Жалоба владельца: «работает пару часов и всё, потом надо перезапуск
+        приложения». Причина найдена в main.py: вызов монитора позиций стоял
+        СНАРУЖИ защиты от ошибок, а внешний перехват ловил только Ctrl+C.
+        Любая неожиданная ошибка там молча выводила цикл из работы: поток
+        умирал, окно продолжало показывать «Работает», сделки не открывались.
+
+        Одной починки мало: поток может не умереть, а ЗАВИСНУТЬ внутри
+        запроса к терминалу — снаружи это выглядит так же. Поэтому смотрим
+        на пульс: время последнего пройденного круга (main.last_heartbeat).
+        Нет пульса дольше WATCHDOG_SILENCE_SECONDS — поднимаем цикл заново
+        сами, не дожидаясь, пока человек заметит и перезапустит программу."""
+        if not getattr(self, "_bot_should_run", False):
+            return              # человек сам нажал «Стоп» — не мешаем
+        alive = bool(self.bot_thread and self.bot_thread.is_alive())
+        silent = 0.0
+        try:
+            silent = bot_engine.seconds_since_heartbeat()
+        except Exception:  # noqa: BLE001
+            silent = 0.0
+        reason = bot_engine.watchdog_reason(
+            True, alive, silent, self.WATCHDOG_SILENCE_SECONDS)
+        if not reason:
+            return
+
+        log.warning("Сторож: %s — перезапускаю торговый цикл сам.", reason)
+        self.status_var.set(f"Перезапуск: {reason}")
+        # Старый цикл (если он завис) просим остановиться и заводим новый.
+        # Поток-зомби демонический, программу он держать не будет.
+        if self.stop_event:
+            self.stop_event.set()
+        self.bot_thread = None
+        self.start_bot()
+
     def start_bot(self):
         if self.bot_thread and self.bot_thread.is_alive():
             return
+        # Помечаем НАМЕРЕНИЕ: бот должен работать. По нему сторож ниже
+        # отличает «человек нажал Стоп» от «цикл умер сам».
+        self._bot_should_run = True
         self.stop_event = threading.Event()
         self.bot_thread = threading.Thread(target=self._run_bot, daemon=True)
         self.bot_thread.start()
@@ -3845,19 +3892,34 @@ class App:
         self.stop_btn.config(state="normal")
 
     def _run_bot(self):
+        """Тело торгового потока.
+
+        Ничего из tkinter отсюда напрямую не трогаем: обновление виджетов из
+        чужого потока — само по себе источник зависаний, а раньше здесь ещё
+        и открывалось модальное окно с ошибкой, которое НИКТО не мог закрыть,
+        пока человек не подойдёт к компьютеру. Всё, что нужно показать,
+        передаём в поток окна через root.after."""
         try:
             bot_engine.main(stop_event=self.stop_event, start_dashboard=False)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.exception("Бот остановился с ошибкой: %s", e)
-            self.status_var.set(f"Ошибка: {e}")
-            messagebox.showerror(APP_TITLE, f"Бот остановился с ошибкой:\n{e}\n\nПодробности в scalper.log.")
+            self.root.after(0, lambda e=e: self.status_var.set(f"Ошибка: {e}"))
         finally:
-            if "Ошибка" not in self.status_var.get():
-                self.status_var.set("Остановлен")
-            self.start_btn.config(state="normal")
-            self.stop_btn.config(state="disabled")
+            def done():
+                if getattr(self, "_bot_should_run", False):
+                    # Останов не по нашей воле — сторож поднимет цикл заново
+                    return
+                if "Ошибка" not in self.status_var.get():
+                    self.status_var.set("Остановлен")
+                self.start_btn.config(state="normal")
+                self.stop_btn.config(state="disabled")
+            try:
+                self.root.after(0, done)
+            except Exception:  # noqa: BLE001
+                pass
 
     def stop_bot(self):
+        self._bot_should_run = False
         if self.stop_event:
             self.stop_event.set()
         self.status_var.set("Останавливается...")
@@ -3895,6 +3957,7 @@ class App:
             if self.bot_thread and self.bot_thread.is_alive():
                 pause_txt = " (пауза)" if control.is_paused() else ""
                 self.status_var.set("Работает" + pause_txt)
+            self._watchdog_tick()
 
             self._refresh_symbols_tab()
             self._refresh_positions_tab()
