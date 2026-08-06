@@ -31,7 +31,7 @@ def stamp(text: str, build: str, commit: str, built_at: str) -> str:
         pattern = re.compile(rf'^{name}\s*=.*$', re.MULTILINE)
         replacement = f'{name} = {value!r}'
         if not pattern.search(text):
-            raise ValueError(f"В version.py нет строки {name} — файл изменён?")
+            raise ValueError(f"version.py has no {name} line - file changed?")
         # re.sub трактует \ и \g в замене как спецсимволы; в номере правки и
         # дате их быть не должно, но подставляем через функцию, чтобы это не
         # зависело от содержимого вовсе.
@@ -41,7 +41,7 @@ def stamp(text: str, build: str, commit: str, built_at: str) -> str:
 
 def main(argv) -> int:
     if len(argv) != 4:
-        print("Использование: stamp_version.py <сборка> <правка> <дата>")
+        print("usage: stamp_version.py <build> <commit> <date>")
         return 2
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(here, "version.py")
@@ -50,7 +50,10 @@ def main(argv) -> int:
     text = stamp(text, argv[1], argv[2], argv[3])
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
-    print(f"Версия вписана: сборка {argv[1]} · {argv[3]} · {argv[2][:7]}")
+    # ТОЛЬКО латиница. Консоль Windows на серверах GitHub работает в cp1252,
+    # и кириллица в print роняет весь шаг сборки с UnicodeEncodeError —
+    # проверено вживую, сборка 11 упала ровно на этой строке.
+    print(f"version stamped: build={argv[1]} commit={argv[2][:7]} date={argv[3]}")
     return 0
 
 

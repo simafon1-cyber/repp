@@ -773,6 +773,33 @@ def test_version_is_visible() -> None:
     check("--hidden-import version" in workflow,
           "Модуль версии попадает внутрь .exe")
 
+    # Живой отказ: сборка 11 упала на UnicodeEncodeError — консоль Windows на
+    # серверах GitHub работает в cp1252, и кириллица в выводе роняет весь шаг.
+    stamp_src = (APP / "stamp_version.py").read_text(encoding="utf-8")
+    printed = [ln for ln in stamp_src.splitlines()
+               if ln.strip().startswith("print(")]
+    check(printed, "В stamp_version.py есть вывод (проверка теста)")
+    for line in printed:
+        try:
+            line.encode("cp1252")
+            ok = True
+        except UnicodeEncodeError:
+            ok = False
+        check(ok, "Вывод сборки не содержит кириллицы", line.strip())
+    # Текст исключения тоже уходит в консоль сборки — трассировка печатается
+    # тем же кодировщиком, и кириллица в ней снова уронила бы шаг
+    raises = [ln for ln in stamp_src.splitlines() if "raise " in ln]
+    for line in raises:
+        try:
+            line.encode("cp1252")
+            ok = True
+        except UnicodeEncodeError:
+            ok = False
+        check(ok, "Текст ошибки сборки тоже без кириллицы", line.strip())
+    step = workflow.split("Прописать версию", 1)[1].split("- name:", 1)[0]
+    check("PYTHONUTF8" in step,
+          "Шаг сборки переведён в UTF-8 — иначе русский текст роняет сборку")
+
 
 def test_update_everything_covers_both() -> None:
     print("\n[Одна кнопка обновляет и советники, и программу]")

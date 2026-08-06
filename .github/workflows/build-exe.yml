@@ -62,6 +62,12 @@ jobs:
         # живёт в stamp_version.py: у кода в этом файле есть тест, у команд
         # внутри сценария сборки — нет.
         shell: pwsh
+        # PYTHONUTF8: консоль Windows на серверах GitHub работает в cp1252, и
+        # любая кириллица в выводе роняет шаг с UnicodeEncodeError. Строка
+        # version.full() по-русски — печатать её без этого нельзя.
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
         run: |
           python stamp_version.py "${{ github.run_number }}" "${{ github.sha }}" (Get-Date -Format "yyyy-MM-dd")
           python -c "import version; print(version.full())"
