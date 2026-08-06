@@ -508,8 +508,12 @@ def test_news_entry_threshold() -> None:
     print("\n[Какие новости считаются поводом для входа]")
 
     check(hasattr(CFG, "NEWS_TRADE_MIN_IMPACT"), "Порог важности настраивается")
-    check(CFG.NEWS_TRADE_MIN_IMPACT == "high",
-          "По умолчанию — только самые важные новости",
+    # Порог по умолчанию проверяется отдельно в test_news_mode_is_on:
+    # владелец просил отрабатывать каждую новость, поэтому он снижен до
+    # medium. Здесь важно другое — что порог вообще есть и берётся из
+    # настроек, а не зашит в код.
+    check(str(CFG.NEWS_TRADE_MIN_IMPACT) in ("high", "medium", "low"),
+          "Порог задан осмысленным значением",
           str(CFG.NEWS_TRADE_MIN_IMPACT))
 
     src = (APP / "news_calendar.py").read_text(encoding="utf-8")
@@ -521,6 +525,111 @@ def test_news_entry_threshold() -> None:
     upcoming = src.split("def upcoming_events", 1)[1][:600]
     check("NEWS_TRADE_MIN_IMPACT" not in upcoming,
           "Список новостей на вкладке порогом входа не режется")
+
+
+def test_news_mode_is_on() -> None:
+    """Владелец: «мне нужно, чтобы работала новостная торговля».
+
+    Главная причина, по которой она не работала НИКОГДА: режим торговли
+    стоял SCALPING, и ветка новостей в главном цикле просто не выполнялась —
+    сколько бы ни было настроено источников и порогов."""
+    print("\n[Новостной режим включён]")
+    fresh = types.ModuleType("config_fresh")
+    exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
+
+    mode = getattr(fresh.TRADING_MODE, "name", str(fresh.TRADING_MODE))
+    check(mode in ("BOTH", "NEWS_TRADING"),
+          "Режим торговли включает новости", mode)
+    check(mode == "BOTH",
+          "И это BOTH: новости в приоритете, но без них бот не простаивает",
+          mode)
+    check(fresh.NEWS_TRADE_MIN_IMPACT == "medium",
+          "Порог важности снижен до medium — отрабатываются не только "
+          "самые крупные новости", str(fresh.NEWS_TRADE_MIN_IMPACT))
+
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    check("TradingMode.NEWS_TRADING" in src,
+          "Главный цикл умеет входить по новости")
+
+    migrate = (APP / "config_migrate.py").read_text(encoding="utf-8")
+    check("MIGRATED_NEWS_TRADING_ON" in migrate, "Есть одноразовая миграция")
+    check("_enable_news_mode" in migrate,
+          "И она переключает режим торговли, а не только порог")
+    body = migrate.split("def _enable_news_mode", 1)[1].split("\ndef ", 1)[0]
+    check('value.attr == "SCALPING"' in body,
+          "Режим трогается ТОЛЬКО если стоит заводской SCALPING — "
+          "выбранный человеком не перебиваем")
+
+
+def test_news_explain() -> None:
+    """Почему новостной сделки не случилось — программа должна отвечать,
+    а не молчать. Владелец: «я не заметил за ним этого»."""
+    print("\n[Программа объясняет, что с новостями]")
+    import news_calendar as nc
+    from datetime import datetime as _dt, timedelta as _td
+
+    saved_mode = CFG.TRADING_MODE
+    saved_get = nc._get_events
+    saved_detect = nc.detect_news_breakout
+    saved_impact = getattr(CFG, "NEWS_TRADE_MIN_IMPACT", "medium")
+    try:
+        CFG.TRADING_MODE = CFG.TradingMode.SCALPING
+        text = nc.explain_news_entry("EURUSD")
+        check("выключен" in text, "Выключенный режим назван первым", text)
+
+        CFG.TRADING_MODE = CFG.TradingMode.BOTH
+
+        nc._get_events = lambda: ([], "сервис календаря остановлен")
+        text = nc.explain_news_entry("EURUSD")
+        check("не отвечает" in text and "остановлен" in text,
+              "Отказ источника показан как есть", text)
+
+        far = _dt.now() + _td(days=2)
+        nc._get_events = lambda: ([{"time": far, "currency": "JPY",
+                                    "event": "BOJ", "impact": "high"}], None)
+        text = nc.explain_news_entry("EURUSD")
+        check("событий в календаре нет" in text,
+              "Чужая валюта — так и сказано", text)
+
+        soon = _dt.now() + _td(minutes=40)
+        nc._get_events = lambda: ([{"time": soon, "currency": "USD",
+                                    "event": "Non-Farm Payrolls",
+                                    "impact": "high"}], None)
+        text = nc.explain_news_entry("EURUSD")
+        check("Ближайшая" in text and "Non-Farm" in text,
+              "Названа ближайшая новость и сколько до неё", text)
+
+        just = _dt.now() - _td(minutes=3)
+        nc._get_events = lambda: ([{"time": just, "currency": "USD",
+                                    "event": "Мелкий отчёт", "impact": "low"}], None)
+        CFG.NEWS_TRADE_MIN_IMPACT = "medium"
+        text = nc.explain_news_entry("EURUSD")
+        check("ниже порога" in text, "Порог важности назван причиной", text)
+        check("NEWS_TRADE_MIN_IMPACT" in text,
+              "И сказано, какой настройкой он меняется", text)
+
+        nc._get_events = lambda: ([{"time": just, "currency": "USD",
+                                    "event": "ISM PMI", "impact": "high"}], None)
+        nc.detect_news_breakout = lambda symbol, window: (False, 0, 0.0)
+        text = nc.explain_news_entry("EURUSD")
+        check("не дала явного движения" in text,
+              "Сказано, что движения не было", text)
+        check("не угадывает направление заранее" in text,
+              "И почему это правильно", text)
+
+        nc.detect_news_breakout = lambda symbol, window: (True, 1, 78.0)
+        text = nc.explain_news_entry("EURUSD")
+        check("Есть новостной сигнал" in text, "Сигнал показан", text)
+        check("вверх" in text, "И направление названо", text)
+    finally:
+        CFG.TRADING_MODE = saved_mode
+        CFG.NEWS_TRADE_MIN_IMPACT = saved_impact
+        nc._get_events = saved_get
+        nc.detect_news_breakout = saved_detect
+
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    check("explain_news_trading" in ui, "Кнопка есть в программе")
+    check("Почему нет новостных сделок" in ui, "И понятно подписана")
 
 
 def main() -> int:
@@ -535,6 +644,8 @@ def main() -> int:
     test_chain_config()
     test_forexfactory_source()
     test_news_entry_threshold()
+    test_news_mode_is_on()
+    test_news_explain()
     test_exporter_source()
     test_chart_code()
     test_installer()

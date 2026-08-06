@@ -188,6 +188,15 @@ ONE_TIME = [
         "окна последних сделок",
     ),
     (
+        "MIGRATED_NEWS_TRADING_ON",
+        {"NEWS_TRADE_MIN_IMPACT": "medium"},
+        "новостная торговля включена: порог важности снижен до medium, чтобы "
+        "отрабатывались не только самые крупные новости. Режим торговли "
+        "переключён на BOTH — новостной вход в приоритете, а когда свежей "
+        "новости нет, работает обычный скальпинг. Раньше стоял SCALPING, и "
+        "ветка новостей не выполнялась вовсе",
+    ),
+    (
         "MIGRATED_PARTIAL_CLOSE_ON",
         {"USE_PARTIAL_CLOSE": True},
         "включено частичное закрытие: при достижении прибыли половина объёма "
@@ -519,6 +528,26 @@ def _fix_broker_specific_symbols(text: str, existing: dict) -> tuple:
     return text, note
 
 
+def _enable_news_mode(text: str, existing: dict) -> tuple:
+    """Одноразово включает новостной режим (BOTH) — условная правка, поэтому
+    не в ONE_TIME: значение здесь не простое число или строка, а обращение к
+    перечислению (TradingMode.BOTH), и трогать его можно только если стоит
+    заводское TradingMode.SCALPING. Если человек уже выбрал режим сам —
+    это его решение."""
+    marker = "MIGRATED_NEWS_TRADING_ON"
+    if marker not in existing:
+        return text, ""          # общая часть миграции ещё не применялась
+    node = existing.get("TRADING_MODE")
+    if node is None:
+        return text, ""
+    value = node["value"]
+    if not (isinstance(value, ast.Attribute) and value.attr == "SCALPING"):
+        return text, ""
+    return _replace_or_append(text, "TRADING_MODE", "TradingMode.BOTH"), (
+        "режим торговли переключён на BOTH: новостной вход в приоритете, "
+        "в остальное время обычный скальпинг")
+
+
 def apply_one_time(config_path: str = "") -> list:
     """Применить одноразовые изменения из ONE_TIME. Возвращает пояснения к тем,
     что реально применились."""
@@ -552,6 +581,11 @@ def apply_one_time(config_path: str = "") -> list:
     text, symbols_note = _fix_broker_specific_symbols(text, existing)
     if symbols_note:
         applied.append(symbols_note)
+
+    existing = _top_level_assignments(text)
+    text, news_note = _enable_news_mode(text, existing)
+    if news_note:
+        applied.append(news_note)
 
     # Стоп-лосс расширяется в config.py, УЖЕ существующем у пользователя.
     # RISK_PROFILES и MIN_SL_* не входят в generic-миграцию выше (RISK_PROFILES

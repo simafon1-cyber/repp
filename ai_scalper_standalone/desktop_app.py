@@ -2021,6 +2021,8 @@ class App:
                    command=self.refresh_news_tab).grid(row=0, column=0)
         ttk.Button(btn_frame, text="Проверить и починить источник",
                    command=self.fix_news_source).grid(row=0, column=1, padx=6)
+        ttk.Button(btn_frame, text="Почему нет новостных сделок",
+                   command=self.explain_news_trading).grid(row=0, column=2)
 
         # Состояние всей цепочки новостей одной строкой. Без неё понять, почему
         # новостной режим молчит, было нельзя: бот писал «свежего пробоя нет»
@@ -3518,6 +3520,33 @@ class App:
             self.root.after(0, lambda: self.news_source_var.set(text))
 
         threading.Thread(target=worker, daemon=True, name="news-source").start()
+
+    def explain_news_trading(self):
+        """По каждой паре — что сейчас с новостями. Владелец: «мне нужно,
+        чтобы работала каждая новость» и «я не заметил за ним этого».
+
+        Заметить было нельзя: если входа не случилось, программа молчала.
+        Здесь она проходит те же проверки, что и при торговле, и говорит,
+        на какой именно остановилась."""
+        self.news_source_var.set("Проверяю новостную торговлю...")
+
+        def worker():
+            lines = []
+            try:
+                for symbol in list(getattr(cfg, "SYMBOLS", []) or [])[:8]:
+                    try:
+                        lines.append(f"{symbol}: "
+                                     + news_calendar.explain_news_entry(symbol))
+                    except Exception as e:  # noqa: BLE001
+                        lines.append(f"{symbol}: проверить не удалось ({e})")
+            except Exception as e:  # noqa: BLE001
+                lines = [f"Проверка не прошла: {e}"]
+            text = "\n\n".join(lines) or "Инструменты не заданы."
+            self.root.after(0, lambda: messagebox.showinfo(
+                APP_TITLE, "Новостная торговля сейчас:\n\n" + text))
+            self.root.after(0, self.refresh_news_source_line)
+
+        threading.Thread(target=worker, daemon=True, name="news-explain").start()
 
     def refresh_news_source_line(self):
         """Показать состояние источника, ничего не меняя (при открытии вкладки)."""

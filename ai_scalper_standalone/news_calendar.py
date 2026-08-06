@@ -166,6 +166,83 @@ def detect_news_breakout(symbol: str, window_minutes: int):
     return True, direction, confidence_score
 
 
+def explain_news_entry(symbol: str, window_minutes: int = 0) -> str:
+    """Что происходит с новостями ПО ЭТОЙ ПАРЕ прямо сейчас — словами.
+
+    Владелец: «мне нужно, чтобы работала каждая новость», «я не заметил за
+    ним этого». Заметить и правда было нельзя: если входа не случилось,
+    программа молчала, и оставалось гадать — то ли новостей нет, то ли
+    источник не отвечает, то ли режим выключен, то ли рынок не двинулся.
+
+    Здесь проходятся ровно те же проверки, что и в detect_news_breakout, и
+    на каждой говорится, чем дело кончилось. Торговых решений не принимает —
+    только объясняет."""
+    mode = getattr(cfg, "TRADING_MODE", None)
+    mode_name = getattr(mode, "name", str(mode)).upper()
+    if "NEWS" not in mode_name and "BOTH" not in mode_name:
+        return ("Новостной режим выключен: на вкладке «Настройка» режим "
+                "торговли стоит «скальпинг». Новости при этом только "
+                "фильтруют вход, но сами сделок не открывают.")
+    if not getattr(cfg, "USE_NEWS_FILTER", True):
+        return "Новости выключены совсем (USE_NEWS_FILTER)."
+
+    events, error = _get_events()
+    if error and not events:
+        return f"Источник новостей не отвечает: {error}"
+    if not events:
+        return "Источник ответил, но событий в календаре нет."
+
+    codes = _symbol_codes(symbol)
+    if not codes:
+        return (f"Для {symbol} не определить валюты — новости к нему "
+                f"привязать не к чему.")
+
+    rank = {"low": 0, "medium": 1, "high": 2}
+    min_rank = rank.get(
+        str(getattr(cfg, "NEWS_TRADE_MIN_IMPACT", "high") or "high").lower(), 2)
+    window = int(window_minutes or getattr(cfg, "NEWS_BREAKOUT_WINDOW_MIN", 15))
+
+    now = datetime.now()
+    mine = [e for e in events if e["currency"] in codes]
+    if not mine:
+        return f"По валютам {symbol} ({', '.join(codes)}) событий в календаре нет."
+
+    fresh = []
+    for e in mine:
+        minutes_since = (now - e["time"]).total_seconds() / 60.0
+        if 0 <= minutes_since <= window:
+            fresh.append((minutes_since, e))
+    if not fresh:
+        # Ближайшее будущее событие — самое полезное, что можно сказать
+        future = sorted([e for e in mine if e["time"] > now], key=lambda e: e["time"])
+        if future:
+            nearest = future[0]
+            left = int((nearest["time"] - now).total_seconds() / 60)
+            return (f"Свежих новостей нет. Ближайшая по {symbol}: "
+                    f"«{nearest['event']}» ({nearest['impact']}) через {left} мин.")
+        return f"Свежих новостей по {symbol} нет, ближайших в календаре тоже."
+
+    minutes_since, event = min(fresh, key=lambda pair: pair[0])
+    if rank.get(event["impact"], 0) < min_rank:
+        return (f"Новость «{event['event']}» вышла {int(minutes_since)} мин назад, "
+                f"но её важность ({event['impact']}) ниже порога входа "
+                f"({getattr(cfg, 'NEWS_TRADE_MIN_IMPACT', 'high')}). "
+                f"Порог меняется настройкой NEWS_TRADE_MIN_IMPACT.")
+
+    has_signal, direction, confidence = detect_news_breakout(symbol, window)
+    if has_signal:
+        side = "вверх" if direction == 1 else "вниз"
+        return (f"Есть новостной сигнал по «{event['event']}»: рынок пошёл "
+                f"{side}, оценка {confidence:.0f}. Вход состоится, если "
+                f"пройдут проверки риска.")
+    return (f"Новость «{event['event']}» ({event['impact']}) вышла "
+            f"{int(minutes_since)} мин назад, но цена не дала явного движения "
+            f"— тело свечей меньше "
+            f"{getattr(cfg, 'NEWS_BREAKOUT_MIN_BODY_PCT', 55)}% диапазона. "
+            f"Программа не угадывает направление заранее: нет движения — нет "
+            f"входа.")
+
+
 def upcoming_events(days_ahead: int = 3, min_impact: str = "medium"):
     """Для вкладки "Новости" в desktop_app.py: возвращает (events, error_or_None)."""
     events, error = _get_events()
