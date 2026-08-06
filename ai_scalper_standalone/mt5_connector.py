@@ -29,16 +29,59 @@ TF_MAP = {
 }
 
 
+def auto_login_account():
+    """Данные для входа, если на вкладке «Брокер» они не заполнены.
+
+    Владелец: «и автоматический вход в счёт». Счёт он добавлял на вкладке
+    «Счета» — а главный торговый цикл входил только по полям вкладки
+    «Брокер» (MT5_LOGIN/MT5_PASSWORD/MT5_SERVER). Получалось, что счёт в
+    программе есть, но бот про него не знает и ждёт уже открытый терминал.
+
+    Берём ПЕРВЫЙ полностью настроенный и включённый счёт из списка. Если
+    список пуст, пароль не расшифрован или что-то не заполнено — возвращаем
+    None, и всё работает как раньше: подключение к уже открытому терминалу.
+    """
+    try:
+        import accounts as accounts_module
+        from control import control
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        store = accounts_module.AccountStore()
+        password = control.get_session_password() or ""
+        salt = getattr(cfg, "SECURITY_SALT", "") or ""
+        store.load(password, salt)
+        ready = store.ready_accounts()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось прочитать список счетов для автовхода: %s", e)
+        return None
+    return ready[0] if ready else None
+
+
 def connect():
     kwargs = {}
     if getattr(cfg, "MT5_TERMINAL_PATH", ""):
         kwargs["path"] = cfg.MT5_TERMINAL_PATH
 
-    use_credentials = bool(getattr(cfg, "MT5_LOGIN", 0))
+    login = int(getattr(cfg, "MT5_LOGIN", 0) or 0)
+    password = getattr(cfg, "MT5_PASSWORD", "")
+    server = getattr(cfg, "MT5_SERVER", "")
+
+    if login <= 0:
+        account = auto_login_account()
+        if account is not None:
+            log.info("Автовход: беру счёт %s (%s) со вкладки «Счета» — "
+                     "на вкладке «Брокер» логин не заполнен.",
+                     account.login, account.server)
+            login, password, server = account.login, account.password, account.server
+            if account.terminal_path and not kwargs.get("path"):
+                kwargs["path"] = account.terminal_path
+
+    use_credentials = login > 0
     if use_credentials:
-        kwargs["login"] = int(cfg.MT5_LOGIN)
-        kwargs["password"] = cfg.MT5_PASSWORD
-        kwargs["server"] = cfg.MT5_SERVER
+        kwargs["login"] = int(login)
+        kwargs["password"] = password
+        kwargs["server"] = server
 
     ok = mt5.initialize(**kwargs)
     if not ok and use_credentials:
@@ -46,12 +89,12 @@ def connect():
         # initialize() (некоторые версии терминала капризничают, если всё
         # передавать одним вызовом) — пробуем запасной вариант.
         if mt5.initialize(path=kwargs.get("path")):
-            ok = mt5.login(int(cfg.MT5_LOGIN), password=cfg.MT5_PASSWORD, server=cfg.MT5_SERVER)
+            ok = mt5.login(int(login), password=password, server=server)
 
     if not ok:
         hint = (
             f"Проверь логин/пароль/сервер в настройках подключения к брокеру "
-            f"(сервер введён как '{cfg.MT5_SERVER}')."
+            f"(сервер введён как '{server}')."
             if use_credentials else
             "Убедись, что терминал MetaTrader 5 уже ЗАПУЩЕН и ЗАЛОГИНЕН на этом компьютере."
         )

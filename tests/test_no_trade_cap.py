@@ -227,8 +227,13 @@ def test_money_protections_still_enforced() -> None:
     print("\n[Деньги по-прежнему защищены]")
 
     src = (APP / "main.py").read_text(encoding="utf-8")
-    check("rm.trading_allowed(acc_state, sym_state, equity)" in src,
+    # Проверка та же самая, но теперь она возвращает ПРИЧИНУ, а не да/нет:
+    # одна фраза на три разные причины не давала понять, что происходит
+    # (см. rm.trading_block_reason и tests/test_silence_and_settings.py).
+    check("rm.trading_block_reason(acc_state, sym_state, equity)" in src,
           "Проверка дневного лимита и просадки стоит перед входом")
+    check("if blocked:" in src,
+          "И при срабатывании вход отменяется")
 
     risk_src = (APP / "risk_manager.py").read_text(encoding="utf-8")
     for fn in ("daily_loss_limit_hit", "max_drawdown_hit"):

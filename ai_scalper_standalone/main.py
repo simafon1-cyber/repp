@@ -340,8 +340,12 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         sym_state.last_reject_reason = "Пара отключена с дашборда (выбор пары)"
         return
 
-    if not rm.trading_allowed(acc_state, sym_state, equity):
-        sym_state.last_reject_reason = "Торговля приостановлена (лимит/просадка/пауза)"
+    # Причина ИМЕННО та, которая сработала, с числами: одна фраза на три
+    # разные причины («лимит/просадка/пауза») не давала понять, что
+    # происходит, а две из трёх — защёлки, снимаемые перезапуском.
+    blocked = rm.trading_block_reason(acc_state, sym_state, equity)
+    if blocked:
+        sym_state.last_reject_reason = "Торговля приостановлена: " + blocked
         return
 
     # Инструмент, который стабильно тянет счёт вниз, отключается САМ. Это

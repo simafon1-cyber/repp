@@ -82,6 +82,7 @@ import mt5_install
 import param_help
 import config_migrate
 import news_autostart
+import settings_backup
 import ui_theme
 import version as app_version
 import cloud_journal
@@ -480,6 +481,14 @@ def _reload_cfg():
             secure_store.unlock_config(cfg, pw)
         except ValueError as e:
             log.error("Не удалось расшифровать секреты после перечитывания config.py: %s", e)
+    # Настройки только что менялись — обновляем постоянную копию. Она лежит
+    # в папке пользователя и переживает и обновление, и перенос программы:
+    # запуск свежескачанного .exe из другой папки больше не показывает
+    # заводские настройки вместо ваших.
+    try:
+        settings_backup.save()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось обновить копию настроек: %s", e)
 
 
 def _migrate_legacy_secrets():
@@ -3841,6 +3850,35 @@ class App:
     # большим запасом, чтобы медленный ответ брокера не считался смертью.
     WATCHDOG_SILENCE_SECONDS = 180
 
+    def _silence_reasons(self, snap: dict) -> list:
+        """Почему сейчас нет входов — словами, без открытия других вкладок.
+
+        Жалоба владельца: «перезапустил программу и начала открывать сделки,
+        до этого затишье было». Причина у таких затиший обычно вполне
+        конкретная, и программа её знает — просто держала при себе.
+
+        Особый случай, ради которого всё и сделано: запреты по просадке и
+        пауза после серии убытков живут ТОЛЬКО В ПАМЯТИ. Перезапуск их
+        снимает, и со стороны это выглядит как «программа подвисла, помог
+        перезапуск». На самом деле сработала защита, и знать об этом надо."""
+        symbols = snap.get("symbols") or []
+        counted = {}
+        for item in symbols:
+            reason = str((item or {}).get("reject_reason", "") or "").strip()
+            if not reason or reason.startswith("OK"):
+                continue
+            counted[reason] = counted.get(reason, 0) + 1
+        if not counted:
+            return []
+        # Если все пары молчат по одной причине — показываем её одной строкой,
+        # а не повторяем на каждую пару.
+        total = len([i for i in symbols if i])
+        lines = []
+        for reason, count in sorted(counted.items(), key=lambda kv: -kv[1])[:3]:
+            where = "по всем парам" if count >= total and total else f"пар: {count}"
+            lines.append(f"{reason} ({where})")
+        return lines
+
     def _watchdog_tick(self):
         """Сторож торгового цикла.
 
@@ -3947,9 +3985,14 @@ class App:
                 # если реально есть проблема с разрешением на торговлю в MT5.
                 perm = snap.get("trade_permission", {}) or {}
                 problems = perm.get("problems", [])
+                # Причины отказа по каждой паре — из того же снимка. Раньше их
+                # можно было увидеть только на вкладке «Символы», по одной,
+                # мелким текстом. Из-за этого «затишье» выглядело как поломка,
+                # хотя программа знала причину и молчала о ней.
+                problems = list(problems) + self._silence_reasons(snap)
                 if problems:
                     self.trade_warning_var.set(
-                        "⚠ Сделки могут не открываться:\n- " + "\n- ".join(problems)
+                        "⚠ Сделки не открываются:\n- " + "\n- ".join(problems)
                     )
                 else:
                     self.trade_warning_var.set("")
@@ -4349,6 +4392,19 @@ def main():
     except Exception as e:  # noqa: BLE001
         log.warning("Не удалось применить скачанное обновление: %s", e)
 
+    # ДО всякой работы с настройками: если рядом с программой config.py нет
+    # (запустили свежескачанный .exe из «Загрузок», перенесли на другой
+    # компьютер, переустановили) — возвращаем его из постоянной папки
+    # пользователя. Иначе программа создала бы заводской файл, и человек
+    # увидел бы сброшенные настройки: «сбиваются последние настройки».
+    try:
+        restored = settings_backup.restore_if_missing()
+        if restored:
+            log.info("Настройки восстановлены из постоянной копии: %s", restored)
+            _reload_cfg()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось восстановить настройки: %s", e)
+
     # Дописываем в config.py настройки, появившиеся в новой версии. Без этого
     # новые поля на вкладке «Настройка» были бы пустыми, а «Сохранить» ругался
     # бы «Некорректные значения в полях: ...». Существующие значения не
@@ -4381,6 +4437,13 @@ def main():
             log.warning("Новости: %s", news_autostart.describe(news_state))
     except Exception as e:  # noqa: BLE001
         log.warning("Не удалось проверить источник новостей: %s", e)
+
+    # Свежую копию настроек кладём в постоянную папку — она переживёт и
+    # обновление, и перенос программы в другое место.
+    try:
+        settings_backup.save()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось сохранить копию настроек: %s", e)
 
     _migrate_legacy_secrets()
     _harden_files()

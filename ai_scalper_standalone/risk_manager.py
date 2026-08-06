@@ -268,14 +268,50 @@ def loss_streak_pause_active(sym_state: SymbolState) -> bool:
     return pause_active(sym_state.pause_until)
 
 
-def trading_allowed(acc_state: AccountState, sym_state: SymbolState, equity: float) -> bool:
+def trading_block_reason(acc_state: AccountState, sym_state: SymbolState,
+                         equity: float) -> str:
+    """ПОЧЕМУ вход запрещён. Пустая строка — можно торговать.
+
+    Раньше здесь был просто True/False, а наружу уходила одна фраза на три
+    разные причины: «Торговля приостановлена (лимит/просадка/пауза)». По ней
+    невозможно понять, что именно происходит, — а происходить может очень
+    разное, и лечится оно по-разному.
+
+    Живой случай владельца: «работает пару часов и всё, потом надо
+    перезапуск». Две из этих трёх причин — ЗАЩЁЛКИ, которые живут только в
+    памяти и сбрасываются перезапуском:
+
+      * просадка считается от acc_state.peak_equity — пика, накопленного с
+        момента запуска. Счёт просел от своего максимума — вход закрыт, и
+        закрыт до конца работы программы. Перезапуск обнуляет пик, и бот
+        снова торгует. Ровно то, что видел владелец;
+      * пауза после серии убытков живёт в sym_state.pause_until — тоже
+        только в памяти.
+
+    Сама защита правильная. Неправильно было МОЛЧАТЬ о ней."""
     if daily_loss_limit_hit(acc_state, equity):
-        return False
+        start = acc_state.day_start_equity
+        drop = ((equity - start) / start * 100.0) if start > 0 else 0.0
+        return (f"дневной лимит убытка достигнут ({drop:.2f}% за день). "
+                f"Сбрасывается со сменой торгового дня. Выключается настройкой "
+                f"USE_DAILY_LOSS_LIMIT")
     if max_drawdown_hit(acc_state, equity):
-        return False
+        peak = acc_state.peak_equity
+        drop = ((equity - peak) / peak * 100.0) if peak > 0 else 0.0
+        return (f"лимит просадки достигнут: счёт {drop:.2f}% от максимума "
+                f"{peak:.2f}. Пик считается с момента запуска программы, "
+                f"поэтому перезапуск снимает запрет — но это не решение. "
+                f"Выключается настройкой USE_MAX_DRAWDOWN_LIMIT")
     if loss_streak_pause_active(sym_state):
-        return False
-    return True
+        until = sym_state.pause_until
+        when = until.strftime("%H:%M") if until else "?"
+        return (f"пауза после серии убытков по этой паре до {when}. "
+                f"Выключается настройкой PAUSE_MINUTES_AFTER_LOSS_STREAK = 0")
+    return ""
+
+
+def trading_allowed(acc_state: AccountState, sym_state: SymbolState, equity: float) -> bool:
+    return not trading_block_reason(acc_state, sym_state, equity)
 
 
 # =====================================================================
