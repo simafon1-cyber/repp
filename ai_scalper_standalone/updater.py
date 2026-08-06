@@ -56,6 +56,7 @@ import ast
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -68,6 +69,7 @@ import zipfile
 
 import config as cfg
 import secure_store
+import version as app_version
 
 log = logging.getLogger("updater")
 
@@ -737,6 +739,42 @@ def latest_release_exe() -> dict:
             return {"url": asset.get("url", ""), "name": asset.get("name", ""),
                     "tag": str(data.get("tag_name", ""))}
     return {}
+
+
+def latest_release_build() -> int:
+    """Номер последней выпущенной сборки на GitHub. 0 — узнать не удалось.
+
+    Релизы обычных сборок называются build-<номер> (см. build-exe.yml).
+    Разбираем именно имя тега: сравнивать номера сборок человеку проще и
+    понятнее, чем номера правок."""
+    try:
+        with _request(f"{API}/repos/{repo()}/releases/latest") as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return 0
+    tag = str(data.get("tag_name", "") or "")
+    match = re.search(r"(\d+)", tag)
+    return int(match.group(1)) if match else 0
+
+
+def version_status() -> str:
+    """Одной строкой: какая версия установлена и есть ли новее.
+
+    Владелец: «прописывай где-то версию, чтобы было видно, обновилось или
+    нет». Номера сборки самого по себе мало — важно, ПОСЛЕДНЯЯ ли она.
+    Несколько раз выходило так, что исправление давно выпущено, а запущена
+    старая версия, и мы искали ошибку, которой в новой уже нет."""
+    mine = app_version.full()
+    if not app_version.is_release():
+        return f"Версия: {mine}"
+    installed = app_version.number()
+    latest = latest_release_build()
+    if latest <= 0:
+        return f"Версия: {mine} (узнать про новые не удалось)"
+    if latest > installed:
+        return (f"Версия: {mine}. На GitHub есть новее — сборка {latest}. "
+                f"Нажмите «Обновить всё сейчас».")
+    return f"Версия: {mine} — это последняя, обновлять нечего."
 
 
 def latest_build_artifact() -> dict:

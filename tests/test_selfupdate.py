@@ -701,6 +701,79 @@ def test_artifact_download_explains_real_reason() -> None:
               "У сборки есть право выложить файл в Releases")
 
 
+def test_version_is_visible() -> None:
+    """Владелец: «прописывай где-то версию, чтобы было видно, обновилось или
+    нет». Несколько раз выходило так, что исправление давно выпущено, а
+    запущена старая версия, и мы искали ошибку, которой в новой уже нет."""
+    print("\n[Версия видна в программе]")
+
+    sys.path.insert(0, str(APP))
+    import stamp_version
+    import version as v
+
+    # В исходниках честно написано «разработка»: такой запуск и правда не
+    # является выпущенной сборкой
+    check(v.is_release() is False, "Запуск из исходников не выдаёт себя за сборку")
+    check("разработка" in v.short(), "Так и написано", v.short())
+    check(v.number() == 0, "Номера сборки нет")
+
+    # Сборочный сценарий вписывает настоящие значения
+    stamped = stamp_version.stamp((APP / "version.py").read_text(encoding="utf-8"),
+                                  "11", "92a52c7abcdef", "2026-08-06")
+    module = types.ModuleType("version_stamped")
+    exec(stamped, module.__dict__)
+    check(module.is_release() is True, "После сборки это выпущенная версия")
+    check(module.short() == "сборка 11", "Коротко для заголовка окна", module.short())
+    check(module.number() == 11, "Номер сборки читается числом")
+    full = module.full()
+    for part in ("сборка 11", "2026-08-06", "92a52c7"):
+        check(part in full, f"В подробной строке есть «{part}»", full)
+    check("92a52c7abcdef" not in full, "Номер правки укорочен до 7 знаков", full)
+
+    # Испорченный version.py должен ломать СБОРКУ, а не давать .exe без версии
+    broken = False
+    try:
+        stamp_version.stamp("НЕ ТОТ ФАЙЛ", "1", "a", "b")
+    except ValueError:
+        broken = True
+    check(broken, "Если version.py изменён — сборка падает, а не молчит")
+
+    # Версия показывается в заголовке окна и на вкладке «Система»
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    check("app_version.short()" in ui.split("self.root.title", 1)[1][:120],
+          "Версия стоит в заголовке окна")
+    check("self.version_var" in ui, "На вкладке «Система» есть строка версии")
+    check("_refresh_version_line" in ui,
+          "После проверки обновлений строка версии обновляется")
+
+    # Сравнение с GitHub: моя сборка последняя или нет
+    saved = up.latest_release_build
+    saved_version = up.app_version
+    try:
+        up.app_version = module              # как будто установлена сборка 11
+        up.latest_release_build = lambda: 11
+        check("последняя" in up.version_status(),
+              "Сборка совпадает с GitHub — сказано, что обновлять нечего",
+              up.version_status())
+        up.latest_release_build = lambda: 14
+        text = up.version_status()
+        check("14" in text and "новее" in text,
+              "Есть более новая сборка — названа её номером", text)
+        up.latest_release_build = lambda: 0
+        check("не удалось" in up.version_status(),
+              "Сети нет — версия всё равно показана", up.version_status())
+    finally:
+        up.latest_release_build = saved
+        up.app_version = saved_version
+
+    # Сценарий сборки действительно вписывает версию, а не забыл про неё
+    workflow = (APP.parent / ".github" / "workflows"
+                / up.BUILD_WORKFLOW).read_text(encoding="utf-8")
+    check("stamp_version.py" in workflow, "Сборка вписывает версию в программу")
+    check("--hidden-import version" in workflow,
+          "Модуль версии попадает внутрь .exe")
+
+
 def test_update_everything_covers_both() -> None:
     print("\n[Одна кнопка обновляет и советники, и программу]")
     body = code_only((APP / "updater.py").read_text(encoding="utf-8"))
@@ -748,6 +821,7 @@ def main() -> int:
 
     test_build_request_needs_token()
     test_artifact_download_explains_real_reason()
+    test_version_is_visible()
     test_update_everything_covers_both()
 
     print("\n" + "=" * 62)

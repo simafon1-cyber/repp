@@ -54,6 +54,18 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-build.txt
 
+      - name: Прописать версию в программу
+        # Владелец: «прописывай где-то версию, чтобы было видно, обновилось
+        # или нет». Номер сборки, короткий номер правки и дата подставляются
+        # ПЕРЕД упаковкой — иначе .exe не знал бы о себе ничего, и понять,
+        # старая версия запущена или новая, было бы нечем. Сама подстановка
+        # живёт в stamp_version.py: у кода в этом файле есть тест, у команд
+        # внутри сценария сборки — нет.
+        shell: pwsh
+        run: |
+          python stamp_version.py "${{ github.run_number }}" "${{ github.sha }}" (Get-Date -Format "yyyy-MM-dd")
+          python -c "import version; print(version.full())"
+
       - name: Собрать .exe
         # Команда повторяет build_exe.bat. --exclude-module config: config.py
         # остаётся обычным файлом рядом с программой, чтобы настройки можно
@@ -80,6 +92,7 @@ jobs:
           --hidden-import cloud_journal
           --hidden-import accounts_backup
           --hidden-import param_help
+          --hidden-import version
           --add-data "config.py.example;."
           --add-data "../mql5;mql5"
           --add-data "../ai_scalper_pro;ai_scalper_pro"

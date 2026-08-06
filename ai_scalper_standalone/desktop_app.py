@@ -81,6 +81,7 @@ import trading_schedule as tsched
 import mt5_install
 import param_help
 import config_migrate
+import version as app_version
 import cloud_journal
 import bridge_host
 import diagnostics
@@ -610,7 +611,10 @@ CONFIG_SECTIONS = [
 class App:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title(APP_TITLE)
+        # Версия прямо в заголовке окна: владелец просил, чтобы было видно,
+        # обновилась программа или нет. Заголовок виден всегда — и в окне,
+        # и на панели задач, — в отличие от вкладки, куда надо зайти.
+        self.root.title(f"{APP_TITLE} — {app_version.short()}")
         self.root.geometry("860x660")
         self.root.minsize(780, 580)
 
@@ -772,6 +776,8 @@ class App:
         pad = {"padx": 10, "pady": 6}
 
         ttk.Label(parent, text=APP_TITLE, font=("Segoe UI", 16, "bold")).pack(**pad)
+        ttk.Label(parent, text=f"Версия: {app_version.full()}",
+                  font=("Segoe UI", 9)).pack(anchor="w", padx=pad.get("padx", 10))
 
         mode_frame = ttk.Frame(parent)
         mode_frame.pack(**pad)
@@ -2145,57 +2151,65 @@ class App:
                   "и сессия Telegram остаются на месте."
                   ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
 
+        # Версия — САМОЙ ЗАМЕТНОЙ строкой в этом блоке. Владелец просил,
+        # чтобы было видно, обновилось или нет; раньше это можно было понять
+        # только косвенно, по изменившемуся поведению.
+        self.version_var = tk.StringVar(value=f"Версия: {app_version.full()}")
+        ttk.Label(up, textvariable=self.version_var, font=("Segoe UI", 10, "bold"),
+                  wraplength=780, justify="left").grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 6))
+
         self.update_enabled_var = tk.BooleanVar(value=getattr(cfg, "UPDATE_ENABLED", False))
         ttk.Checkbutton(up, text="Проверять обновления",
                         variable=self.update_enabled_var).grid(
-            row=1, column=0, columnspan=2, sticky="w", padx=8, pady=2)
+            row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 2))
 
-        ttk.Label(up, text="Репозиторий:").grid(row=2, column=0, sticky="w", padx=8, pady=3)
+        ttk.Label(up, text="Репозиторий:").grid(row=3, column=0, sticky="w", padx=8, pady=3)
         self.update_repo_var = tk.StringVar(value=getattr(cfg, "UPDATE_REPO", ""))
         ttk.Entry(up, textvariable=self.update_repo_var, width=44).grid(
-            row=2, column=1, sticky="w", padx=8)
+            row=3, column=1, sticky="w", padx=8)
         ttk.Label(up, foreground="#666", text="владелец/название, например simafon1-cyber/repp"
-                  ).grid(row=3, column=1, sticky="w", padx=8)
+                  ).grid(row=4, column=1, sticky="w", padx=8)
 
-        ttk.Label(up, text="Ветка:").grid(row=4, column=0, sticky="w", padx=8, pady=3)
+        ttk.Label(up, text="Ветка:").grid(row=5, column=0, sticky="w", padx=8, pady=3)
         self.update_branch_var = tk.StringVar(value=getattr(cfg, "UPDATE_BRANCH", ""))
         ttk.Entry(up, textvariable=self.update_branch_var, width=44).grid(
-            row=4, column=1, sticky="w", padx=8)
+            row=5, column=1, sticky="w", padx=8)
         ttk.Label(up, foreground="#666",
                   text="пусто = программа сама возьмёт главную ветку репозитория"
-                  ).grid(row=5, column=1, sticky="w", padx=8)
+                  ).grid(row=6, column=1, sticky="w", padx=8)
 
-        ttk.Label(up, text="Токен GitHub:").grid(row=6, column=0, sticky="w", padx=8, pady=3)
+        ttk.Label(up, text="Токен GitHub:").grid(row=7, column=0, sticky="w", padx=8, pady=3)
         self.update_token_var = tk.StringVar(value=getattr(cfg, "UPDATE_TOKEN", ""))
         ttk.Entry(up, textvariable=self.update_token_var, width=44, show="*").grid(
-            row=6, column=1, sticky="w", padx=8)
+            row=7, column=1, sticky="w", padx=8)
         ttk.Label(up, foreground="#666", wraplength=420, justify="left",
                   text="Для закрытого репозитория. Права: Contents: Read-only — "
                        "обычное обновление; Actions: Read and write — если хотите, "
                        "чтобы программа сама заказывала сборку .exe"
-                  ).grid(row=7, column=1, sticky="w", padx=8)
+                  ).grid(row=8, column=1, sticky="w", padx=8)
 
         self.update_auto_var = tk.BooleanVar(value=getattr(cfg, "UPDATE_AUTO_APPLY", False))
         ttk.Checkbutton(up, variable=self.update_auto_var,
                         text="Ставить обновление само при запуске (не спрашивая)").grid(
-            row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 0))
+            row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 0))
         ttk.Label(up, foreground="#666", wraplength=520, justify="left",
                   text="При старте торговля ещё не началась и открытых позиций у бота "
                        "нет — подменять его в этот момент безопасно. Посреди работы "
                        "обновление не ставится никогда, даже с этой галочкой.").grid(
-            row=9, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 2))
+            row=10, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 2))
 
         self.update_build_var = tk.BooleanVar(value=getattr(cfg, "UPDATE_REQUEST_BUILD", False))
         ttk.Checkbutton(up, variable=self.update_build_var,
                         text="Если готовой сборки нет — заказать её на GitHub самому").grid(
-            row=10, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 0))
+            row=11, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 0))
         ttk.Label(up, foreground="#666", wraplength=520, justify="left",
                   text="Раньше это делалось руками: вкладка Actions -> Run workflow. "
                        "Токену нужно право Actions: Read and write.").grid(
-            row=11, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 4))
+            row=12, column=0, columnspan=2, sticky="w", padx=28, pady=(0, 4))
 
         upbtn = ttk.Frame(up)
-        upbtn.grid(row=12, column=0, columnspan=2, sticky="w", padx=8, pady=6)
+        upbtn.grid(row=13, column=0, columnspan=2, sticky="w", padx=8, pady=6)
         ttk.Button(upbtn, text="Сохранить", command=self.save_system_settings).grid(row=0, column=0)
         ttk.Button(upbtn, text="Обновить всё сейчас",
                    command=self.update_everything_now).grid(row=0, column=1, padx=6)
@@ -2207,7 +2221,7 @@ class App:
         self.update_status_var = tk.StringVar(value="")
         ttk.Label(up, textvariable=self.update_status_var, foreground="#888",
                   wraplength=780, justify="left").grid(
-            row=13, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
+            row=14, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
 
         # ---------- Журнал сделок в облаке ----------
         jr = ttk.LabelFrame(parent, text=" Журнал сделок в облаке ")
@@ -2704,7 +2718,22 @@ class App:
         if summary.get("restart_needed"):
             text += "\n\nПерезапустите программу, чтобы новая версия заработала."
         self.update_status_var.set(text.replace("\n", " "))
+        self._refresh_version_line()
         messagebox.showinfo(APP_TITLE, text)
+
+    def _refresh_version_line(self):
+        """Обновить строку версии: та ли она, что лежит в GitHub.
+
+        Запрос к сети идёт в отдельном потоке — окно не должно замирать
+        из-за строчки текста."""
+        def worker():
+            try:
+                text = updater.version_status()
+            except Exception as e:  # noqa: BLE001
+                text = f"Версия: {app_version.full()} (проверить не удалось: {e})"
+            self.root.after(0, lambda: self.version_var.set(text))
+
+        threading.Thread(target=worker, daemon=True, name="version-check").start()
 
     def request_build_now(self):
         self._apply_update_fields()
