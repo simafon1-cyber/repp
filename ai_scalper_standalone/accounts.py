@@ -311,6 +311,23 @@ def resolve_symbol(wanted: str, available: list) -> str | None:
     if prefixed:
         return min(prefixed, key=len)
 
+    # ОБРАТНЫЙ случай: суффикс в ЖЕЛАЕМОМ имени, а у брокера его нет.
+    # EURUSDs -> EURUSD. Так выглядит переезд на другого брокера: в
+    # настройках остались имена прежнего (у SwitchMarkets все пары с "s"),
+    # а новый брокер называет их без суффикса. Раньше не находилась НИ ОДНА
+    # пара — бот молча не торговал ничем, и понять почему было нельзя.
+    #
+    # Отрезаем не больше трёх символов с конца и не короче шести: шесть —
+    # это длина обычной валютной пары (EURUSD), укорачивать сильнее значило
+    # бы сопоставлять пары наугад.
+    for cut in range(1, 4):
+        if len(target) - cut < 6:
+            break
+        trimmed = target[:-cut]
+        same = [a for a in available if _normalize(a) == trimmed]
+        if same:
+            return min(same, key=len)
+
     return None
 
 

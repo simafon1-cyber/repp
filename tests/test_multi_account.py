@@ -305,6 +305,69 @@ def test_daily_loss_migration_for_saved_accounts() -> None:
           "Миграция вызывается при запуске программы")
 
 
+def test_symbol_suffix_both_ways() -> None:
+    """Владелец: «какие ещё пары лучше добавить, пусть на них тоже работает».
+
+    Первое, что этому мешало: список пар по умолчанию был с суффиксом "s"
+    одного конкретного брокера (SwitchMarkets). На брокере, который зовёт
+    пары без суффикса — а это большинство, — не находилась НИ ОДНА пара, и
+    бот молча не торговал ничем."""
+    print("\n=== 3к. Имена пар подбираются в обе стороны ===")
+    broker_plain = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
+    broker_suffix = ["EURUSDs", "GBPUSDs", "USDJPYs", "AUDUSDs"]
+
+    # Суффикс у БРОКЕРА (так было и раньше)
+    check(resolve_symbol("EURUSD", broker_suffix) == "EURUSDs",
+          "EURUSD находится как EURUSDs")
+
+    # Суффикс в НАСТРОЙКАХ, а у брокера его нет — вот это и не работало
+    for wanted, expected in (("EURUSDs", "EURUSD"), ("USDJPYm", "USDJPY"),
+                             ("AUDUSD.a", "AUDUSD"), ("GBPUSD_i", "GBPUSD")):
+        check(resolve_symbol(wanted, broker_plain) == expected,
+              f"{wanted} находится как {expected}",
+              str(resolve_symbol(wanted, broker_plain)))
+
+    # Наугад не сопоставляем: пары у брокера просто нет
+    check(resolve_symbol("BTCUSDs", broker_plain) is None,
+          "Отсутствующая пара так и остаётся ненайденной")
+    check(resolve_symbol("XAUUSDs", broker_plain) is None,
+          "И золота нет — значит нет")
+
+    # Не режем короткие имена: шесть знаков — длина обычной пары, укорачивать
+    # сильнее значило бы угадывать
+    check(resolve_symbol("EURUS", ["EURUSD"]) is None or
+          resolve_symbol("EURUS", ["EURUSD"]) == "EURUSD",
+          "Короткое имя не превращается в чужую пару наугад")
+    check(resolve_symbol("EURUSDsss", ["EURUSD"]) == "EURUSD",
+          "Три лишних знака ещё отрезаем")
+    check(resolve_symbol("EURUSDssss", ["EURUSD"]) is None,
+          "Четыре — уже нет: это не суффикс, а другое имя")
+
+
+def test_default_symbols_are_affordable() -> None:
+    """Список пар по умолчанию должен работать у любого брокера и быть по
+    карману маленькому депозиту."""
+    print("\n=== 3л. Список пар по умолчанию ===")
+    symbols = list(_cfg.SYMBOLS)
+    check(symbols, "Список не пуст")
+    for name in symbols:
+        check(name.isupper() and name.isalpha() and len(name) == 6,
+              f"{name}: обычное имя пары без суффикса брокера")
+    for bad in ("XAUUSD", "BTCUSD"):
+        check(bad not in symbols,
+              f"{bad} убран из списка по умолчанию — минимальный лот по нему "
+              f"стоит дороже, чем маленький депозит может рисковать")
+
+    # И они действительно находятся у брокера — хоть с суффиксом, хоть без
+    plain = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"]
+    suffixed = [s + "s" for s in plain]
+    for name in symbols:
+        check(resolve_symbol(name, plain) is not None,
+              f"{name} находится у брокера без суффикса")
+        check(resolve_symbol(name, suffixed) is not None,
+              f"{name} находится у брокера с суффиксом")
+
+
 def test_accounts_saved_without_pressing_buttons() -> None:
     """Владелец: «пытался сохранить счёт, пусть сразу сохраняет».
 
@@ -813,6 +876,8 @@ def main_run() -> int:
     test_delete_button_exists()
     test_no_daily_loss_stop()
     test_daily_loss_migration_for_saved_accounts()
+    test_symbol_suffix_both_ways()
+    test_default_symbols_are_affordable()
     test_accounts_saved_without_pressing_buttons()
     test_locked_password_survives_other_saves()
     test_locked_account_not_confused_with_empty()

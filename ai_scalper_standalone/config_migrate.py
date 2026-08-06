@@ -480,6 +480,45 @@ def clear_account_daily_loss(path: str = "") -> str:
             "): счёт больше не останавливается до завтра, поймав убыток за день")
 
 
+# Заводской список пар, стоявший в config.py.example раньше: имена с
+# суффиксом "s" конкретного брокера (SwitchMarkets). На любом другом брокере
+# ни одна из них не находится.
+_OLD_DEFAULT_SYMBOLS = ["XAUUSDs", "EURUSDs", "GBPUSDs", "BTCUSDs"]
+_NEW_DEFAULT_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
+
+
+def _fix_broker_specific_symbols(text: str, existing: dict) -> tuple:
+    """Одноразовая правка списка пар — условная, поэтому не в ONE_TIME.
+
+    Трогаем ТОЛЬКО если список ровно тот, что стоял в эталоне: это
+    единственный надёжный признак, что его никто не менял. Если человек
+    вписал свои пары — хоть одну, — это его выбор, и трогать нельзя."""
+    marker = "MIGRATED_DEFAULT_SYMBOLS"
+    if marker in existing:
+        return text, ""
+    node = existing.get("SYMBOLS")
+    if node is None:
+        return text, ""
+    value_node = node["value"]
+    if not isinstance(value_node, (ast.List, ast.Tuple)):
+        return text, ""
+    try:
+        current = [e.value for e in value_node.elts if isinstance(e, ast.Constant)]
+    except Exception:  # noqa: BLE001
+        return text, ""
+    if current != _OLD_DEFAULT_SYMBOLS:
+        return text, ""
+
+    text = _replace_or_append(text, "SYMBOLS", repr(_NEW_DEFAULT_SYMBOLS))
+    note = ("список пар заменён на " + ", ".join(_NEW_DEFAULT_SYMBOLS) +
+            ": прежний был с суффиксом \"s\" конкретного брокера и на другом "
+            "брокере не находил НИ ОДНОЙ пары. Золото и биткоин из списка "
+            "убраны — минимальный лот по ним стоит дороже, чем этот депозит "
+            "может рисковать за сделку")
+    text = text.rstrip("\n") + f"\n\n# {note}\n{marker} = True\n"
+    return text, note
+
+
 def apply_one_time(config_path: str = "") -> list:
     """Применить одноразовые изменения из ONE_TIME. Возвращает пояснения к тем,
     что реально применились."""
@@ -508,6 +547,11 @@ def apply_one_time(config_path: str = "") -> list:
     text, repo_note = _default_update_repo(text, existing)
     if repo_note:
         applied.append(repo_note)
+
+    existing = _top_level_assignments(text)
+    text, symbols_note = _fix_broker_specific_symbols(text, existing)
+    if symbols_note:
+        applied.append(symbols_note)
 
     # Стоп-лосс расширяется в config.py, УЖЕ существующем у пользователя.
     # RISK_PROFILES и MIN_SL_* не входят в generic-миграцию выше (RISK_PROFILES
