@@ -457,6 +457,11 @@ def test_end_to_end() -> None:
     CFG.USE_BREAK_EVEN = False
     CFG.USE_TRAILING_STOP = False
     CFG.USE_PROFIT_LOCK_TRAILING = False
+    # Лестница трейлинга по R — четвёртый механизм, двигающий стоп. Здесь
+    # проверяется ТОЛЬКО тейк-профит, поэтому глушим её вместе с остальными
+    # тремя. Что она сама работает — проверяется ниже и в
+    # tests/test_r_trail_ladder.py.
+    CFG.USE_R_TRAIL_LADDER = False
     CFG.USE_PARTIAL_CLOSE = False
     CFG.TP_TIGHTEN_MIN_PROFIT_POINTS = 10
     CFG.TP_TIGHTEN_STEP_POINTS = 5
@@ -551,6 +556,42 @@ def test_end_to_end() -> None:
     pos = FakePos(5, True, 2000.0, 1999.0, 0.0)
     tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[pos], learned_tp_points=100)
     check(not modified and not closed, "Обе новые функции выключаются настройками", str(modified))
+
+    # --- Лестница трейлинга по R: настоящая проверка, не по исходному коду.
+    # Вход 2000.0, стоп 1999.0 -> риск ровно 100 пунктов = 1R. Цена 2000.50 —
+    # это +50 пт, то есть пик 0.5R. Первая ступень лестницы (0.30R) пройдена,
+    # значит стоп ОБЯЗАН переехать в безубыток.
+    #
+    # Ради этого всё и делалось: раньше защита включалась не раньше 0.67R, и
+    # такая сделка при развороте теряла полный стоп. По отчёту владельца
+    # (211 сделок) сделки без переехавшего стопа дали -109.55, с переехавшим
+    # +89.56 — при одинаковой длительности.
+    reset()
+    CFG.USE_R_TRAIL_LADDER = True
+    test_end_to_end.price = (2000.50, 2000.52)
+    pos = FakePos(6, True, 2000.0, 1999.0, 0.0)
+    tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[pos], learned_tp_points=100)
+    check(len(modified) == 1 and abs(modified[0][1] - 2000.0) < 1e-9,
+          "Пик 0.5R: стоп переехал в безубыток (раньше — только с 0.67R)",
+          str(modified))
+
+    # Ниже первой ступени стоп не трогаем: 0.2R — это ещё обычный шум, и
+    # безубыток там выбивало бы, не дав сделке развернуться.
+    reset()
+    test_end_to_end.price = (2000.20, 2000.22)
+    pos = FakePos(7, True, 2000.0, 1999.0, 2001.0)
+    tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[pos], learned_tp_points=100)
+    check(not [m for m in modified if m[1] != 1999.0],
+          "Пик 0.2R: стоп ещё не трогаем", str(modified))
+
+    # Зеркально для продажи — стоп идёт ВНИЗ к цене входа, а не вверх.
+    reset()
+    test_end_to_end.price = (1999.48, 1999.50)
+    pos = FakePos(8, False, 2000.0, 2001.0, 0.0)
+    tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[pos], learned_tp_points=100)
+    check(len(modified) == 1 and abs(modified[0][1] - 2000.0) < 1e-9,
+          "SELL: стоп переехал в безубыток зеркально", str(modified))
+    CFG.USE_R_TRAIL_LADDER = False
     CFG.USE_TP_TIGHTEN = True
     CFG.USE_BREAK_EVEN_RESCUE = True
 

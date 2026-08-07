@@ -225,6 +225,70 @@ def _tiered_lock_percent(peak_points: float, unit: float) -> float:
     return best_pct
 
 
+def r_ladder_lock_points(peak_points: float, risk_points: float,
+                         ladder=None, giveback_r: float = 0.0):
+    """Сколько прибыли (в ПУНКТАХ от цены входа) обязан запереть стоп при
+    данном пике. None — защита ещё не включилась, стоп не трогаем.
+
+    ЗАЧЕМ ЭТО ПОЯВИЛОСЬ. Разбор реального отчёта владельца за 06-07.08.2026
+    (211 сделок, счёт $65, итог -19.99) показал ровно одну развилку:
+
+        стоп успел уйти в плюс  ->  74 сделки, +89.56
+        стоп остался в минусе   -> 137 сделок, -109.55
+
+    Живут обе группы одинаково (медиана 6.6 и 6.5 минуты) — дело не в том,
+    что прибыльные сделки держали дольше. Весь результат счёта решает одно:
+    успел ли стоп подтянуться в плюс, прежде чем цена развернулась.
+
+    А включалась защита поздно. При поле стопа в 1.5 ATR (MIN_SL_ATR_FRACTION)
+    собственный риск сделки R = 1.5 ATR, и пороги были такими:
+
+        безубыток   1.0 ATR = 0.67R
+        ATR-трейлинг 1.2 ATR = 0.80R, и отступ тоже 1.2 ATR = 0.80R
+        Profit Lock  1.0R
+
+    То есть НИЧЕГО не защищало сделку ниже 0.67R, а отступ трейлинга (0.80R)
+    был почти равен самому стопу — подтянувшись, он всё равно отдавал назад
+    почти всю дистанцию. Сделка могла сходить на +0.5R в вашу сторону,
+    развернуться и забрать полный стоп: половина цели была в руках, а
+    потеряли в три раза больше.
+
+    Лестница считает не в ATR, а в R — в собственном риске ЭТОЙ сделки. Это
+    и делает её предсказуемой: «прошли треть своего риска — стоп в
+    безубыток» звучит одинаково и для золота, и для EURUSD, при любом
+    профиле и любой ширине стопа.
+
+    giveback_r — сколько R разрешено отдать от пика. Работает поверх
+    лестницы и только ПОДНИМАЕТ фиксацию: на сильном движении стоп идёт за
+    ценой, не дожидаясь следующей ступеньки.
+
+    Функция ничего не двигает сама и не знает про buy/sell: она возвращает
+    только «сколько запереть», а двигать стоп можно исключительно в сторону
+    прибыли — за это отвечает _better_sl в manage_open_positions."""
+    if risk_points <= 0:
+        return None
+    if ladder is None:
+        ladder = getattr(cfg, "R_TRAIL_LADDER", None)
+    if not ladder:
+        return None
+
+    peak_r = peak_points / risk_points
+    lock_r = None
+    for step in sorted(ladder, key=lambda t: float(t[0])):
+        trigger_r, locked_r = float(step[0]), float(step[1])
+        if peak_r + 1e-9 >= trigger_r:
+            lock_r = locked_r
+    if lock_r is None:
+        return None                       # до первой ступеньки не доросли
+
+    if giveback_r > 0:
+        lock_r = max(lock_r, peak_r - giveback_r)
+    # Запереть больше, чем сделка когда-либо стоила, нельзя: такой стоп
+    # оказался бы ВПЕРЕДИ цены и сработал бы мгновенно по худшей стороне.
+    lock_r = min(lock_r, peak_r)
+    return lock_r * risk_points
+
+
 def position_age_seconds(ticket, now: float = None) -> float:
     """Сколько секунд мы ведём эту позицию — по НАШИМ часам (см. комментарий
     к _position_first_seen: время брокера для этого не годится).
@@ -474,6 +538,19 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
         if cfg.USE_TRAILING_STOP and profit_points >= trail_pts:
             trail_sl = price - trail_pts * point if is_buy else price + trail_pts * point
             best_sl = _better_sl(is_buy, best_sl, trail_sl)
+
+        # 2.5) Лестница трейлинга в единицах СОБСТВЕННОГО РИСКА сделки (R).
+        # Включается сильно раньше безубытка по ATR и отступает от пика на
+        # долю R, а не на почти целый стоп — см. r_ladder_lock_points().
+        if getattr(cfg, "USE_R_TRAIL_LADDER", False):
+            lock_pts = r_ladder_lock_points(
+                peak_points, risk_points,
+                getattr(cfg, "R_TRAIL_LADDER", None),
+                float(getattr(cfg, "R_TRAIL_GIVEBACK_R", 0) or 0))
+            if lock_pts is not None:
+                ladder_sl = (p.price_open + lock_pts * point) if is_buy \
+                    else (p.price_open - lock_pts * point)
+                best_sl = _better_sl(is_buy, best_sl, ladder_sl)
 
         # 3) Profit Lock — гонится за ПИКОВОЙ прибылью, а не текущей ценой.
         # Ступенчатый % (см. _tiered_lock_percent) вместо одного фиксированного —

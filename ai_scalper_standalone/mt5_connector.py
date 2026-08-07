@@ -159,6 +159,26 @@ def get_tick(symbol: str):
     return mt5.symbol_info_tick(symbol)
 
 
+def get_price(symbol: str) -> float:
+    """Текущая цена одной строкой — середина между bid и ask.
+
+    Нужна там, где важен не точный уровень входа, а МАСШТАБ цены: например,
+    чтобы посчитать, на какую сумму открывается позиция (см. потолок плеча в
+    risk_manager.calc_lot). Для таких расчётов разница между bid и ask
+    несущественна, а гадать, какую из двух брать, — лишний источник ошибок.
+
+    0.0 — цены нет (нет связи, символ не выбран в обзоре рынка). Вызывающий
+    обязан это проверить: считать что-либо от нулевой цены нельзя."""
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return 0.0
+    bid = float(getattr(tick, "bid", 0) or 0)
+    ask = float(getattr(tick, "ask", 0) or 0)
+    if bid > 0 and ask > 0:
+        return (bid + ask) / 2.0
+    return bid or ask or 0.0
+
+
 def get_open_positions(symbol: str = None, magic: int = None):
     positions = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
     if positions is None:

@@ -144,8 +144,19 @@ def _replace_or_append(text: str, name: str, value_literal: str) -> str:
     дописать в конец. Дубликат оставлять нельзя: два присваивания одного имени
     работали бы (побеждает последнее), но человек, открывший файл, увидел бы
     два разных значения и не понял, какое действует."""
-    pattern = re.compile(rf"^{re.escape(name)}\s*=.*$", re.MULTILINE)
     new_line = f"{name} = {value_literal}"
+
+    # МНОГОСТРОЧНОЕ значение (список ступеней, словарь) обязано заменяться
+    # целиком. Построчная регулярка ниже заменила бы только ПЕРВУЮ строку, а
+    # хвост литерала остался бы висеть отдельным куском с отступом — и
+    # config.py переставал бы разбираться вообще (IndentationError), унося с
+    # собой все настройки пользователя. Поймано тестом
+    # test_config_migrate_fresh_example_needs_no_stop_loss_migration.
+    item = _top_level_assignments(text).get(name)
+    if item is not None and "\n" in item["source"]:
+        return text.replace(item["source"], new_line, 1)
+
+    pattern = re.compile(rf"^{re.escape(name)}\s*=.*$", re.MULTILINE)
     if pattern.search(text):
         return pattern.sub(new_line, text, count=1)
     return text.rstrip("\n") + f"\n{new_line}\n"
@@ -215,7 +226,30 @@ ONE_TIME = [
         "убытка (стоп-лосс, риск на сделку, лимит совокупного риска) и "
         "снижается объём по мере серии",
     ),
+    (
+        "MIGRATED_R_TRAIL_LADDER",
+        {
+            "USE_R_TRAIL_LADDER": True,
+            "R_TRAIL_LADDER": [(0.30, 0.00), (0.60, 0.20), (1.00, 0.45),
+                               (1.50, 0.85), (2.50, 1.60)],
+            "R_TRAIL_GIVEBACK_R": 0.5,
+            "TP_TIGHTEN_SHRINK_PER_MINUTE": 0.18,
+            "TP_TIGHTEN_MIN_FRACTION": 0.20,
+        },
+        "стоп-лосс подтягивается заметно раньше, а тейк-профит поджимается "
+        "быстрее. По реальному отчёту (211 сделок, счёт 65) весь результат "
+        "решало одно: сделки, где стоп успел уйти в плюс, дали +89.56, а где "
+        "не успел — минус 109.55, при одинаковой длительности. Защита "
+        "включалась не раньше 0.67 своего риска, теперь первая ступень — 0.30, "
+        "и стоп переезжает в безубыток. Цель прибыли ужимается на 18% в минуту "
+        "вместо 10%, но никогда не становится меньше собственного стопа сделки",
+    ),
 ]
+
+# R_TRAIL_LADDER — многострочный литерал в config.py.example, а build_patch
+# многострочные значения намеренно не переносит. Без записи выше существующий
+# config.py получил бы USE_R_TRAIL_LADDER = True, но БЕЗ самой лестницы, и
+# трейлинг молча делал бы ничего. Проверяется в tests/test_r_trail_ladder.py.
 
 
 def _clear_stale_update_branch(text: str, existing: dict) -> tuple:
