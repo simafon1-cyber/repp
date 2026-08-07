@@ -632,7 +632,12 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         # sl_dist передаём, чтобы calc_tp_distance_money гарантированно поднял
         # TP минимум до SL*MIN_RISK_REWARD_RATIO, если денежная цель профиля
         # (target_profit_money) окажется слишком скромной относительно риска.
-        tp_dist = rm.calc_tp_distance_money(symbol, lot, profile["target_profit_money"], atr_value, point, sl_dist)
+        # Цель берётся ОТ СЧЁТА, а не абсолютным числом из профиля: абсолютная
+        # сумма не переживает смену размера депозита (см. пояснение в
+        # rm.effective_target_money).
+        tp_dist = rm.calc_tp_distance_money(
+            symbol, lot, rm.effective_target_money(profile, equity),
+            atr_value, point, sl_dist)
     else:
         tp_dist = rm.calc_tp_distance(sl_dist, atr_value, point)
 

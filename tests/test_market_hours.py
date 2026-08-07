@@ -422,6 +422,58 @@ def test_settings_reach_installed_program() -> None:
               f"{getattr(CFG, key)} против {changes[key]}")
 
 
+def test_money_target_scales_with_deposit() -> None:
+    """Денежная цель прибыли обязана расти вместе со счётом.
+
+    Владелец сообщил, что депозит будет $500-1000 вместо $65. Абсолютные
+    суммы в настройках такую перемену не переживают: у «Истерички» цель
+    записана как 1.0 доллара — на $65 это полтора процента счёта, а на $1000
+    одна десятая. Чем больше счёт, тем больше объём при том же проценте
+    риска, тем меньше движения цены нужно на «заработать доллар», и цель
+    сжимается до пары пунктов, которые съедает спред."""
+    print("\n[Цель прибыли считается от счёта, а не в долларах]")
+    import risk_manager as rm
+
+    profile = {"target_profit_money": 1.0}
+    saved = getattr(CFG, "TARGET_PROFIT_PERCENT_OF_EQUITY", 0)
+    try:
+        CFG.TARGET_PROFIT_PERCENT_OF_EQUITY = 0.5
+
+        small = rm.effective_target_money(profile, 65.0)
+        big = rm.effective_target_money(profile, 1000.0)
+        check(big > small, "На большем счёте цель больше",
+              f"{small:.2f} -> {big:.2f}")
+        check(abs(big - 5.0) < 1e-9, "На $1000 это 0.5% = 5 долларов", str(big))
+
+        # Никогда не МЕНЬШЕ прежнего абсолютного числа: на маленьком счёте
+        # доля процента может оказаться меньше цены одного пункта.
+        check(small >= 1.0,
+              "На маленьком счёте цель не опускается ниже прежней", str(small))
+        check(rm.effective_target_money(profile, 10.0) == 1.0,
+              "На совсем маленьком — ровно прежняя")
+
+        # Выключение возвращает старое поведение
+        CFG.TARGET_PROFIT_PERCENT_OF_EQUITY = 0
+        check(rm.effective_target_money(profile, 1000.0) == 1.0,
+              "0 = вернуться к абсолютному числу из профиля")
+
+        # Мусор на входе не роняет расчёт
+        CFG.TARGET_PROFIT_PERCENT_OF_EQUITY = 0.5
+        check(rm.effective_target_money(profile, 0) == 1.0,
+              "Счёт неизвестен (0) — берём абсолютное число")
+        check(rm.effective_target_money({}, 1000.0) == 5.0,
+              "Профиль без абсолютного числа — считаем от счёта")
+    finally:
+        CFG.TARGET_PROFIT_PERCENT_OF_EQUITY = saved
+
+    # И это должно быть подключено, а не лежать без дела
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    check("rm.effective_target_money(profile, equity)" in src,
+          "Торговый цикл берёт цель через этот расчёт")
+    check('profile["target_profit_money"], atr_value' not in src,
+          "Абсолютное число больше не передаётся напрямую")
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ: РЫНОК ЗАКРЫТ ИЛИ НЕЛИКВИДЕН")
@@ -440,6 +492,7 @@ def main() -> int:
     test_measurements_happen_every_pass()
     test_global_position_cap()
     test_settings_reach_installed_program()
+    test_money_target_scales_with_deposit()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
