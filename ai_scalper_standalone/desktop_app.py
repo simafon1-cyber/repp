@@ -629,8 +629,11 @@ class App:
         # обновилась программа или нет. Заголовок виден всегда — и в окне,
         # и на панели задач, — в отличие от вкладки, куда надо зайти.
         self.root.title(f"{APP_TITLE} — {app_version.short()}")
-        self.root.geometry("860x660")
-        self.root.minsize(780, 580)
+        # Окно шире: сверху панель управления, снизу строка сохранения и
+        # выхода, вкладок полтора десятка. Владелец просил не растягивать
+        # окно каждый раз — значит по умолчанию оно должно быть достаточным.
+        self.root.geometry("1040x720")
+        self.root.minsize(900, 600)
 
         self._apply_theme()
 
@@ -651,6 +654,8 @@ class App:
         self.root.after(1200, self._auto_install_into_mt5_once)
         # Мост для советников — тоже сам, если включён.
         self.root.after(1500, self._start_bridge_if_enabled)
+        # Календарь дожимается теми же повторами: терминал бывает не готов
+        self.root.after(4000, self._ensure_news_source)
         # Обновление при запуске. Момент выбран не случайно: торговля ещё не
         # началась, открытых позиций у бота нет — подменять его безопасно.
         self._auto_update_busy = False
@@ -706,9 +711,45 @@ class App:
 
     # ---- интерфейс: вкладки -------------------------------------------------
     def _build_ui(self):
-        credit_label = ttk.Label(self.root, text="made by Viacheslav.Y.",
-                                  foreground=self.colors["dim"], font=("Segoe UI", 8))
-        credit_label.pack(side="bottom", anchor="e", padx=8, pady=2)
+        # ---------- Панель управления СВЕРХУ ----------
+        # Владелец: «добавь кнопки перезапуск, пауза, старт, и пусть они будут
+        # вверху и доступны со всех вкладок». Раньше старт и стоп жили на
+        # вкладке «Обзор»: чтобы остановить бота с любой другой вкладки, надо
+        # было сначала до неё добраться.
+        top = ttk.Frame(self.root)
+        top.pack(side="top", fill="x", padx=8, pady=(8, 0))
+
+        self.btn_start = ttk.Button(top, text="▶ Старт", command=self.start_bot)
+        self.btn_start.pack(side="left")
+        self.btn_pause = ttk.Button(top, text="⏸ Пауза", command=self.toggle_pause)
+        self.btn_pause.pack(side="left", padx=6)
+        self.btn_restart = ttk.Button(top, text="⟳ Перезапуск",
+                                      command=self.restart_bot)
+        self.btn_restart.pack(side="left")
+
+        self.top_status_var = tk.StringVar(value="Остановлен")
+        ttk.Label(top, textvariable=self.top_status_var,
+                  font=("Segoe UI Semibold", 10)).pack(side="left", padx=14)
+
+        # ---------- Низ: одна кнопка сохранения и выход ----------
+        bottom = ttk.Frame(self.root)
+        bottom.pack(side="bottom", fill="x", padx=8, pady=(0, 6))
+
+        # Выход — справа внизу, как просил владелец: «полностью выходит из
+        # всего, что запускалось».
+        ttk.Button(bottom, text="Выход", command=self.full_exit).pack(side="right")
+        ttk.Label(bottom, text="made by Viacheslav.Y.",
+                  foreground=self.colors["dim"], font=("Segoe UI", 8)
+                  ).pack(side="right", padx=10)
+
+        # Одна главная кнопка сохранения на всю программу. Раньше их было
+        # семь, по своей на каждый раздел, и человек не знал, какую нажимать
+        # и сохранил ли он вообще всё.
+        ttk.Button(bottom, text="💾 Сохранить все настройки",
+                   command=self.save_everything).pack(side="left")
+        self.save_all_status_var = tk.StringVar(value="")
+        ttk.Label(bottom, textvariable=self.save_all_status_var,
+                  foreground=self.colors["muted"]).pack(side="left", padx=10)
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
@@ -717,6 +758,10 @@ class App:
         tab_broker = ttk.Frame(self.notebook)
         tab_symbols = ttk.Frame(self.notebook)
         tab_accounts = ttk.Frame(self.notebook)
+        # Вкладка «Сделки» убрана по просьбе владельца: открытые позиции
+        # видны на вкладке «Счета», там же их и закрывают. Рамка остаётся
+        # (в неё по-прежнему строится таблица позиций), но в окно не
+        # добавляется — код сборки таблицы используется экспортом в Excel.
         tab_positions = ttk.Frame(self.notebook)
         tab_log = ttk.Frame(self.notebook)
         tab_equity = ttk.Frame(self.notebook)
@@ -731,7 +776,7 @@ class App:
 
         self.tab_frames = {
             "Обзор": tab_overview, "Брокер": tab_broker, "Символы": tab_symbols,
-            "Счета": tab_accounts, "Сделки": tab_positions, "Лог": tab_log, "Equity": tab_equity,
+            "Счета": tab_accounts, "Лог": tab_log, "Equity": tab_equity,
             "Настройка": tab_config,
             "Календарь": tab_schedule, "Новости": tab_news,
             "Источники": tab_sources, "Система": tab_system,
@@ -797,6 +842,9 @@ class App:
 
     # ---- вкладка "Обзор" ----------------------------------------------------
     def _build_tab_overview(self, parent):
+        # Боковой ползунок: владелец просил не растягивать окно
+        # каждый раз — блоков здесь больше, чем помещается.
+        parent = self._scrollable(parent)
         pad = {"padx": 10, "pady": 6}
 
         ttk.Label(parent, text=APP_TITLE, font=("Segoe UI", 16, "bold")).pack(**pad)
@@ -874,6 +922,9 @@ class App:
 
     # ---- вкладка "Брокер" ----------------------------------------------------
     def _build_tab_broker(self, parent):
+        # Боковой ползунок: владелец просил не растягивать окно
+        # каждый раз — блоков здесь больше, чем помещается.
+        parent = self._scrollable(parent)
         pad = {"padx": 10, "pady": 6}
 
         ttk.Label(parent, text="Подключение к брокеру (любой MT5-брокер)",
@@ -914,7 +965,6 @@ class App:
 
         btn_frame = ttk.Frame(parent)
         btn_frame.pack(**pad)
-        ttk.Button(btn_frame, text="Сохранить", command=self.save_broker_settings).grid(row=0, column=0, padx=5)
         self.test_conn_btn = ttk.Button(btn_frame, text="Проверить подключение", command=self.test_connection)
         self.test_conn_btn.grid(row=0, column=1, padx=5)
 
@@ -936,7 +986,7 @@ class App:
         if path:
             self.term_path_var.set(path)
 
-    def save_broker_settings(self):
+    def save_broker_settings(self, silent: bool = False):
         try:
             if self.use_existing_var.get():
                 _write_config_value("MT5_LOGIN", "0")
@@ -966,7 +1016,8 @@ class App:
                 _write_config_value("MT5_SERVER", repr(server_text))
             _write_config_value("MT5_TERMINAL_PATH", repr(self.term_path_var.get().strip()))
             _reload_cfg()
-            messagebox.showinfo(APP_TITLE, "Настройки подключения сохранены.")
+            if not silent:
+                messagebox.showinfo(APP_TITLE, "Настройки подключения сохранены.")
         except Exception as e:
             log.exception("Не удалось сохранить настройки брокера: %s", e)
             messagebox.showerror(APP_TITLE, f"Не удалось сохранить: {e}")
@@ -1677,8 +1728,6 @@ class App:
         self._build_profile_fields(profile_fields_frame)
         self._load_profile_fields()
 
-        ttk.Button(profile_box, text="Сохранить профиль", command=self.save_profile_fields).grid(
-            row=2, column=0, sticky="w", padx=6, pady=(2, 10))
 
         # ---- Контекст рынка — корреляции по инструментам (MARKET_CONTEXT) ----
         context_box = ttk.LabelFrame(inner, text="Контекст рынка — корреляции по инструментам (до 3 на символ)")
@@ -1704,8 +1753,6 @@ class App:
                              state="readonly", width=9).pack(side="left", padx=(0, 8))
                 slot_vars.append((sym_var, corr_var))
             self.context_symbol_vars[sym] = slot_vars
-        ttk.Button(context_box, text="Сохранить контекст", command=self.save_market_context).pack(
-            anchor="w", padx=6, pady=(4, 10))
 
         # ---- Плоские параметры, сгруппированные по разделам (как в config.py) ----
 
@@ -1808,8 +1855,6 @@ class App:
 
         btn_frame = ttk.Frame(inner)
         btn_frame.pack(fill="x", padx=6, pady=14)
-        ttk.Button(btn_frame, text="Сохранить все параметры", command=self.save_advanced_params).grid(
-            row=0, column=0, padx=4)
         ttk.Button(btn_frame, text="Обновить из файла", command=self.reload_advanced_params).grid(
             row=0, column=1, padx=4)
 
@@ -1885,7 +1930,7 @@ class App:
             else:
                 var.set(str(value))
 
-    def save_profile_fields(self):
+    def save_profile_fields(self, silent: bool = False):
         profile_enum = self._current_profile_enum()
         new_params = {}
         errors = []
@@ -1910,12 +1955,13 @@ class App:
             all_profiles[profile_enum] = new_params
             _write_config_block("RISK_PROFILES", _format_risk_profiles(all_profiles))
             _reload_cfg()
-            messagebox.showinfo(APP_TITLE, f"Профиль «{new_params.get('name', profile_enum.value)}» сохранён.")
+            if not silent:
+                messagebox.showinfo(APP_TITLE, f"Профиль «{new_params.get('name', profile_enum.value)}» сохранён.")
         except Exception as e:
             log.exception("Не удалось сохранить профиль риска: %s", e)
             messagebox.showerror(APP_TITLE, f"Не удалось сохранить: {e}")
 
-    def save_market_context(self):
+    def save_market_context(self, silent: bool = False):
         try:
             new_context = dict(cfg.MARKET_CONTEXT)
             for sym, slot_vars in self.context_symbol_vars.items():
@@ -1927,12 +1973,13 @@ class App:
                 new_context[sym] = slots
             _write_config_block("MARKET_CONTEXT", repr(new_context))
             _reload_cfg()
-            messagebox.showinfo(APP_TITLE, "Контекст рынка сохранён.")
+            if not silent:
+                messagebox.showinfo(APP_TITLE, "Контекст рынка сохранён.")
         except Exception as e:
             log.exception("Не удалось сохранить контекст рынка: %s", e)
             messagebox.showerror(APP_TITLE, f"Не удалось сохранить: {e}")
 
-    def save_advanced_params(self):
+    def save_advanced_params(self, silent: bool = False):
         new_values = {}
         errors = []
         for key, (ptype, var) in self.param_vars.items():
@@ -1989,7 +2036,8 @@ class App:
                 literal = str(value) if isinstance(value, bool) else repr(value)
                 _write_config_value(key, literal)
             _reload_cfg()
-            messagebox.showinfo(APP_TITLE, "Параметры сохранены и применены.")
+            if not silent:
+                messagebox.showinfo(APP_TITLE, "Параметры сохранены и применены.")
         except Exception as e:
             log.exception("Не удалось сохранить расширенные параметры: %s", e)
             messagebox.showerror(APP_TITLE, f"Не удалось сохранить: {e}")
@@ -2015,6 +2063,9 @@ class App:
 
     # ---- вкладка "Новости" ---------------------------------------------------------
     def _build_tab_news(self, parent):
+        # Боковой ползунок: владелец просил не растягивать окно
+        # каждый раз — блоков здесь больше, чем помещается.
+        parent = self._scrollable(parent)
         pad = {"padx": 10, "pady": 6}
 
         ttk.Label(parent, text="Предстоящие события", font=("Segoe UI", 12, "bold")).pack(**pad)
@@ -2245,7 +2296,6 @@ class App:
 
         upbtn = ttk.Frame(up)
         upbtn.grid(row=13, column=0, columnspan=2, sticky="w", padx=8, pady=6)
-        ttk.Button(upbtn, text="Сохранить", command=self.save_system_settings).grid(row=0, column=0)
         ttk.Button(upbtn, text="Обновить всё сейчас",
                    command=self.update_everything_now).grid(row=0, column=1, padx=6)
         ttk.Button(upbtn, text="Проверить обновления",
@@ -2306,7 +2356,6 @@ class App:
 
         jrbtn = ttk.Frame(jr)
         jrbtn.grid(row=7, column=0, columnspan=2, sticky="w", padx=8, pady=6)
-        ttk.Button(jrbtn, text="Сохранить", command=self.save_system_settings).grid(row=0, column=0)
         ttk.Button(jrbtn, text="Выложить сейчас",
                    command=self.upload_journal_now).grid(row=0, column=1, padx=6)
         ttk.Button(jrbtn, text="Открыть в браузере",
@@ -2343,15 +2392,68 @@ class App:
         self.refresh_diagnostics()
         self._refresh_bridge_status()
 
-    def _start_bridge_if_enabled(self):
+    # Сколько раз пробовать поднять мост и календарь при запуске. Владелец:
+    # «мост тоже не всегда сразу включается», «календарь MT5 показывает, что
+    # не всегда работает». Обе вещи зависят от терминала MT5, который в
+    # момент старта программы может быть ещё не готов: Windows поднимает
+    # автозапуск пачкой, и терминал нередко доходит до рабочего состояния
+    # позже. Одна попытка при старте — это лотерея.
+    STARTUP_RETRIES = 5
+    STARTUP_RETRY_MS = 20000
+
+    def _start_bridge_if_enabled(self, attempt: int = 1):
+        """Поднять мост. Не вышло — попробовать ещё через 20 секунд.
+
+        Раньше попытка была ровно одна: если терминал в этот момент ещё не
+        поднялся, мост оставался выключенным до перезапуска программы."""
+        started = False
         try:
-            if bridge_host.enabled():
-                problem = bridge_host.start()
-                if problem:
-                    log.warning("Мост: %s", problem)
+            if not bridge_host.enabled():
+                return
+            problem = bridge_host.start()
+            if problem:
+                log.warning("Мост (попытка %d): %s", attempt, problem)
+            else:
+                started = True
             self._refresh_bridge_status()
-        except Exception as e:
-            log.warning("Мост не запущен: %s", e)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Мост не запущен (попытка %d): %s", attempt, e)
+
+        if started:
+            if attempt > 1:
+                runtime_events.record("мост", f"поднялся с {attempt}-й попытки")
+            return
+        if attempt < self.STARTUP_RETRIES:
+            self.root.after(self.STARTUP_RETRY_MS,
+                            lambda: self._start_bridge_if_enabled(attempt + 1))
+        else:
+            runtime_events.record(
+                "мост", f"не поднялся за {self.STARTUP_RETRIES} попыток — "
+                        f"проверьте вкладку «Система»")
+
+    def _ensure_news_source(self, attempt: int = 1):
+        """Дожать источник новостей: поставить и собрать сервис календаря,
+        а если он поставлен, но файл календаря не появляется — повторить
+        проверку. Терминал после запуска Windows готов не сразу, и первая
+        проверка часто попадает в этот промежуток."""
+        ready = False
+        try:
+            state = news_autostart.ensure_ready(force=True)
+            ready = bool(state.get("ready"))
+            if not ready and state.get("news_mode"):
+                log.info("Календарь (попытка %d): %s", attempt,
+                         news_autostart.describe(state))
+        except Exception as e:  # noqa: BLE001
+            log.warning("Проверка календаря не прошла (попытка %d): %s", attempt, e)
+
+        if ready:
+            if attempt > 1:
+                runtime_events.record("календарь",
+                                      f"заработал с {attempt}-й попытки")
+            return
+        if attempt < self.STARTUP_RETRIES:
+            self.root.after(self.STARTUP_RETRY_MS,
+                            lambda: self._ensure_news_source(attempt + 1))
 
     def refresh_diagnostics(self):
         """Проверки трогают диск и ищут терминалы — делаем это в фоне."""
@@ -2440,7 +2542,7 @@ class App:
             return
         webbrowser.open(url)
 
-    def save_system_settings(self):
+    def save_system_settings(self, silent: bool = False):
         try:
             port = int(self.bridge_port_var.get().strip() or 8080)
         except ValueError:
@@ -2501,7 +2603,8 @@ class App:
             if problem:
                 messagebox.showwarning(APP_TITLE, problem)
         self._refresh_bridge_status()
-        messagebox.showinfo(APP_TITLE, "Настройки системы сохранены.")
+        if not silent:
+            messagebox.showinfo(APP_TITLE, "Настройки системы сохранены.")
         self.refresh_diagnostics()
 
     # ---- обновление при запуске ---------------------------------------------
@@ -2875,6 +2978,9 @@ class App:
         «Сигналы TG», и чтобы что-то отключить, надо было помнить, где именно
         оно лежит. Теперь выключатели собраны здесь, а те вкладки показывают
         только данные."""
+        # Боковой ползунок: владелец просил не растягивать окно
+        # каждый раз — блоков здесь больше, чем помещается.
+        parent = self._scrollable(parent)
         pad = {"padx": 12, "pady": 4}
 
         ttk.Label(parent, text="Откуда брать данные",
@@ -2990,7 +3096,6 @@ class App:
         # ---------- Кнопки ----------
         btns = ttk.Frame(parent)
         btns.pack(anchor="w", **pad)
-        ttk.Button(btns, text="Сохранить всё", command=self.save_sources).grid(row=0, column=0)
         ttk.Button(btns, text="Войти в Telegram",
                    command=self.telegram_login).grid(row=0, column=1, padx=6)
         ttk.Button(btns, text="Проверить источники",
@@ -3101,7 +3206,7 @@ class App:
                 pass
         return changed
 
-    def save_sources(self):
+    def save_sources(self, silent: bool = False):
         """Сохраняет обе группы разом — это одна кнопка на всю вкладку."""
         chain = [name for name, var in self.news_chain_vars.items() if var.get()]
         tg_on = bool(self.tg_enabled_var.get())
@@ -3148,7 +3253,8 @@ class App:
         if not tg_on:
             tgr.stop()
 
-        messagebox.showinfo(APP_TITLE, "Источники сохранены.")
+        if not silent:
+            messagebox.showinfo(APP_TITLE, "Источники сохранены.")
         self.refresh_sources_tab()
         self.refresh_news_tab()
 
@@ -3356,6 +3462,9 @@ class App:
         повторяет РЕАЛЬНЫЕ фильтры входа и берёт те же настройки. Это не
         отдельный «примерный» прогноз — если написано «не входит до 15:30»,
         бот действительно не войдёт."""
+        # Боковой ползунок: владелец просил не растягивать окно
+        # каждый раз — блоков здесь больше, чем помещается.
+        parent = self._scrollable(parent)
         pad = {"padx": 10, "pady": 4}
 
         ttk.Label(parent, text="Расписание работы бота",
@@ -3776,6 +3885,9 @@ class App:
 
     # ---- вкладка "Как пользоваться" (всегда видна) --------------------------------
     def _build_tab_help(self, parent):
+        # Боковой ползунок: владелец просил не растягивать окно
+        # каждый раз — блоков здесь больше, чем помещается.
+        parent = self._scrollable(parent)
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True, padx=6, pady=6)
         text = tk.Text(outer, wrap="word", bg=self.colors["bg"], fg=self.colors["fg"], insertbackground=self.colors["fg"],
@@ -4063,6 +4175,105 @@ class App:
             except Exception:  # noqa: BLE001
                 pass
 
+    def toggle_pause(self):
+        """Пауза/продолжить. Пауза НЕ убивает торговый цикл: он продолжает
+        вести уже открытые сделки (трейлинг, безубыток, частичное закрытие),
+        но новых не открывает. Это разное — «постоять» и «выключить»."""
+        paused = not control.is_paused()
+        control.set_paused(paused)
+        runtime_events.record(
+            "управление", "пауза включена" if paused else "пауза снята")
+        self._refresh_top_bar()
+
+    def restart_bot(self):
+        """Перезапуск торгового цикла — то, что владелец делал руками,
+        закрывая и открывая программу. Окно и настройки при этом остаются
+        на месте, перезапускается только сам цикл."""
+        runtime_events.record("управление", "перезапуск цикла по кнопке")
+        self._bot_should_run = False
+        try:
+            if self.stop_event:
+                self.stop_event.set()
+        except Exception:  # noqa: BLE001
+            pass
+        self.bot_thread = None
+        control.set_paused(False)
+        self.top_status_var.set("Перезапуск...")
+        # Небольшая задержка: старый поток должен увидеть просьбу остановиться
+        self.root.after(600, self.start_bot)
+
+    def _refresh_top_bar(self):
+        """Состояние верхней панели: она видна со всех вкладок, и по ней
+        человек понимает, работает бот или нет, не переключаясь на «Обзор»."""
+        alive = bool(self.bot_thread and self.bot_thread.is_alive())
+        paused = control.is_paused()
+        if not alive:
+            text = "Остановлен"
+        elif paused:
+            text = "ПАУЗА — новых сделок нет, открытые ведутся"
+        else:
+            text = "Работает"
+        self.top_status_var.set(text)
+        try:
+            self.btn_pause.config(
+                text="▶ Продолжить" if paused else "⏸ Пауза",
+                state="normal" if alive else "disabled")
+            self.btn_start.config(state="disabled" if alive else "normal")
+            self.btn_restart.config(state="normal" if alive else "disabled")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def save_everything(self):
+        """ОДНА кнопка сохранения на всю программу.
+
+        Владелец: «сократи кнопки сохранить, сделай одну основную внизу».
+        Их было семь — по своей на каждый раздел, — и понять, какую нажимать
+        и сохранено ли уже всё, было нельзя. Теперь одна внизу сохраняет
+        всё сразу: брокера, параметры, профиль, контекст, источники,
+        систему. Каждый раздел сохраняется своим кодом, как и раньше —
+        меняется только то, откуда это запускается."""
+        savers = [
+            ("брокер", getattr(self, "save_broker_settings", None)),
+            ("параметры", getattr(self, "save_advanced_params", None)),
+            ("профиль риска", getattr(self, "save_profile_fields", None)),
+            ("контекст рынка", getattr(self, "save_market_context", None)),
+            ("источники", getattr(self, "save_sources", None)),
+            ("система", getattr(self, "save_system_settings", None)),
+        ]
+        done, problems = [], []
+        for name, saver in savers:
+            if saver is None:
+                continue
+            try:
+                saver(silent=True)
+                done.append(name)
+            except TypeError:
+                # Раздел ещё не умеет тихий режим — сохраняем как есть
+                try:
+                    saver()
+                    done.append(name)
+                except Exception as e:  # noqa: BLE001
+                    problems.append(f"{name}: {e}")
+            except Exception as e:  # noqa: BLE001
+                problems.append(f"{name}: {e}")
+
+        try:
+            settings_backup.save()
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"копия настроек: {e}")
+
+        if problems:
+            self.save_all_status_var.set("Сохранено с ошибками")
+            messagebox.showwarning(
+                APP_TITLE,
+                "Сохранено: " + ", ".join(done) +
+                "\n\nНе сохранилось:\n- " + "\n- ".join(problems))
+            return
+        self.save_all_status_var.set(
+            f"Сохранено ({time.strftime('%H:%M:%S')})")
+        messagebox.showinfo(APP_TITLE,
+                            "Все настройки сохранены: " + ", ".join(done) + ".")
+
     def stop_bot(self):
         self._bot_should_run = False
         if self.stop_event:
@@ -4115,6 +4326,7 @@ class App:
                 pause_txt = " (пауза)" if control.is_paused() else ""
                 self.status_var.set("Работает" + pause_txt)
             self._watchdog_tick()
+            self._refresh_top_bar()
 
             self._refresh_symbols_tab()
             self._refresh_positions_tab()
@@ -4305,6 +4517,18 @@ class App:
             # остановить явно, иначе они переживут закрытие окна
             if getattr(self, "accounts_tab", None):
                 self.accounts_tab.shutdown()
+        except Exception:
+            pass
+        try:
+            # Мост слушает порт в своём потоке — без явной остановки порт
+            # остаётся занятым, и следующий запуск программы не может его
+            # открыть. Владелец просил, чтобы «Выход» закрывал ВСЁ, что
+            # запускалось.
+            bridge_host.stop()
+        except Exception:
+            pass
+        try:
+            telegram_reader.stop()
         except Exception:
             pass
         try:
