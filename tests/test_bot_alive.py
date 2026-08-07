@@ -280,6 +280,39 @@ def test_runtime_events() -> None:
           "События прошлого запуска подхватываются при старте")
 
 
+def test_bot_tickets_set() -> None:
+    """Набор тикетов для уборки памяти обязан содержать ВСЕ сделки бота.
+
+    Это самое опасное место во всей уборке: чего в наборе нет — то считается
+    закрытым и стирается. Ошибись здесь — и программа сотрёт память о живых
+    сделках (пик прибыли, возраст, исходный риск), то есть ровно то, из-за
+    чего трейлинг и поджим тейка переставали работать."""
+    print("\n[Набор тикетов для уборки]")
+    import config as cfg
+
+    class Pos:
+        def __init__(self, ticket, magic):
+            self.ticket = ticket
+            self.magic = magic
+
+    mine_a, mine_b = Pos(1, cfg.MAGIC_NUMBER), Pos(2, cfg.MAGIC_NUMBER)
+    stranger = Pos(3, cfg.MAGIC_NUMBER + 777)
+
+    got = bot._bot_tickets([mine_a, mine_b, stranger])
+    check(got == {1, 2}, "Свои сделки попадают в набор, чужая — нет", str(got))
+    check(bot._bot_tickets([]) == set(), "Пустой список — пустой набор")
+    check(bot._bot_tickets(None) == set(), "None — пустой набор, а не падение")
+
+    # Главное: набор НЕ должен оказаться пустым, когда сделки есть. Пустой
+    # набор — это команда «сотри всё».
+    check(bot._bot_tickets([mine_a]) , "Одна своя сделка — набор не пустой",
+          str(bot._bot_tickets([mine_a])))
+
+    # Сделка без поля magic (чужой формат) не должна ронять уборку
+    check(bot._bot_tickets([types.SimpleNamespace(ticket=9)]) == set(),
+          "Позиция без magic просто не считается своей")
+
+
 def main_run() -> int:
     print("=" * 62)
     print("ТЕСТЫ: ТОРГОВЫЙ ЦИКЛ НЕ УМИРАЕТ МОЛЧА")
@@ -290,6 +323,7 @@ def main_run() -> int:
     test_watchdog_decision()
     test_watchdog_wired_into_program()
     test_runtime_events()
+    test_bot_tickets_set()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

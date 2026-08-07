@@ -971,6 +971,18 @@ def _sleep_interruptible(seconds: float, stop_event):
         stop_event.wait(timeout=seconds)
 
 
+def _bot_tickets(positions) -> set:
+    """Тикеты открытых сделок ЭТОГО бота — набор для cleanup_peak_profit().
+
+    Отдельная функция, чтобы оба места (главный цикл и быстрый монитор)
+    считали набор одинаково: разойдись они хоть раз, уборка снова начала бы
+    стирать живые сделки. Чужие сделки (открытые вручную или другим
+    советником) отсекаются по magic — их память бот и не заводит."""
+    if not positions:
+        return set()
+    return {p.ticket for p in positions if getattr(p, "magic", None) == cfg.MAGIC_NUMBER}
+
+
 def _fast_position_monitor(sym_states, stop_event, total_seconds: float):
     """Заменяет собой финальный sleep(POLL_SECONDS) главного цикла: вместо
     того чтобы просто ждать, каждые POSITION_MONITOR_SECONDS дополнительно
@@ -998,6 +1010,10 @@ def _fast_position_monitor(sym_states, stop_event, total_seconds: float):
             return
         try:
             positions = mt5c.get_open_positions()
+            # Уборка памяти — здесь же, по полному списку позиций. Монитор
+            # ходит раз в секунду и раньше (через manage_open_positions)
+            # стирал состояние чужих инструментов чаще всех остальных.
+            tm.cleanup_peak_profit(_bot_tickets(positions))
             if not positions:
                 continue
             by_symbol = {}
@@ -1109,6 +1125,15 @@ def main(stop_event=None, start_dashboard: bool = True):
                 # N лишних обращений к MT5-терминалу за проход по symbols —
                 # основная причина задержки в 100+ мс при нескольких парах).
                 all_positions = mt5c.get_open_positions()
+
+                # Память о сделках (пик прибыли, просадка, исходный риск,
+                # возраст) чистится РОВНО ЗДЕСЬ — там, где виден полный список
+                # позиций по всем инструментам сразу. Раньше её чистила
+                # manage_open_positions по каждому символу отдельно, а та знает
+                # только свой инструмент — и стирала состояние чужих сделок на
+                # каждом проходе. Подробный разбор последствий — в
+                # trade_manager.cleanup_peak_profit().
+                tm.cleanup_peak_profit(_bot_tickets(all_positions))
 
                 process_close_requests(all_positions)
 

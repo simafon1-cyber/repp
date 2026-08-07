@@ -84,3 +84,4 @@ accounts.tmp
 ai_scalper_standalone/accounts.tmp
 learning_state.json
 telegram_session
+runtime_events.json

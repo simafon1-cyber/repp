@@ -17,6 +17,7 @@ from datetime import datetime
 import config as cfg
 import mt5_connector as mt5c
 import risk_manager as rm
+import runtime_events
 import safe_files
 
 log = logging.getLogger("trade_manager")
@@ -27,6 +28,9 @@ _partial_closed_tickets: set = set()
 # закрыть нечего: половина минимального лота брокеру не отправляется. Нужен
 # только чтобы написать об этом ОДИН раз на сделку, а не на каждом такте.
 _partial_impossible_tickets: set = set()
+# Тикеты, по которым брокер отказался переносить стоп/цель. Нужны, чтобы
+# сказать об этом ОДИН раз на сделку, а не каждую секунду.
+_modify_failed_tickets: set = set()
 # ticket -> изначальный риск сделки (price_open<->SL при первом же взгляде на
 # позицию, до того как BE/трейлинг/лок успели её подтянуть), в пунктах — она
 # же "1R". См. update_position_risk() и диагноз в manage_open_positions().
@@ -145,6 +149,31 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
 
 
 def cleanup_peak_profit(open_tickets: set):
+    """Забыть память о сделках, которых больше нет среди открытых.
+
+    ВНИМАНИЕ, ГЛАВНОЕ ПРО ЭТУ ФУНКЦИЮ: open_tickets обязан содержать тикеты
+    ВСЕХ открытых сделок бота, по всем инструментам сразу. Всё, чего в наборе
+    нет, считается закрытым и стирается.
+
+    Раньше её вызывала manage_open_positions(symbol, ...), а та знает только
+    ОДИН инструмент — и передавала тикеты только этого инструмента. При двух и
+    более открытых сделках по разным парам каждый проход стирал память обо
+    всех остальных:
+
+      * возраст сделки обнулялся -> поджим тейка по времени не двигался
+        дальше первой минуты, а спасение в безубыток (10 минут) не
+        наступало НИКОГДА;
+      * пик прибыли обнулялся -> Profit Lock гнался за текущей ценой вместо
+        пика, отступ от пика в лестнице трейлинга терял смысл;
+      * риск сделки пересчитывался от ТЕКУЩЕГО стопа вместо исходного;
+      * пик ещё живой сделки уходил в архив как «закрытая» и попадал в
+        обучение — то есть автообучение училось на выдуманных сделках.
+
+    В отчёте владельца одновременно бывало до 9 открытых сделок по 10 парам,
+    а быстрый монитор ходит раз в секунду — значит стирание шло постоянно.
+    Теперь уборка вызывается один раз за проход оттуда, где виден полный
+    список позиций (см. main.py). Проверяется тестом
+    test_multi_symbol_state_survives."""
     for ticket in list(_position_peak_points.keys()):
         if ticket not in open_tickets:
             # Пик НЕ выбрасываем, а откладываем в архив: сделка закрылась, и
@@ -157,6 +186,9 @@ def cleanup_peak_profit(open_tickets: set):
     for ticket in list(_partial_impossible_tickets):
         if ticket not in open_tickets:
             _partial_impossible_tickets.discard(ticket)
+    for ticket in list(_modify_failed_tickets):
+        if ticket not in open_tickets:
+            _modify_failed_tickets.discard(ticket)
     for ticket in list(_position_risk_points.keys()):
         if ticket not in open_tickets:
             _position_risk_points.pop(ticket, None)
@@ -443,8 +475,21 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
         positions = mt5c.get_open_positions(symbol=symbol, magic=cfg.MAGIC_NUMBER)
     else:
         positions = [p for p in positions if p.symbol == symbol and p.magic == cfg.MAGIC_NUMBER]
-    open_tickets = {p.ticket for p in positions}
-    cleanup_peak_profit(open_tickets)
+    # Уборки памяти о закрытых сделках здесь НЕТ намеренно: эта функция видит
+    # только один инструмент, а уборка обязана знать про все сразу. Раньше
+    # вызов стоял тут и стирал состояние чужих сделок на каждом проходе —
+    # см. подробный разбор в cleanup_peak_profit(). Теперь её вызывает
+    # main.py оттуда, где виден полный список открытых позиций.
+
+    # Без размера пункта считать нечего: ниже на него ДЕЛИТСЯ прибыль в
+    # пунктах. Ноль сюда приходит, когда терминал ещё не отдал описание
+    # символа, и раньше это давало ZeroDivisionError прямо в цикле ведения
+    # позиций — то есть ровно там, где владелец наблюдал «бот перестал
+    # работать, помог перезапуск».
+    if point <= 0:
+        log.warning("%s: размер пункта неизвестен (%s) — веду позиции на следующем проходе",
+                    symbol, point)
+        return
 
     info = mt5.symbol_info(symbol)
     broker_min_dist = (info.trade_stops_level * point) if info else 0.0
@@ -633,7 +678,23 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
 
         if sl_changed or tp_changed:
             if cfg.LIVE_TRADING:
-                mt5c.modify_position(p.ticket, best_sl, best_tp)
+                result = mt5c.modify_position(p.ticket, best_sl, best_tp)
+                # Отказ брокера здесь раньше не проверялся вообще. А значит
+                # трейлинг мог не работать НИ РАЗУ за сделку — стоп оставался
+                # на месте, программа молчала, и понять это было неоткуда.
+                # Пишем один раз на сделку: попытка повторяется каждую
+                # секунду, и без этого журнал был бы залит.
+                if result is None or getattr(result, "retcode", None) != mt5c.RETCODE_DONE:
+                    if p.ticket not in _modify_failed_tickets:
+                        _modify_failed_tickets.add(p.ticket)
+                        log.warning(
+                            "%s тикет %s: брокер не принял перенос стопа/цели "
+                            "(SL %.5f, TP %.5f) — %s. Трейлинг по этой сделке "
+                            "не работает.", symbol, p.ticket, best_sl, best_tp, result)
+                        runtime_events.record(
+                            "стоп", f"{symbol}: брокер не принял перенос стопа — трейлинг не работает")
+                else:
+                    _modify_failed_tickets.discard(p.ticket)
             else:
                 log.debug("[DRY-RUN] %s тикет %s: SL -> %.5f, TP -> %.5f",
                           symbol, p.ticket, best_sl, best_tp)

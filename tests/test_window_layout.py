@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import re
 import sys
 import types
@@ -109,10 +110,42 @@ def test_exit_button() -> None:
           "И процессы счетов тоже — они запускаются отдельно")
     check("bridge_host.stop()" in quit_body,
           "И мост: иначе порт остался бы занят до перезагрузки")
-    check("telegram_reader.stop()" in quit_body,
+    check("tgr.stop()" in quit_body,
           "И чтение Telegram")
     check("os._exit(0)" in quit_body,
           "Процесс исчезает из Диспетчера задач, а не висит фоном")
+
+    # А ВОТ ЭТО — главное. Проверка выше ищет текст, и она годами проходила
+    # на строке `telegram_reader.stop()`, которой НЕ СУЩЕСТВОВАЛО: модуль
+    # импортирован как tgr, значит вызов давал NameError. Ошибку молча
+    # съедал `except Exception: pass` вокруг, и чтение Telegram на выходе не
+    # останавливалось вообще.
+    #
+    # Поэтому здесь проверяем не текст, а РАЗРЕШИМОСТЬ имени: каждое имя, у
+    # которого в _hard_quit что-то вызывается, обязано существовать — либо
+    # как импорт модуля, либо как локальная переменная.
+    tree = ast.parse(UI)
+    quit_fn = next(n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "_hard_quit")
+    module_names = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            for a in n.names:
+                module_names.add(a.asname or a.name.split(".")[0])
+    local_names = {t.id for n in ast.walk(quit_fn) if isinstance(n, ast.Assign)
+                   for t in n.targets if isinstance(t, ast.Name)}
+    local_names |= {a.arg for a in quit_fn.args.args}
+
+    unresolved = []
+    for n in ast.walk(quit_fn):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name)):
+            base = n.func.value.id
+            if base not in module_names and base not in local_names and base != "self":
+                unresolved.append(f"{base}.{n.func.attr}() (строка {n.lineno})")
+    check(not unresolved,
+          "Все вызовы в «Выходе» обращаются к существующим именам",
+          "; ".join(unresolved))
 
 
 def test_single_save_button() -> None:
@@ -312,6 +345,109 @@ def test_tab_names_fit() -> None:
               "Все они есть среди вкладок окна", ", ".join(missing))
 
 
+def _bound_names(node) -> set:
+    """Имена, которые эта область видимости заводит у себя."""
+    out = set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            out.add(n.id)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for a in n.names:
+                out.add(a.asname or a.name.split(".")[0])
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            out.add(n.name)
+        elif isinstance(n, ast.arg):
+            out.add(n.arg)
+        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+            out.update(n.names)
+    return out
+
+
+def test_no_undefined_names() -> None:
+    """Имя используется, но нигде не заведено — это NameError при вызове.
+
+    ЗАЧЕМ ОТДЕЛЬНАЯ ПРОВЕРКА. В «Выходе» годами стояло `telegram_reader.stop()`
+    при том, что модуль импортирован как `tgr`. Вызов давал NameError, его
+    молча съедал `except Exception: pass` вокруг, и чтение Telegram при выходе
+    не останавливалось вообще. Тест на это был — но он искал ТЕКСТ
+    «telegram_reader.stop()» в исходнике и потому исправно подтверждал
+    несуществующий вызов.
+
+    Такие ошибки не видны при обычном запуске: они прячутся в ветках, куда
+    доходят редко (выход, экран входа, обработка отказа). Отсюда правило:
+    имена проверяются целиком по программе, а не по одной функции."""
+    print("\n[Все имена в программе существуют]")
+    builtin_names = set(dir(builtins)) | {"__file__", "__name__", "__doc__", "_"}
+    problems = []
+    for path in sorted(APP.glob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError as e:
+            check(False, f"{path.name} разбирается", str(e))
+            continue
+        module_names = _bound_names(tree) | builtin_names
+
+        def report(node, visible):
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
+                        and sub.id not in visible):
+                    problems.append(f"{path.name}:{sub.lineno} — {sub.id}")
+
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Всё, что заводится где угодно внутри функции, считаем видимым:
+                # нам важно не место присваивания, а существует ли имя вообще.
+                report(n, module_names | _bound_names(n))
+        for n in tree.body:
+            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                report(n, module_names)
+
+    check(not problems, "Ни одного неизвестного имени во всей программе",
+          "; ".join(sorted(set(problems))[:8]))
+
+
+def test_no_self_outside_classes() -> None:
+    """Обычная функция не может обращаться к self — это гарантированный
+    NameError при первом же вызове.
+
+    Так была устроена ловушка в _show_login(): функция уровня модуля брала
+    цвета из self.colors. Экран входа выключен по умолчанию, поэтому никто
+    туда не заходил, — а программа сама предлагает его включить, и включение
+    роняло её на старте, ещё до появления окна.
+
+    Проверка идёт по ВСЕМ файлам программы, а не только по окну: ошибка не
+    специфична для интерфейса, просто там её цена выше всего."""
+    print("\n[Ни одна функция вне класса не обращается к self]")
+    problems = []
+    for path in sorted(APP.glob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError as e:
+            check(False, f"{path.name} разбирается", str(e))
+            continue
+        inside_class = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                for sub in ast.walk(node):
+                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        inside_class.add(id(sub))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if id(node) in inside_class:
+                continue
+            if any(a.arg == "self" for a in node.args.args):
+                continue          # функция сама принимает self — законно
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name) and sub.id == "self":
+                    problems.append(f"{path.name}:{sub.lineno} в {node.name}()")
+                    break
+    check(not problems,
+          "Ни одного обращения к self вне класса", "; ".join(problems))
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ: РАСКЛАДКА ОКНА")
@@ -328,6 +464,8 @@ def main() -> int:
     test_every_tab_is_reachable()
     test_tab_names_fit()
     test_syntax_is_valid()
+    test_no_undefined_names()
+    test_no_self_outside_classes()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

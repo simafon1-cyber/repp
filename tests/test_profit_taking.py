@@ -446,7 +446,11 @@ def test_end_to_end() -> None:
     modified: list = []
     closed: list = []
     tm.mt5c.get_tick = lambda s: FakeTick(*test_end_to_end.price)
-    tm.mt5c.modify_position = lambda t, sl, tp: modified.append((t, sl, tp))
+    # Возвращаем УСПЕХ, как настоящий брокер: с None программа теперь честно
+    # пишет «перенос стопа не принят» — заглушка обязана быть правдоподобной,
+    # иначе она проверяла бы поведение, которого в жизни не бывает.
+    tm.mt5c.modify_position = lambda t, sl, tp: (
+        modified.append((t, sl, tp)) or types.SimpleNamespace(retcode=tm.mt5c.RETCODE_DONE))
     tm.mt5c.close_position_partial = lambda p, v: (closed.append((p.ticket, v)) or
                                                    types.SimpleNamespace(retcode=mt5.TRADE_RETCODE_DONE))
 
@@ -600,10 +604,209 @@ def test_end_to_end() -> None:
     test_end_to_end.price = (2000.80, 2000.82)
     pos = FakePos(6, True, 2000.0, 1999.0, 2002.0)
     tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[pos], learned_tp_points=200)
-    tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[], learned_tp_points=200)
+    tm.cleanup_peak_profit(set())        # сделка закрылась — уборка по всем сразу
     archived = tm.pop_closed_peak(6)
     check(archived is not None and abs(archived - 80.0) < 0.01,
           "Пик +80 пт закрытой сделки доступен для обучения", str(archived))
+
+
+def test_multi_symbol_state_survives() -> None:
+    """Память об одной сделке не должна стираться проходом по ДРУГОМУ
+    инструменту.
+
+    Так было до этой правки: manage_open_positions(symbol, ...) сама вызывала
+    уборку, зная тикеты ТОЛЬКО своего инструмента, — и всё остальное считала
+    закрытым. У владельца одновременно бывало до 9 сделок по 10 парам, а
+    быстрый монитор ходит раз в секунду, так что стирание шло непрерывно:
+    возраст сделки обнулялся (значит поджим тейка по времени не двигался, а
+    спасение в безубыток через 10 минут не наступало никогда), пик прибыли
+    обнулялся (Profit Lock гнался за ценой вместо пика), а пик ЖИВОЙ сделки
+    уходил в обучение как «закрытая»."""
+    print("\n[Проход по одной паре не стирает память о другой]")
+
+    class Pos:
+        def __init__(self, ticket, symbol):
+            self.ticket = ticket; self.symbol = symbol
+            self.magic = CFG.MAGIC_NUMBER; self.type = 0
+            self.price_open = 2000.0; self.sl = 1999.0; self.tp = 0.0
+            self.volume = 0.10
+
+    import MetaTrader5 as mt5
+    mt5.symbol_info = lambda s: types.SimpleNamespace(
+        trade_stops_level=0, volume_min=0.01, volume_step=0.01)
+    tm.mt5c.get_tick = lambda s: FakeTick(2000.50, 2000.52)
+    tm.mt5c.modify_position = lambda t, sl, tp: None
+    CFG.LIVE_TRADING = False
+
+    for d in (tm._position_peak_points, tm._position_trough_points,
+              tm._position_risk_points, tm._position_first_seen, tm._closed_peaks):
+        d.clear()
+
+    gold, euro = Pos(11, "XAUUSD"), Pos(22, "EURUSD")
+    both = [gold, euro]
+
+    tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=both)
+    check(11 in tm._position_peak_points, "После прохода по золоту его пик записан")
+    seen_gold = tm._position_first_seen.get(11)
+
+    tm.manage_open_positions("EURUSD", 1.0, POINT, positions=both)
+    check(11 in tm._position_peak_points,
+          "Проход по EURUSD НЕ стёр пик золота", str(tm._position_peak_points))
+    check(11 in tm._position_risk_points,
+          "И не стёр его исходный риск", str(tm._position_risk_points))
+    check(11 in tm._position_trough_points,
+          "И не стёр его просадку", str(tm._position_trough_points))
+    check(tm._position_first_seen.get(11) == seen_gold,
+          "И не обнулил его возраст — иначе поджим тейка стоит на месте",
+          f"{seen_gold} -> {tm._position_first_seen.get(11)}")
+    check(11 not in tm._closed_peaks,
+          "Живая сделка НЕ попала в обучение как закрытая", str(tm._closed_peaks))
+
+    # Обратный порядок — симметрично.
+    tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=both)
+    check(22 in tm._position_peak_points and 22 in tm._position_first_seen,
+          "И наоборот: проход по золоту не стирает EURUSD")
+
+    # А настоящее закрытие по-прежнему убирает память — уборкой по ПОЛНОМУ
+    # набору тикетов, как её теперь и вызывает main.py.
+    tm.cleanup_peak_profit({22})
+    check(11 not in tm._position_peak_points, "Закрытая сделка убрана")
+    check(11 in tm._closed_peaks, "И её пик ушёл в обучение")
+    check(22 in tm._position_peak_points, "А открытая осталась")
+
+
+def test_zero_point_does_not_crash() -> None:
+    """Нулевой размер пункта не должен ронять цикл ведения позиций.
+
+    Ниже по функции на point ДЕЛИТСЯ прибыль в пунктах. Ноль приходит, когда
+    терминал ещё не отдал описание символа, и раньше это давало
+    ZeroDivisionError прямо в цикле — то есть ровно то, что владелец видел как
+    «бот перестал работать, помог перезапуск»."""
+    print("\n[Нулевой размер пункта не роняет ведение позиций]")
+
+    class Pos:
+        ticket = 77; symbol = "XAUUSD"; magic = CFG.MAGIC_NUMBER; type = 0
+        price_open = 2000.0; sl = 1999.0; tp = 0.0; volume = 0.10
+
+    import MetaTrader5 as mt5
+    mt5.symbol_info = lambda s: types.SimpleNamespace(
+        trade_stops_level=0, volume_min=0.01, volume_step=0.01)
+    tm.mt5c.get_tick = lambda s: FakeTick(2000.50, 2000.52)
+
+    try:
+        tm.manage_open_positions("XAUUSD", 1.0, 0.0, positions=[Pos()])
+        check(True, "point = 0 — функция возвращается, а не падает")
+    except ZeroDivisionError as e:
+        check(False, "point = 0 — функция возвращается, а не падает", str(e))
+
+    try:
+        tm.manage_open_positions("XAUUSD", 1.0, -1.0, positions=[Pos()])
+        check(True, "Отрицательный point — тоже не падает")
+    except Exception as e:
+        check(False, "Отрицательный point — тоже не падает", str(e))
+
+
+def test_broker_refusal_is_reported() -> None:
+    """Отказ брокера перенести стоп больше не проглатывается молча.
+
+    Раньше результат modify_position не проверялся вовсе: трейлинг мог не
+    сработать НИ РАЗУ за сделку, стоп оставался на месте, а программа об этом
+    молчала — понять было неоткуда."""
+    print("\n[Отказ брокера перенести стоп виден, а не проглатывается]")
+
+    class Pos:
+        ticket = 88; symbol = "XAUUSD"; magic = CFG.MAGIC_NUMBER; type = 0
+        price_open = 2000.0; sl = 1999.0; tp = 0.0; volume = 0.10
+
+    import MetaTrader5 as mt5
+    mt5.symbol_info = lambda s: types.SimpleNamespace(
+        trade_stops_level=0, volume_min=0.01, volume_step=0.01)
+    tm.mt5c.get_tick = lambda s: FakeTick(2000.50, 2000.52)
+
+    saved_live = CFG.LIVE_TRADING
+    saved_ladder = CFG.USE_R_TRAIL_LADDER
+    warned: list = []
+    events: list = []
+    saved_warn = tm.log.warning
+    saved_record = tm.runtime_events.record
+    tm.log.warning = lambda *a, **k: warned.append(a)
+    tm.runtime_events.record = lambda kind, text: events.append((kind, text))
+    try:
+        CFG.LIVE_TRADING = True
+        CFG.USE_R_TRAIL_LADDER = True
+        for d in (tm._position_peak_points, tm._position_trough_points,
+                  tm._position_risk_points, tm._position_first_seen):
+            d.clear()
+        tm._modify_failed_tickets.clear()
+
+        # Брокер отвечает отказом
+        tm.mt5c.modify_position = lambda t, sl, tp: types.SimpleNamespace(retcode="REJECT")
+        tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[Pos()])
+        check(len(warned) == 1, "Об отказе сказано в журнале", str(len(warned)))
+        check(any("стоп" in k for k, _ in events),
+              "И событие попало в ленту происшествий", str(events))
+
+        # Повтор каждую секунду не должен заливать журнал
+        tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[Pos()])
+        tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[Pos()])
+        check(len(warned) == 1, "Повторы молчат — сказано один раз на сделку",
+              str(len(warned)))
+
+        # Брокер вообще ничего не вернул — тоже отказ
+        tm._modify_failed_tickets.clear()
+        warned.clear()
+        tm.mt5c.modify_position = lambda t, sl, tp: None
+        tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[Pos()])
+        check(len(warned) == 1, "None от брокера тоже считается отказом")
+
+        # Успех молчит и снимает отметку
+        warned.clear()
+        tm.mt5c.modify_position = lambda t, sl, tp: types.SimpleNamespace(
+            retcode=tm.mt5c.RETCODE_DONE)
+        tm._position_peak_points.clear(); tm._position_risk_points.clear()
+        tm._position_first_seen.clear(); tm._position_trough_points.clear()
+        tm.manage_open_positions("XAUUSD", 1.0, POINT, positions=[Pos()])
+        check(not warned, "Успешный перенос ничего не пишет", str(warned))
+        check(88 not in tm._modify_failed_tickets,
+              "И отметка об отказе снимается — иначе о следующем сбое смолчали бы")
+
+        # Отметка обязана исчезать и при закрытии сделки: номера тикетов у
+        # брокера переиспользуются, и залипшая отметка заставила бы программу
+        # смолчать о настоящем отказе по СЛЕДУЮЩЕЙ сделке.
+        tm._modify_failed_tickets.add(88)
+        tm.cleanup_peak_profit(set())
+        check(88 not in tm._modify_failed_tickets,
+              "Уборка после закрытия сделки снимает и отметку об отказе")
+    finally:
+        tm.log.warning = saved_warn
+        tm.runtime_events.record = saved_record
+        CFG.LIVE_TRADING = saved_live
+        CFG.USE_R_TRAIL_LADDER = saved_ladder
+
+
+def test_cleanup_is_not_called_per_symbol() -> None:
+    """Уборка не должна вернуться внутрь функции, знающей один инструмент."""
+    print("\n[Уборка вызывается там, где виден полный список позиций]")
+    # Ищем именно ВЫЗОВ, а не упоминание: в функции остался комментарий,
+    # объясняющий, почему уборки там больше нет, и поиск по тексту принял бы
+    # это объяснение за саму ошибку.
+    src = (APP / "trade_manager.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "manage_open_positions")
+    calls = [c for c in ast.walk(fn)
+             if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+             and c.func.id == "cleanup_peak_profit"]
+    check(not calls,
+          "manage_open_positions больше не чистит память сама", str(len(calls)))
+
+    main_src = (APP / "main.py").read_text(encoding="utf-8")
+    check(main_src.count("tm.cleanup_peak_profit(") == 2,
+          "Зато её зовёт main.py — и в главном цикле, и в быстром мониторе",
+          str(main_src.count("tm.cleanup_peak_profit(")))
+    check("_bot_tickets(all_positions)" in main_src,
+          "В главном цикле — по полному списку позиций")
+    check("_bot_tickets(positions)" in main_src,
+          "В быстром мониторе — тоже по полному списку")
 
 
 # =====================================================================
@@ -970,6 +1173,10 @@ def main() -> int:
     test_position_age()
     test_config_params_exist()
     test_end_to_end()
+    test_multi_symbol_state_survives()
+    test_zero_point_does_not_crash()
+    test_broker_refusal_is_reported()
+    test_cleanup_is_not_called_per_symbol()
     test_partial_close()
     test_symbol_auto_off()
     test_learning_persistence()

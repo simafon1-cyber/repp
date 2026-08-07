@@ -4582,7 +4582,11 @@ class App:
         except Exception:
             pass
         try:
-            telegram_reader.stop()
+            # tgr, а не telegram_reader: модуль импортирован под коротким
+            # именем (см. верх файла). Здесь стояло полное имя — получался
+            # NameError, который молча съедал except ниже, и чтение Telegram
+            # на выходе не останавливалось вообще.
+            tgr.stop()
         except Exception:
             pass
         try:
@@ -4654,15 +4658,23 @@ def _show_login() -> bool:
     веб-дашборда (cfg.DASHBOARD_LOGIN / DASHBOARD_PASSWORD, задаются в config.py
     или на вкладке дашборда). Пока не введён верный логин/пароль — окно
     программы не открывается."""
+    # ЦВЕТА БЕРЁМ ИЗ ui_theme, А НЕ ИЗ self. Это обычная функция, а не метод
+    # класса App — никакого self здесь нет и быть не может. Раньше тут стояло
+    # self.colors[...], и включение REQUIRE_LOGIN роняло программу на старте
+    # с NameError, ещё до появления окна. Ловушка была тихой ровно потому, что
+    # экран входа выключен по умолчанию, — а программа при этом сама
+    # предлагает его включить (см. текст про заблокированные пароли счетов).
+    colors = ui_theme.from_config(cfg)
+
     login_root = tk.Tk()
     login_root.title(APP_TITLE)
     login_root.geometry("340x260")
     login_root.resizable(False, False)
-    login_root.configure(bg=self.colors["bg"])
+    login_root.configure(bg=colors["bg"])
     try:
         style = ttk.Style(login_root)
         style.theme_use("clam")
-        style.configure(".", background=self.colors["bg"], foreground=self.colors["fg"], fieldbackground=self.colors["card"])
+        style.configure(".", background=colors["bg"], foreground=colors["fg"], fieldbackground=colors["card"])
     except tk.TclError:
         pass
 
@@ -4689,7 +4701,7 @@ def _show_login() -> bool:
     ttk.Checkbutton(login_root, text="Запомнить пароль", variable=remember_var).pack(pady=(8, 0))
 
     status_var = tk.StringVar(value="")
-    ttk.Label(login_root, textvariable=status_var, foreground=self.colors["loss"]).pack(pady=(8, 0))
+    ttk.Label(login_root, textvariable=status_var, foreground=colors["loss"]).pack(pady=(8, 0))
 
     def try_login(*_):
         entered_login = login_var.get()
