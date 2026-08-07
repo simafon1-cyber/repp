@@ -118,7 +118,7 @@ MODE_OPTIONS = [
     ("Новости", "news_trading"),
     ("Оба", "both"),
 ]
-ADVANCED_TAB_NAMES = ["Брокер", "Equity", "Новости", "Сигналы TG", "Chat AI"]
+ADVANCED_TAB_NAMES = ["Брокер", "Equity", "Новости", "Сигналы", "Чат"]
 # "Источники" видна всегда: это единственное место, где источники данных
 # включаются и выключаются — прятать его в продвинутый режим нельзя.
 # График календаря на вкладке "Новости": на сколько часов вперёд смотрим и
@@ -721,11 +721,19 @@ class App:
 
         self.btn_start = ttk.Button(top, text="▶ Старт", command=self.start_bot)
         self.btn_start.pack(side="left")
+        self.btn_stop = ttk.Button(top, text="■ Стоп", command=self.stop_bot,
+                                   state="disabled")
+        self.btn_stop.pack(side="left", padx=6)
         self.btn_pause = ttk.Button(top, text="⏸ Пауза", command=self.toggle_pause)
-        self.btn_pause.pack(side="left", padx=6)
+        self.btn_pause.pack(side="left", padx=(0, 6))
         self.btn_restart = ttk.Button(top, text="⟳ Перезапуск",
                                       command=self.restart_bot)
         self.btn_restart.pack(side="left")
+
+        # Прежние имена — на те же кнопки: код запуска, остановки и сторожа
+        # обращается к ним по-старому, и переписывать его незачем.
+        self.start_btn = self.btn_start
+        self.stop_btn = self.btn_stop
 
         self.top_status_var = tk.StringVar(value="Остановлен")
         ttk.Label(top, textvariable=self.top_status_var,
@@ -780,8 +788,8 @@ class App:
             "Настройка": tab_config,
             "Календарь": tab_schedule, "Новости": tab_news,
             "Источники": tab_sources, "Система": tab_system,
-            "Сигналы TG": tab_tg, "Chat AI": tab_chat,
-            "Как пользоваться": tab_help,
+            "Сигналы": tab_tg, "Чат": tab_chat,
+            "Помощь": tab_help,
         }
         for name, frame in self.tab_frames.items():
             self.notebook.add(frame, text=name)
@@ -842,83 +850,123 @@ class App:
 
     # ---- вкладка "Обзор" ----------------------------------------------------
     def _build_tab_overview(self, parent):
-        # Боковой ползунок: владелец просил не растягивать окно
-        # каждый раз — блоков здесь больше, чем помещается.
+        """Вкладка «Обзор» — одна страница, на которой видно состояние.
+
+        Владелец: «переделай вкладку обзор, убери лишнее», «чтобы ничего не
+        повторялось». Здесь было три кнопки управления (Старт, Стоп, Полный
+        выход) — теперь они на постоянной панели сверху и внизу, и на всех
+        вкладках сразу. Была своя строка состояния — она же есть в верхней
+        панели. Счёт и статистика лежали в двух отдельных рамках, хотя это
+        одно и то же: про счёт.
+
+        Осталось только то, чего больше нигде нет, и каждое ровно в одном
+        месте."""
         parent = self._scrollable(parent)
-        pad = {"padx": 10, "pady": 6}
 
-        ttk.Label(parent, text=APP_TITLE, font=("Segoe UI", 16, "bold")).pack(**pad)
-        ttk.Label(parent, text=f"Версия: {app_version.full()}",
-                  font=("Segoe UI", 9)).pack(anchor="w", padx=pad.get("padx", 10))
+        # ---------- Шапка: что за программа и какой версии ----------
+        head = ttk.Frame(parent)
+        head.pack(fill="x", padx=12, pady=(10, 2))
+        ttk.Label(head, text=APP_TITLE,
+                  font=("Segoe UI", 15, "bold")).pack(side="left")
+        ttk.Label(head, text=app_version.full(), foreground=self.colors["muted"],
+                  font=("Segoe UI", 9)).pack(side="left", padx=10, pady=(6, 0))
 
-        mode_frame = ttk.Frame(parent)
-        mode_frame.pack(**pad)
-        ttk.Label(mode_frame, text="Режим интерфейса:").grid(row=0, column=0, padx=(0, 6))
-        initial_mode = "Продвинутый" if getattr(cfg, "UI_MODE", "simple") == "advanced" else "Простой"
-        self.ui_mode_var = tk.StringVar(value=initial_mode)
-        mode_combo = ttk.Combobox(mode_frame, textvariable=self.ui_mode_var,
-                                   values=["Простой", "Продвинутый"], state="readonly", width=16)
-        mode_combo.grid(row=0, column=1)
-        mode_combo.bind("<<ComboboxSelected>>", lambda e: self._apply_ui_mode())
-
+        # Строка состояния здесь НЕ дублируется: она в верхней панели, видна
+        # со всех вкладок. Переменная нужна остальному коду — оставляем её,
+        # но второй надписи об одном и том же на экране больше нет.
         self.status_var = tk.StringVar(value="Остановлен")
-        ttk.Label(parent, textvariable=self.status_var, font=("Segoe UI", 11)).pack(**pad)
 
-        # --- Синхронизация с облаком: проверить, что изменилось ---
-        sync = ttk.LabelFrame(parent, text=" Синхронизация с облаком ")
-        sync.pack(fill="x", padx=10, pady=(4, 6))
+        # ---------- Счёт и статистика: одна рамка вместо двух ----------
+        account = ttk.LabelFrame(parent, text=" Счёт ")
+        account.pack(fill="x", padx=12, pady=6)
+        inner = ttk.Frame(account)
+        inner.pack(fill="x", padx=8, pady=6)
+        self.info_var = tk.StringVar(value="Бот ещё не запускался.")
+        ttk.Label(inner, textvariable=self.info_var, justify="left"
+                  ).grid(row=0, column=0, sticky="nw")
+        self.stats_var = tk.StringVar(value="—")
+        ttk.Label(inner, textvariable=self.stats_var, justify="left",
+                  foreground=self.colors["muted"]
+                  ).grid(row=0, column=1, sticky="nw", padx=(30, 0))
+        inner.columnconfigure(1, weight=1)
 
+        # ---------- Что мешает торговать ----------
+        # Одна рамка на все предупреждения: разрешение на торговлю, причины
+        # молчания по парам и недавние происшествия. Раньше это было
+        # разбросано, а часть не показывалась вовсе.
+        self.trade_warning_var = tk.StringVar(value="")
+        # Место под предупреждение зарезервировано всегда — так рамка при
+        # появлении встаёт РОВНО СЮДА, а не в конец страницы. Сама рамка
+        # показывается только когда есть что сказать (см. _refresh_loop):
+        # пустая рамка «Внимание» на пол-экрана пугает без причины.
+        self.trade_warning_slot = ttk.Frame(parent)
+        self.trade_warning_slot.pack(fill="x")
+        self.trade_warning_frame = ttk.LabelFrame(self.trade_warning_slot,
+                                                  text=" Внимание ")
+        self.trade_warning_label = ttk.Label(
+            self.trade_warning_frame, textvariable=self.trade_warning_var,
+            foreground=self.colors["loss"], wraplength=900, justify="left")
+        self.trade_warning_label.pack(anchor="w", padx=8, pady=6)
+
+        # ---------- Действия ----------
+        actions = ttk.LabelFrame(parent, text=" Действия ")
+        actions.pack(fill="x", padx=12, pady=6)
+        row = ttk.Frame(actions)
+        row.pack(fill="x", padx=8, pady=6)
+        buttons = [
+            ("Экспорт в Excel", self.export_excel),
+            ("Открыть логи", self.open_logs),
+            ("Открыть config.py", self.open_config),
+            ("Дашборд для телефона", self.open_dashboard),
+        ]
+        for column, (text, command) in enumerate(buttons):
+            ttk.Button(row, text=text, command=command).grid(
+                row=0, column=column, padx=(0, 6))
+
+        # ---------- Что приехало с GitHub ----------
+        # Название НЕ «Обновление»: установкой занимается вкладка «Система»,
+        # раздел «Обновление из GitHub». Здесь только посмотреть, что нового,
+        # — два одинаково названных раздела в разных местах и были той самой
+        # путаницей, которую владелец просил убрать.
+        sync = ttk.LabelFrame(parent, text=" Что нового в программе ")
+        sync.pack(fill="x", padx=12, pady=6)
         sync_row = ttk.Frame(sync)
         sync_row.pack(fill="x", padx=8, pady=6)
         ttk.Button(sync_row, text="Проверить изменения",
                    command=self.sync_from_cloud).grid(row=0, column=0)
         ttk.Button(sync_row, text="Что нового",
                    command=self.show_changes).grid(row=0, column=1, padx=6)
-
         self.sync_status_var = tk.StringVar(value="")
-        ttk.Label(sync, textvariable=self.sync_status_var, foreground=self.colors["muted"],
-                  wraplength=780, justify="left").pack(anchor="w", padx=8, pady=(0, 6))
+        ttk.Label(sync, textvariable=self.sync_status_var,
+                  foreground=self.colors["muted"], wraplength=900,
+                  justify="left").pack(anchor="w", padx=8, pady=(0, 6))
         self._refresh_sync_status()
 
-        # Предупреждение "почему сделки не открываются" — видно, только если
-        # реально есть проблема с разрешением на торговлю (AutoTrading и т.п.).
-        self.trade_warning_var = tk.StringVar(value="")
-        self.trade_warning_label = ttk.Label(parent, textvariable=self.trade_warning_var,
-                                              foreground=self.colors["loss"], wraplength=780, justify="left")
-        self.trade_warning_label.pack(**pad)
-
-        btn_frame = ttk.Frame(parent)
-        btn_frame.pack(**pad)
-        self.start_btn = ttk.Button(btn_frame, text="▶  Старт", command=self.start_bot)
-        self.start_btn.grid(row=0, column=0, padx=5)
-        self.stop_btn = ttk.Button(btn_frame, text="■  Стоп", command=self.stop_bot, state="disabled")
-        self.stop_btn.grid(row=0, column=1, padx=5)
-        ttk.Button(btn_frame, text="✕  Полный выход", command=self.full_exit).grid(row=0, column=2, padx=5)
-
-        info_frame = ttk.LabelFrame(parent, text="Счёт")
-        info_frame.pack(fill="x", **pad)
-        self.info_var = tk.StringVar(value="Бот ещё не запускался.")
-        ttk.Label(info_frame, textvariable=self.info_var, justify="left").pack(anchor="w", padx=8, pady=4)
-
-        stats_frame = ttk.LabelFrame(parent, text="Статистика")
-        stats_frame.pack(fill="x", **pad)
-        self.stats_var = tk.StringVar(value="—")
-        ttk.Label(stats_frame, textvariable=self.stats_var, justify="left").pack(anchor="w", padx=8, pady=4)
-
-        action_frame = ttk.Frame(parent)
-        action_frame.pack(**pad)
-        ttk.Button(action_frame, text="Открыть логи", command=self.open_logs).grid(row=0, column=0, padx=5, pady=2)
-        ttk.Button(action_frame, text="Открыть config.py", command=self.open_config).grid(row=0, column=1, padx=5, pady=2)
-        ttk.Button(action_frame, text="Дашборд в браузере (для телефона)",
-                   command=self.open_dashboard).grid(row=0, column=2, padx=5, pady=2)
-        ttk.Button(action_frame, text="Экспорт в Excel", command=self.export_excel).grid(row=1, column=0, padx=5, pady=2)
+        # ---------- Как показывать программу ----------
+        view = ttk.LabelFrame(parent, text=" Вид и запуск ")
+        view.pack(fill="x", padx=12, pady=(6, 12))
+        view_row = ttk.Frame(view)
+        view_row.pack(fill="x", padx=8, pady=6)
+        ttk.Label(view_row, text="Режим интерфейса:").grid(row=0, column=0)
+        initial_mode = ("Продвинутый"
+                        if getattr(cfg, "UI_MODE", "simple") == "advanced"
+                        else "Простой")
+        self.ui_mode_var = tk.StringVar(value=initial_mode)
+        mode_combo = ttk.Combobox(view_row, textvariable=self.ui_mode_var,
+                                  values=["Простой", "Продвинутый"],
+                                  state="readonly", width=15)
+        mode_combo.grid(row=0, column=1, padx=(6, 20))
+        mode_combo.bind("<<ComboboxSelected>>", lambda e: self._apply_ui_mode())
 
         self.autostart_var = tk.BooleanVar(value=_is_autostart_enabled())
-        ttk.Checkbutton(parent, text="Запускать бота вместе с Windows", variable=self.autostart_var,
-                        command=self._toggle_autostart).pack(**pad)
+        ttk.Checkbutton(view_row, text="Запускать вместе с Windows",
+                        variable=self.autostart_var,
+                        command=self._toggle_autostart).grid(row=0, column=2)
 
-        ttk.Label(parent, text=f"С телефона по Wi-Fi: http://<IP-компьютера>:{cfg.DASHBOARD_PORT}",
-                  foreground=self.colors["muted"], wraplength=600, justify="left").pack(**pad)
+        ttk.Label(view, foreground=self.colors["muted"], justify="left",
+                  text=f"С телефона по Wi-Fi: "
+                       f"http://<IP-компьютера>:{cfg.DASHBOARD_PORT}"
+                  ).pack(anchor="w", padx=8, pady=(0, 6))
 
     # ---- вкладка "Брокер" ----------------------------------------------------
     def _build_tab_broker(self, parent):
@@ -1438,6 +1486,7 @@ class App:
         режиме (не прячется), чтобы настройки было невозможно "не найти".
         Сверху — быстрые переключатели (профиль/режим/пауза/звук), ниже —
         полный список input-параметров (как в MQL5-советнике) с прокруткой."""
+        parent = self._scrollable(parent)   # боковой ползунок
         sub = ttk.Notebook(parent)
         sub.pack(fill="both", expand=True, padx=4, pady=4)
 
@@ -1633,6 +1682,7 @@ class App:
             messagebox.showerror(APP_TITLE, f"Режим применён, но бот не запустился: {e}")
 
     def _build_tab_settings(self, parent):
+        parent = self._scrollable(parent)   # боковой ползунок
         pad = {"padx": 10, "pady": 8}
 
         ttk.Label(parent, text="Профиль риска", font=("Segoe UI", 11, "bold")).pack(anchor="w", **pad)
@@ -3887,7 +3937,6 @@ class App:
     def _build_tab_help(self, parent):
         # Боковой ползунок: владелец просил не растягивать окно
         # каждый раз — блоков здесь больше, чем помещается.
-        parent = self._scrollable(parent)
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True, padx=6, pady=6)
         text = tk.Text(outer, wrap="word", bg=self.colors["bg"], fg=self.colors["fg"], insertbackground=self.colors["fg"],
@@ -4219,6 +4268,7 @@ class App:
                 text="▶ Продолжить" if paused else "⏸ Пауза",
                 state="normal" if alive else "disabled")
             self.btn_start.config(state="disabled" if alive else "normal")
+            self.btn_stop.config(state="normal" if alive else "disabled")
             self.btn_restart.config(state="normal" if alive else "disabled")
         except Exception:  # noqa: BLE001
             pass
@@ -4317,11 +4367,15 @@ class App:
                 if events:
                     problems.append("Недавние события:\n  " + events.replace("\n", "\n  "))
                 if problems:
-                    self.trade_warning_var.set(
-                        "⚠ Сделки не открываются:\n- " + "\n- ".join(problems)
-                    )
+                    self.trade_warning_var.set("• " + "\n• ".join(problems))
+                    # Рамка появляется, ТОЛЬКО когда есть что сказать: пустая
+                    # рамка «Внимание» на пол-экрана пугает без причины.
+                    if not self.trade_warning_frame.winfo_ismapped():
+                        self.trade_warning_frame.pack(fill="x", padx=12, pady=6)
                 else:
                     self.trade_warning_var.set("")
+                    if self.trade_warning_frame.winfo_ismapped():
+                        self.trade_warning_frame.pack_forget()
             if self.bot_thread and self.bot_thread.is_alive():
                 pause_txt = " (пауза)" if control.is_paused() else ""
                 self.status_var.set("Работает" + pause_txt)

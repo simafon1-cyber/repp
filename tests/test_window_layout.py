@@ -163,9 +163,9 @@ def test_scrollbars() -> None:
           "Колесо мыши тоже крутит")
 
     used = UI.count("self._scrollable(parent)")
-    check(used >= 5, f"Прокрутка стоит на насыщенных вкладках: {used}", str(used))
+    check(used >= 8, f"Прокрутка стоит на большинстве вкладок: {used}", str(used))
     for tab in ("_build_tab_broker", "_build_tab_sources", "_build_tab_system",
-                "_build_tab_news"):
+                "_build_tab_news", "_build_tab_config", "_build_tab_overview"):
         body = UI.split(f"def {tab}", 1)[1].split("\n    def ", 1)[0]
         check("_scrollable(parent)" in body, f"{tab}: прокрутка включена")
 
@@ -211,6 +211,107 @@ def test_syntax_is_valid() -> None:
         check(True, "desktop_app.py разбирается")
 
 
+def test_overview_has_no_duplicates() -> None:
+    """Владелец: «переделай вкладку обзор, убери лишнее», «чтобы ничего не
+    повторялось».
+
+    На «Обзоре» было три кнопки управления (Старт, Стоп, Полный выход) —
+    ровно те же, что теперь на постоянных панелях сверху и снизу. Была своя
+    строка состояния — она же в верхней панели. Счёт и статистика лежали в
+    двух отдельных рамках, хотя это одно и то же: про счёт."""
+    print("\n[На «Обзоре» ничего не повторяется]")
+    body = UI.split("def _build_tab_overview", 1)[1].split("\n    def ", 1)[0]
+
+    for gone, where in (('text="▶  Старт"', "верхней панели"),
+                        ('text="■  Стоп"', "верхней панели"),
+                        ("Полный выход", "нижней полосе")):
+        check(gone not in body,
+              f"Кнопки «{gone}» на «Обзоре» больше нет — она на {where}")
+
+    check(body.count("ttk.Label(parent, textvariable=self.status_var") == 0,
+          "Второй строки состояния нет — она в верхней панели")
+    check("self.status_var" in body,
+          "Но сама переменная осталась: её читает остальной код")
+
+    check(body.count("LabelFrame") <= 5,
+          "Рамок немного, страница не разваливается",
+          str(body.count("LabelFrame")))
+    check("self.info_var" in body and "self.stats_var" in body,
+          "Счёт и статистика на месте")
+    account_block = body.split('text=" Счёт "', 1)[1].split("LabelFrame", 1)[0]
+    check("self.info_var" in account_block and "self.stats_var" in account_block,
+          "И лежат в ОДНОЙ рамке, а не в двух")
+
+    check("trade_warning_slot" in body,
+          "Под предупреждение зарезервировано место")
+    check("pack_forget()" in UI,
+          "Пустая рамка «Внимание» прячется, а не висит на пол-экрана")
+
+
+def test_every_tab_is_reachable() -> None:
+    """Прокрутка должна быть везде, где содержимое не помещается. Но НЕ там,
+    где стоит большая таблица или текст со своей прокруткой: внешняя рамка
+    отняла бы у них высоту, и таблица схлопнулась бы в одну строку."""
+    print("\n[Прокрутка там, где нужна, и не там, где вредна]")
+
+    tabs = re.findall(r"    def (_build_tab_\w+)\(self, parent", UI)
+    check(len(tabs) >= 15, f"Вкладок разобрано: {len(tabs)}", str(len(tabs)))
+
+    # ГЛАВНОЕ ПРАВИЛО: у вкладки не может быть ДВУХ полос прокрутки сразу.
+    # Своя прокрутка (у длинного текста, у списка параметров) и добавленная
+    # снаружи дают два ползунка рядом и ломают расчёт высоты — я на этом
+    # уже попался, добавляя прокрутку всем подряд.
+    doubled = []
+    long_without_scroll = []
+    for name in tabs:
+        body = UI.split(f"def {name}", 1)[1].split("\n    def ", 1)[0]
+        scrolls = "_scrollable(parent)" in body
+        own_scroll = "Scrollbar(" in body
+        if scrolls and own_scroll:
+            doubled.append(name)
+        # Длинная вкладка-форма без всякой прокрутки — то, из-за чего окно
+        # приходилось растягивать
+        heavy = "Treeview(" in body or "tk.Text(" in body
+        if (not scrolls and not own_scroll and not heavy
+                and len(body.splitlines()) >= 30):
+            long_without_scroll.append(name)
+
+    check(not doubled, "Ни у одной вкладки нет двух полос прокрутки",
+          ", ".join(doubled))
+    check(not long_without_scroll,
+          "Длинные вкладки-формы прокручиваются", ", ".join(long_without_scroll))
+
+    scrolled = [n for n in tabs
+                if "_scrollable(parent)" in UI.split(f"def {n}", 1)[1].split("\n    def ", 1)[0]]
+    check(len(scrolled) >= 8,
+          f"Прокрутка стоит на большинстве вкладок: {len(scrolled)}",
+          ", ".join(scrolled))
+
+
+def test_tab_names_fit() -> None:
+    """Вкладок полтора десятка. Длинные имена не помещались в строку, и
+    названия обрезались: «Как пользоват», «Сигналы ...»."""
+    print("\n[Названия вкладок помещаются]")
+    tabs = UI.split("self.tab_frames = {", 1)[1].split("}", 1)[0]
+    names = re.findall(r'"([^"]+)":', tabs)
+    check(names, "Названия вкладок найдены")
+    longest = max(names, key=len) if names else ""
+    check(len(longest) <= 10,
+          f"Самое длинное название короткое: «{longest}» ({len(longest)})",
+          longest)
+    check(len(names) <= 15, f"Вкладок не больше 15: {len(names)}", str(len(names)))
+
+    # Скрываемые в простом режиме вкладки должны называться ТАК ЖЕ, иначе
+    # переключение режима перестало бы их находить
+    advanced = re.search(r"ADVANCED_TAB_NAMES = \[([^\]]+)\]", UI)
+    check(advanced is not None, "Список вкладок продвинутого режима найден")
+    if advanced:
+        adv_names = re.findall(r'"([^"]+)"', advanced.group(1))
+        missing = [n for n in adv_names if n not in names]
+        check(not missing,
+              "Все они есть среди вкладок окна", ", ".join(missing))
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ: РАСКЛАДКА ОКНА")
@@ -223,6 +324,9 @@ def main() -> int:
     test_positions_tab_removed()
     test_scrollbars()
     test_startup_retries()
+    test_overview_has_no_duplicates()
+    test_every_tab_is_reachable()
+    test_tab_names_fit()
     test_syntax_is_valid()
 
     print("\n" + "=" * 62)

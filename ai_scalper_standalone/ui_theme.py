@@ -167,7 +167,7 @@ def apply(root, style, colors: dict) -> None:
     # Отступы вкладок поджаты: их полтора десятка, и при широких отступах
     # названия обрезались («Символь», «Счета…») — приходилось растягивать окно.
     style.configure("TNotebook.Tab", background=colors["tab_bg"],
-                    foreground=fg, padding=(9, 6))
+                    foreground=fg, padding=(7, 6))
     style.map("TNotebook.Tab",
               background=[("selected", colors["tab_active"])],
               foreground=[("selected", fg)])

@@ -552,8 +552,12 @@ def test_main_page_sync() -> None:
             overview = ast.get_source_segment(gui, node)
     check(overview is not None and "sync_from_cloud" in overview,
           "Кнопка стоит именно на главной странице")
-    check(overview is not None and "Синхронизация с облаком" in overview,
+    # Раздел подписан понятно и НЕ повторяет название раздела установки на
+    # вкладке «Система»: два одинаковых «Обновление» в разных местах путали.
+    check(overview is not None and "Что нового в программе" in overview,
           "Раздел подписан понятно")
+    check(overview is not None and 'text=" Обновление "' not in overview,
+          "И не спорит с разделом установки на вкладке «Система»")
 
     # Логика не должна дублироваться: обе кнопки зовут один и тот же updater
     sync = None
