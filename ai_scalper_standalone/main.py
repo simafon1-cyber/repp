@@ -34,6 +34,7 @@ import auto_learning as al
 import custom_strategy as cs
 import strategies as strat
 import multi_indicator as mi
+import market_hours
 import news_calendar
 import telegram_signals
 import telegram_reader
@@ -305,6 +306,18 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     profile = rm.get_profile()
     point = mt5c.get_symbol_point(symbol)
 
+    # Замеры для определения «рынок закрыт или неликвиден» (market_hours.py).
+    # Делаются НА КАЖДОМ проходе и ДО всех фильтров: медиана спреда и признак
+    # замершей цены должны копиться всегда, иначе к моменту, когда они
+    # понадобятся, сравнивать будет не с чем.
+    market_hours.note_spread(symbol, mt5c.get_spread_points(symbol))
+    _tick_now = mt5c.get_tick(symbol)
+    _tick_time = getattr(_tick_now, "time", None) if _tick_now is not None else None
+    if _tick_time:
+        # Пустую отметку не записываем: иначе «время не менялось» означало бы
+        # замерший рынок при живых котировках.
+        market_hours.note_quote(symbol, _tick_time)
+
     df_raw = mt5c.get_rates_df(symbol, cfg.TIMEFRAME, count=max(300, cfg.EMA_TREND_PERIOD + 50))
     if df_raw is None or len(df_raw) < cfg.EMA_SLOW_PERIOD + 5:
         sym_state.last_reject_reason = "Недостаточно данных с MT5"
@@ -380,6 +393,54 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     if not rm.trading_hours_ok():
         sym_state.last_reject_reason = "Вне разрешённых часов торговли"
         return
+
+    # РЫНОК ЗАКРЫТ ИЛИ НЕЛИКВИДЕН — спрашиваем у самого рынка, а не у часов.
+    #
+    # Владелец: «не по моему времени, а когда именно рынок закрыт». Часы для
+    # этого не годятся: время компьютера и время сервера брокера расходятся
+    # на 2-3 часа, у разных брокеров по-разному, и окно, заданное часами,
+    # промахивается мимо цели целиком. Признаки берутся из рынка: запрет
+    # брокера, замершая цена, спред намного шире обычного для этой же пары
+    # (см. market_hours.py).
+    #
+    # ДЕЙСТВУЕТ ВСЕГДА, включая профиль с ignore_soft_filters («Истеричка») —
+    # тот самый профиль, на котором и получены ночные убытки. Иначе вышло бы
+    # как с ролловерной паузой выше: настройка включена, а профиль её молча
+    # отменяет, и эффекта ноль. Тот же приём уже применён к анти-флэтовому
+    # фильтру ниже.
+    #
+    # Открытые сделки это НЕ трогает: запрещается только вход, только по
+    # этой паре. Трейлинг, безубыток и частичное закрытие работают как всегда.
+    if getattr(cfg, "USE_MARKET_CLOSED_GUARD", False):
+        market_reason = market_hours.market_block_reason(
+            symbol,
+            trade_mode=getattr(mt5.symbol_info(symbol), "trade_mode", None),
+            spread_points=mt5c.get_spread_points(symbol),
+            dead_seconds=float(getattr(cfg, "MARKET_DEAD_SECONDS", 90) or 0),
+            thin_ratio=(float(getattr(cfg, "THIN_SPREAD_RATIO", 0) or 0)
+                        if getattr(cfg, "USE_THIN_MARKET_GUARD", False) else 0.0),
+            thin_min_samples=int(getattr(cfg, "THIN_MIN_SAMPLES", 30) or 30))
+        if market_reason:
+            sym_state.last_reject_reason = "Вход закрыт: " + market_reason
+            return
+
+    # ОБЩИЙ ПОТОЛОК ЧИСЛА ОДНОВРЕМЕННЫХ СДЕЛОК — по всем парам сразу.
+    #
+    # max_open_positions профиля считает позиции ПО ОДНОМУ символу: при
+    # десяти настроенных парах это до ста сделок одновременно, и единственной
+    # общей границей остаётся max_total_risk_pct. В отчёте владельца
+    # одновременно бывало до 9 открытых сделок.
+    #
+    # 0 = без ограничения (значение по умолчанию — владелец предпочитает
+    # больше сделок, см. его решение по потолку плеча).
+    max_all = int(getattr(cfg, "MAX_SIMULTANEOUS_POSITIONS", 0) or 0)
+    if max_all > 0:
+        open_now = rm.count_open_positions(None, positions=all_positions)
+        if open_now >= max_all:
+            sym_state.last_reject_reason = (
+                f"Уже открыто {open_now} сделок при потолке {max_all} "
+                f"(MAX_SIMULTANEOUS_POSITIONS)")
+            return
 
     direction = 0
     score = 0.0
