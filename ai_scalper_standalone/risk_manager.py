@@ -542,6 +542,43 @@ def apply_min_risk_reward_floor(tp_dist: float, sl_dist: float) -> float:
     return max(tp_dist, sl_dist * min_rr)
 
 
+def blocked_symbol_reason(symbol: str) -> str:
+    """Инструмент выключен человеком насовсем. Пустая строка — можно торговать.
+
+    ЗАЧЕМ ОТДЕЛЬНЫЙ СПИСОК, А НЕ ПРОСТО УБРАТЬ ИЗ SYMBOLS. Список инструментов
+    приходит из ЧЕТЫРЁХ мест: SYMBOLS в config.py, поле symbols у каждого
+    счёта в accounts.json, добавление руками на вкладке «Символы» и
+    переключатель на дашборде. Вычеркнуть из одного места — значит оставить
+    три двери открытыми. Здесь стоит одна проверка на входе, и её проходят
+    все источники сразу.
+
+    Имя сравнивается БЕЗ УЧЁТА СУФФИКСА брокера: XAUUSD, XAUUSDs, XAUUSD.m,
+    xau/usd — это всё золото. У разных брокеров одна и та же пара называется
+    по-разному, и список, работающий только на точное совпадение, у половины
+    брокеров молча ничего не блокировал бы."""
+    blocked = getattr(cfg, "BLOCKED_SYMBOLS", None) or []
+    if not blocked:
+        return ""
+    target = _clean_symbol(symbol)
+    if not target:
+        return ""
+    for name in blocked:
+        want = _clean_symbol(name)
+        if not want:
+            continue
+        # Совпадение с начала: XAUUSDS начинается с XAUUSD, и это тот же
+        # инструмент с суффиксом брокера. Обратное тоже верно, если человек
+        # вписал в список имя с суффиксом.
+        if target.startswith(want) or want.startswith(target):
+            return f"{symbol} выключен вручную (BLOCKED_SYMBOLS)"
+    return ""
+
+
+def _clean_symbol(name) -> str:
+    """XAUUSD.m -> XAUUSD, xau/usd -> XAUUSD. Только для сравнения имён."""
+    return "".join(ch for ch in str(name or "").upper() if ch.isalnum())
+
+
 def effective_target_money(profile: dict, equity: float) -> float:
     """Денежная цель прибыли на сделку — в деньгах, но считанная ОТ СЧЁТА.
 

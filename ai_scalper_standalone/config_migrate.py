@@ -607,6 +607,81 @@ def _enable_news_mode(text: str, existing: dict) -> tuple:
         "в остальное время обычный скальпинг")
 
 
+def _set_aggressive_profile(text: str, existing: dict) -> tuple:
+    """Профиль по умолчанию: «Истеричка» -> «Агрессивный».
+
+    Условная правка, поэтому не в ONE_TIME: значение здесь не число и не
+    строка, а обращение к перечислению (RiskProfile.AGGRESSIVE), которое
+    repr() записать не сможет.
+
+    Трогаем ТОЛЬКО если стоит заводская HYSTERIC. Выбрал человек другой
+    профиль сам — это его решение, и переписывать его нельзя.
+
+    Зачем вообще: у «Истерички» ignore_soft_filters = True, и это разом
+    выключает паузу вокруг полуночи брокера, защиту от скачка волатильности и
+    проверку «спред не съедает цель». Владелец переходит с депозита 65 на
+    500-1000, где риск в процентах наконец начинает управлять объёмом (на 65
+    расчёт всегда просил меньше минимального лота брокера)."""
+    marker = "MIGRATED_AGGRESSIVE_PROFILE"
+    if marker in existing:
+        return text, ""
+    node = existing.get("RISK_PROFILE")
+    if node is None:
+        return text, ""
+    value = node["value"]
+    if not (isinstance(value, ast.Attribute) and value.attr == "HYSTERIC"):
+        return text, ""
+    text = _replace_or_append(text, "RISK_PROFILE", "RiskProfile.AGGRESSIVE")
+    text = text.rstrip("\n") + f"\n\n# профиль по умолчанию\n{marker} = True\n"
+    return text, (
+        "профиль по умолчанию переключён с «Истерички» на «Агрессивный»: "
+        "риск на сделку 1.2% вместо 0.1%, порог входа 55 вместо 45, до 5 "
+        "сделок на пару вместо 10, стоп 2.0 ATR вместо 1.5. Главное — у "
+        "«Истерички» был включён обход мягких фильтров, который разом "
+        "отключал паузу вокруг полуночи брокера, защиту от скачка "
+        "волатильности и проверку «спред не съедает цель»; на «Агрессивном» "
+        "все три работают")
+
+
+def _block_gold(text: str, existing: dict) -> tuple:
+    """Выключает золото: и списком BLOCKED_SYMBOLS, и вычёркиванием из SYMBOLS.
+
+    Условная правка: надо не просто записать значение, а ОТРЕДАКТИРОВАТЬ
+    существующий список пар человека, сохранив всё остальное в нём.
+
+    Одного BLOCKED_SYMBOLS хватило бы для запрета, но золото осталось бы
+    висеть в списке пар на вкладке «Символы» — человек видел бы его среди
+    рабочих и не понимал, почему по нему ничего не происходит."""
+    marker = "MIGRATED_GOLD_OFF"
+    if marker in existing:
+        return text, ""
+
+    text = _replace_or_append(text, "BLOCKED_SYMBOLS", repr(["XAUUSD"]))
+
+    removed = []
+    node = existing.get("SYMBOLS")
+    if node is not None and isinstance(node["value"], (ast.List, ast.Tuple)):
+        try:
+            current = ast.literal_eval(node["value"])
+        except (ValueError, SyntaxError):
+            current = None
+        if isinstance(current, (list, tuple)):
+            kept = [s for s in current
+                    if not str(s).upper().replace(".", "").startswith("XAUUSD")]
+            removed = [s for s in current if s not in kept]
+            if removed:
+                text = _replace_or_append(text, "SYMBOLS", repr(list(kept)))
+
+    text = text.rstrip("\n") + f"\n\n# золото выключено\n{marker} = True\n"
+    note = ("золото выключено по просьбе владельца: новые сделки по нему не "
+            "открываются, уже открытая доводится до конца обычным порядком. "
+            "Имя сравнивается без суффикса брокера, поэтому XAUUSDs и "
+            "XAUUSD.m тоже выключены")
+    if removed:
+        note += f". Из списка пар убрано: {', '.join(map(str, removed))}"
+    return text, note
+
+
 def apply_one_time(config_path: str = "") -> list:
     """Применить одноразовые изменения из ONE_TIME. Возвращает пояснения к тем,
     что реально применились."""
@@ -645,6 +720,18 @@ def apply_one_time(config_path: str = "") -> list:
     text, news_note = _enable_news_mode(text, existing)
     if news_note:
         applied.append(news_note)
+
+    # Каждый шаг пересчитывает existing заново: предыдущие уже изменили текст,
+    # и разбор устарел бы.
+    existing = _top_level_assignments(text)
+    text, profile_note = _set_aggressive_profile(text, existing)
+    if profile_note:
+        applied.append(profile_note)
+
+    existing = _top_level_assignments(text)
+    text, gold_note = _block_gold(text, existing)
+    if gold_note:
+        applied.append(gold_note)
 
     # Стоп-лосс расширяется в config.py, УЖЕ существующем у пользователя.
     # RISK_PROFILES и MIN_SL_* не входят в generic-миграцию выше (RISK_PROFILES
