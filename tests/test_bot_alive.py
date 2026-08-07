@@ -215,6 +215,71 @@ def test_watchdog_wired_into_program() -> None:
           "Всё, что нужно показать, передаётся в поток окна")
 
 
+def test_runtime_events() -> None:
+    """Владелец писал одно и то же несколько раз: «останавливается,
+    перезапустил — сделки пошли». Каждый раз разбирать приходилось по коду:
+    от самой программы следов не оставалось — всё уходило в scalper.log,
+    который никто не открывает, а окно показывало то же «Работает»."""
+    print("\n[Лента происшествий: что случилось с программой]")
+
+    import runtime_events as ev
+    import tempfile, os as _os
+
+    saved_dir = ev.app_dir
+    with tempfile.TemporaryDirectory() as tmp:
+        ev.app_dir = lambda: tmp
+        ev.clear()
+        try:
+            check(ev.describe() == "", "Пока ничего не случилось — молчим")
+
+            ev.record("связь", "потеряна связь с терминалом MT5")
+            ev.record("сторож", "поток завершился — цикл перезапущен")
+            text = ev.describe()
+            check("связь" in text and "сторож" in text,
+                  "Оба события видны", text)
+            check(text.index("сторож") < text.index("связь"),
+                  "Свежее событие показано первым")
+
+            check(_os.path.exists(ev.path()),
+                  "Лента сохраняется файлом — переживёт закрытие окна")
+
+            # Перезапуск программы: события прошлого запуска читаются обратно
+            ev._events.clear()
+            check(ev.describe() == "", "После очистки памяти пусто")
+            loaded = ev.load()
+            check(len(loaded) == 2,
+                  "События прошлого запуска прочитаны", str(len(loaded)))
+            check("сторож" in ev.describe(), "И снова видны в окне")
+
+            # Лента не растёт бесконечно
+            for i in range(ev.MAX_EVENTS + 20):
+                ev.record("тест", f"событие {i}")
+            check(len(ev.recent(999)) <= ev.MAX_EVENTS,
+                  "Старые события вытесняются", str(len(ev.recent(999))))
+
+            # Испорченный файл не должен ронять программу
+            with open(ev.path(), "w", encoding="utf-8") as f:
+                f.write("{не json")
+            check(ev.load() == [], "Испорченный файл — пустая лента, без падения")
+        finally:
+            ev.app_dir = saved_dir
+            ev._events.clear()
+
+    # События действительно записываются там, где происходят
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    check("runtime_events.record" in src, "Главный цикл пишет события")
+    for marker in ('"связь"', '"ошибка"', '"остановка"'):
+        check(marker in src, f"Записывается событие {marker}")
+
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    check('runtime_events.record("сторож"' in ui,
+          "Сторож отмечает свои перезапуски")
+    check("runtime_events.describe(3)" in ui,
+          "И лента показывается на вкладке «Обзор»")
+    check("runtime_events.load()" in ui,
+          "События прошлого запуска подхватываются при старте")
+
+
 def main_run() -> int:
     print("=" * 62)
     print("ТЕСТЫ: ТОРГОВЫЙ ЦИКЛ НЕ УМИРАЕТ МОЛЧА")
@@ -224,6 +289,7 @@ def main_run() -> int:
     test_heartbeat()
     test_watchdog_decision()
     test_watchdog_wired_into_program()
+    test_runtime_events()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

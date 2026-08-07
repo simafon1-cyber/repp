@@ -38,6 +38,7 @@ import news_calendar
 import telegram_signals
 import telegram_reader
 import dashboard_state as ds
+import runtime_events
 import secure_store
 from control import control
 from indicators import (
@@ -1078,15 +1079,21 @@ def main(stop_event=None, start_dashboard: bool = True):
                     connect_failures += 1
                     log.error("Потеряно соединение с MT5 (терминал закрыт/разлогинен?) — жду и пробую снова... "
                               "(%d/%d до автопереподключения)", connect_failures, cfg.RECONNECT_AFTER_FAILURES)
+                    if connect_failures == 1:
+                        runtime_events.record(
+                            "связь", "потеряна связь с терминалом MT5 — "
+                                     "торговля приостановлена до восстановления")
                     if cfg.USE_AUTO_RECONNECT and connect_failures >= cfg.RECONNECT_AFTER_FAILURES:
                         log.warning("Пробую автоматически переподключиться к MT5...")
                         try:
                             mt5c.disconnect()
                             mt5c.connect()
                             connect_failures = 0
-                            log.info("Автопереподключение к MT5 удалось.")
+                            runtime_events.record("связь", "переподключение к MT5 удалось")
                         except Exception as e:
-                            log.error("Автопереподключение не удалось: %s. Убедись, что терминал MT5 открыт.", e)
+                            runtime_events.record(
+                                "связь", f"переподключиться не удалось: {e}. "
+                                         f"Терминал MT5 открыт?")
                     _sleep_interruptible(cfg.POLL_SECONDS, stop_event)
                     continue
                 connect_failures = 0
@@ -1127,6 +1134,8 @@ def main(stop_event=None, start_dashboard: bool = True):
                 # Защита от падения цикла целиком: одна неожиданная ошибка на итерации
                 # не должна убивать весь процесс — логируем и пробуем на следующем опросе.
                 log.exception("Неожиданная ошибка в главном цикле (продолжаю работу): %s", e)
+                runtime_events.record(
+                    "ошибка", f"сбой в главном цикле: {type(e).__name__}: {e}")
 
             # РАНЬШЕ ЭТОТ ВЫЗОВ СТОЯЛ СНАРУЖИ try/except выше. Любая ошибка
             # внутри него улетала мимо защиты, а внешний try ловил только
@@ -1139,6 +1148,8 @@ def main(stop_event=None, start_dashboard: bool = True):
                 _fast_position_monitor(sym_states, stop_event, cfg.POLL_SECONDS)
             except Exception as e:  # noqa: BLE001
                 log.exception("Ошибка в мониторе позиций (продолжаю работу): %s", e)
+                runtime_events.record(
+                    "ошибка", f"сбой в мониторе позиций: {type(e).__name__}: {e}")
                 _sleep_interruptible(cfg.POLL_SECONDS, stop_event)
     except KeyboardInterrupt:
         log.info("Остановлено пользователем (Ctrl+C).")
@@ -1146,6 +1157,8 @@ def main(stop_event=None, start_dashboard: bool = True):
         # Досюда доходить не должно — но если дошло, это надо ВИДЕТЬ, а не
         # гадать, почему бот замолчал.
         log.exception("Торговый цикл аварийно завершился: %s", e)
+        runtime_events.record(
+            "остановка", f"торговый цикл аварийно завершился: {type(e).__name__}: {e}")
         raise
     finally:
         # Штатное завершение — сохраняем выученное ещё раз. Основное

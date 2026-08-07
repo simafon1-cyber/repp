@@ -82,6 +82,7 @@ import mt5_install
 import param_help
 import config_migrate
 import news_autostart
+import runtime_events
 import settings_backup
 import ui_theme
 import version as app_version
@@ -670,6 +671,13 @@ class App:
 
         if TRAY_AVAILABLE:
             self._start_tray()
+
+        # Лента событий прошлого запуска: если программа остановилась ночью,
+        # причина должна быть видна утром, а не потеряна вместе с окном.
+        try:
+            runtime_events.load()
+        except Exception:  # noqa: BLE001
+            pass
 
         self._refresh_loop()
         # Календарь подтягивает новости сам — владелец просил, чтобы он
@@ -2986,7 +2994,8 @@ class App:
         ttk.Button(btns, text="Войти в Telegram",
                    command=self.telegram_login).grid(row=0, column=1, padx=6)
         ttk.Button(btns, text="Проверить источники",
-                   command=self.refresh_sources_tab).grid(row=0, column=2)
+                   command=lambda: self.refresh_sources_tab(apply_fields=True)
+                   ).grid(row=0, column=2)
 
         self.refresh_sources_tab()
 
@@ -3041,6 +3050,57 @@ class App:
         except Exception as e:
             log.warning("Автоустановка в MetaTrader не выполнена: %s", e)
 
+    def _apply_source_fields(self) -> list:
+        """Записать в config.py то, что СЕЙЧАС набрано на вкладке «Источники».
+
+        Живой случай: владелец поставил галочку «Читать сигналы из Telegram»,
+        вписал api_id и api_hash, нажал «Войти в Telegram» — а программа
+        ответила «Telegram выключен в настройках (TELEGRAM_ENABLED = False)».
+
+        Причина ровно та же, что была у обновления с веткой: кнопки читали
+        СОХРАНЁННЫЙ config.py, а не поля на экране. Пока не нажата «Сохранить
+        всё», для программы галочка не поставлена, а api_id пуст — и она
+        честно про это писала, только человек-то видел заполненные поля.
+
+        Возвращает список того, что изменилось (для лога и объяснения)."""
+        changed = []
+        try:
+            api_id = int(self.tg_api_id_var.get().strip() or 0)
+        except ValueError:
+            api_id = int(getattr(cfg, "TELEGRAM_API_ID", 0) or 0)
+
+        pw = control.get_session_password()
+        salt = getattr(cfg, "SECURITY_SALT", "")
+        sources = [s.strip() for s in self.tg_sources_var.get().split(",") if s.strip()]
+
+        pairs = [
+            ("TELEGRAM_ENABLED", bool(self.tg_enabled_var.get())),
+            ("TELEGRAM_API_ID", api_id),
+            ("TELEGRAM_SOURCES", sources),
+            ("TELEGRAM_ROLE", self.tg_role_var.get()),
+        ]
+        for name, value in pairs:
+            if getattr(cfg, name, None) == value:
+                continue
+            _write_config_value(name, repr(value))
+            changed.append(name)
+
+        # api_hash — секрет: пустое поле и заглушка означают «не менять»,
+        # иначе одно нажатие затирало бы уже сохранённый ключ.
+        hash_text = self.tg_api_hash_var.get().strip()
+        if hash_text and hash_text != SECRET_PLACEHOLDER:
+            _write_config_value(
+                "TELEGRAM_API_HASH",
+                repr(secure_store.protect_secret(hash_text, pw, salt)))
+            changed.append("TELEGRAM_API_HASH")
+
+        if changed:
+            try:
+                _reload_cfg()
+            except Exception:  # noqa: BLE001
+                pass
+        return changed
+
     def save_sources(self):
         """Сохраняет обе группы разом — это одна кнопка на всю вкладку."""
         chain = [name for name, var in self.news_chain_vars.items() if var.get()]
@@ -3092,8 +3152,19 @@ class App:
         self.refresh_sources_tab()
         self.refresh_news_tab()
 
-    def refresh_sources_tab(self):
-        """Показывает по каждому источнику, работает он или нет и почему."""
+    def refresh_sources_tab(self, apply_fields: bool = False):
+        """Показывает по каждому источнику, работает он или нет и почему.
+
+        apply_fields=True — сначала применить набранное на экране. Так
+        работает кнопка «Проверить источники»: проверять СОХРАНЁННЫЕ
+        значения, когда человек только что заполнил поля, — значит показать
+        ему заведомо неверный ответ («Telegram выключен», хотя галочка на
+        экране стоит)."""
+        if apply_fields:
+            try:
+                self._apply_source_fields()
+            except Exception as e:  # noqa: BLE001
+                log.warning("Не удалось применить поля источников: %s", e)
         chain = list(news_calendar.news_source_chain())
         keys = getattr(cfg, "NEWS_API_KEYS", {}) or {}
         for name, var in self.src_status_vars.items():
@@ -3175,6 +3246,13 @@ class App:
         здесь, в потоке интерфейса: окно замирало на всё время входа, и
         диалог ввода кода мог не показаться вовсе — со стороны это выглядело
         как «программа зависла» или «войти не получается»."""
+        # Сначала применяем то, что набрано на экране: иначе вход шёл бы по
+        # СТАРЫМ значениям, а человек видел бы свои свежие в полях.
+        applied = self._apply_source_fields()
+        if applied:
+            log.info("Источники: применены поля с экрана перед входом (%s)",
+                     ", ".join(applied))
+
         problem = tgr.login_preflight()
         if problem:
             messagebox.showwarning(APP_TITLE, problem)
@@ -3936,6 +4014,7 @@ class App:
             return
 
         log.warning("Сторож: %s — перезапускаю торговый цикл сам.", reason)
+        runtime_events.record("сторож", f"{reason} — цикл перезапущен программой")
         self.status_var.set(f"Перезапуск: {reason}")
         # Старый цикл (если он завис) просим остановиться и заводим новый.
         # Поток-зомби демонический, программу он держать не будет.
@@ -4019,6 +4098,13 @@ class App:
                 # мелким текстом. Из-за этого «затишье» выглядело как поломка,
                 # хотя программа знала причину и молчала о ней.
                 problems = list(problems) + self._silence_reasons(snap)
+                # Недавние происшествия: обрывы связи, сбои, перезапуски
+                # сторожем. Владелец несколько раз писал «останавливается,
+                # перезапустил — пошло»; без такой ленты каждый раз
+                # приходилось гадать, что именно случилось.
+                events = runtime_events.describe(3)
+                if events:
+                    problems.append("Недавние события:\n  " + events.replace("\n", "\n  "))
                 if problems:
                     self.trade_warning_var.set(
                         "⚠ Сделки не открываются:\n- " + "\n- ".join(problems)

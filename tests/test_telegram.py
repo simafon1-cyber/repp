@@ -636,6 +636,77 @@ def test_reader_preflight() -> None:
     check(tgr.sources() == ["@a", "@b"], "Пробелы и пустые строки отсеиваются", str(tgr.sources()))
 
 
+def test_buttons_apply_screen_fields() -> None:
+    """Живой случай владельца (скриншот): галочка «Читать сигналы из
+    Telegram» стоит, api_id и api_hash заполнены, он нажимает «Войти в
+    Telegram» — а программа отвечает «Telegram выключен в настройках
+    (TELEGRAM_ENABLED = False)».
+
+    Причина ровно та же, что была у обновления с веткой: кнопки читали
+    СОХРАНЁННЫЙ config.py, а не поля на экране. Пока не нажата «Сохранить
+    всё», для программы галочка не поставлена и api_id пуст — она честно
+    про это писала, только человек видел заполненные поля."""
+    print("\n[Кнопки применяют то, что набрано на экране]")
+
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+
+    check("def _apply_source_fields" in ui,
+          "Есть применение полей вкладки «Источники»")
+    body = ui.split("def _apply_source_fields", 1)[1].split("\n    def ", 1)[0]
+    for name in ("TELEGRAM_ENABLED", "TELEGRAM_API_ID",
+                 "TELEGRAM_SOURCES", "TELEGRAM_ROLE"):
+        check(name in body, f"{name} берётся с экрана")
+    check("TELEGRAM_API_HASH" in body, "И секретный api_hash тоже")
+    check("SECRET_PLACEHOLDER" in body,
+          "Заглушка «ключ сохранён» не затирает уже сохранённый api_hash")
+    check("_reload_cfg()" in body,
+          "После записи настройки перечитываются — иначе проверка ниже "
+          "снова смотрела бы в старое")
+
+    login = ui.split("def telegram_login", 1)[1].split("\n    def ", 1)[0]
+    applies = "_apply_source_fields()" in login
+    check(applies, "«Войти в Telegram» сначала применяет поля")
+    check(applies and "login_preflight()" in login
+          and login.index("_apply_source_fields()") < login.index("login_preflight()"),
+          "И делает это ДО проверки готовности, а не после")
+
+    check("apply_fields=True" in ui,
+          "«Проверить источники» тоже проверяет то, что на экране")
+
+    # Секрет не должен затираться, если поле оставили с заглушкой
+    check('hash_text and hash_text != SECRET_PLACEHOLDER' in body,
+          "Пустое поле api_hash означает «не менять», а не «стереть»")
+
+
+def test_foreign_signal_can_never_open_a_trade() -> None:
+    """Владелец: «почему я не могу брать новости из телеграма для работы?»
+
+    Может — но только как ограничитель или добавка к оценке. Открыть сделку
+    чужой сигнал не может ни в одном режиме, и это не недоделка: канал в
+    Telegram ничем не подтверждён, а разрешить ему открывать сделки значит
+    отдать счёт постороннему."""
+    print("\n[Чужой сигнал не открывает сделок ни в каком режиме]")
+
+    roles = (APP / "telegram_signals.py").read_text(encoding="utf-8")
+    main_src = (APP / "main.py").read_text(encoding="utf-8")
+
+    check("show" in roles and "veto" in roles,
+          "Роли сигнала: показывать / запрещать вход")
+    check("score" in roles, "И добавлять баллы к оценке")
+
+    # В главном цикле сигнал влияет ТОЛЬКО на отказ и на баллы
+    check("telegram_signals" in main_src, "Сигналы участвуют в решении")
+    check("execute_market_order" in main_src, "Сделку открывает торговый модуль")
+    for forbidden in ("telegram_signals.set_lot", "telegram_signals.set_risk",
+                      "telegram_signals.open_trade"):
+        check(forbidden not in main_src,
+              f"Нет способа для сигнала сделать {forbidden.split('.')[-1]}")
+
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    check("не может открыть сделку" in ui,
+          "И в окне это написано прямо, а не спрятано в коде")
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ СИГНАЛОВ ИЗ TELEGRAM")
@@ -658,6 +729,8 @@ def main() -> int:
     test_login_not_on_gui_thread()
     test_exe_build_includes_telethon()
     test_reader_preflight()
+    test_buttons_apply_screen_fields()
+    test_foreign_signal_can_never_open_a_trade()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
