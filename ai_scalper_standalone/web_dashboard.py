@@ -32,7 +32,28 @@ from control import control
 app = Flask(__name__)
 
 
+def password_is_set() -> bool:
+    """Задан ли вообще пароль дашборда.
+
+    ЗАЧЕМ ЭТО ОТДЕЛЬНО. Раньше пустой пароль в настройках работал как
+    настоящий: проверка сводилась к `password == ""`, и любой, кто прислал
+    правильный логин с пустым паролем, попадал внутрь. Логин — это адрес
+    почты владельца, он лежит в config.py и секретом не является.
+
+    Дома, в своей сети, это было терпимо. Но дашборд слушает на всех адресах
+    (0.0.0.0), и при переносе программы на облачный сервер с публичным
+    адресом та же дыра означала бы, что управление торговлей — старт, стоп,
+    смена инструментов — доступно любому, кто нашёл открытый порт.
+
+    Поэтому: пароля нет — дашборда нет. Это безопаснее, чем «работает, но
+    пускает всех»."""
+    return bool(getattr(cfg, "DASHBOARD_PASSWORD_HASH", "")
+                or getattr(cfg, "DASHBOARD_PASSWORD", ""))
+
+
 def _check_auth(username: str, password: str) -> bool:
+    if not password_is_set():
+        return False           # см. password_is_set(): пустой пароль — не пароль
     if username != cfg.DASHBOARD_LOGIN:
         return False
     # Новый формат (см. secure_store.py): пароль хранится только как хэш —
@@ -52,8 +73,24 @@ def _auth_required_response():
     )
 
 
+def _no_password_response():
+    """Отдельный ответ, а не просто 401: человек должен понять, что дело не в
+    забытом пароле, а в том, что пароль вообще не задан."""
+    return Response(
+        "Пароль дашборда не задан, поэтому дашборд выключен.\n\n"
+        "Задайте его в программе: вкладка «Система» -> «Пароль дашборда», "
+        "либо DASHBOARD_PASSWORD в config.py, и перезапустите программу.\n\n"
+        "Раньше пустой пароль пускал любого, кто знает логин. Логин — это "
+        "адрес почты, он лежит в config.py и секретом не является. На "
+        "домашнем компьютере это было терпимо, на сервере с публичным "
+        "адресом означало бы, что торговлей может управлять кто угодно.",
+        403, {"Content-Type": "text/plain; charset=utf-8"})
+
+
 @app.before_request
 def _require_login():
+    if not password_is_set():
+        return _no_password_response()
     auth = request.authorization
     if not auth or not _check_auth(auth.username, auth.password):
         return _auth_required_response()
