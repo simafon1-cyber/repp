@@ -36,6 +36,7 @@ import strategies as strat
 import multi_indicator as mi
 import market_hours
 import news_calendar
+import remote_settings
 import telegram_signals
 import telegram_reader
 import dashboard_state as ds
@@ -893,6 +894,37 @@ _config_mtime = os.path.getmtime(_config_path) if os.path.exists(_config_path) e
 _last_config_check = datetime.now()
 
 
+_last_remote_sync = None
+
+
+def sync_remote_settings():
+    """Забрать настройки торговли из GitHub. Владелец: «чтобы настройки сами
+    загрузились без всяких нажатий».
+
+    Ничего перечитывать вручную не нужно: настройки пишутся в config.py, а
+    reload_config_if_changed ниже видит изменившийся файл и подхватывает их на
+    ходу. Перезапуск программы не требуется.
+
+    Рамки того, что вообще разрешено менять из интернета, — в
+    remote_settings.py. Там же объяснено, почему источник обновлений менять
+    оттуда нельзя ни при каких условиях."""
+    global _last_remote_sync
+    if not getattr(cfg, "REMOTE_SETTINGS_ENABLED", False):
+        return
+    minutes = float(getattr(cfg, "REMOTE_SETTINGS_MINUTES", 10) or 10)
+    now = datetime.now()
+    if (_last_remote_sync is not None
+            and (now - _last_remote_sync).total_seconds() < minutes * 60):
+        return
+    _last_remote_sync = now
+    try:
+        remote_settings.sync()
+    except Exception as e:          # noqa: BLE001
+        # Сеть, GitHub, кривой файл — что угодно. Торговый цикл из-за этого
+        # останавливаться не должен.
+        log.warning("Не удалось получить настройки из GitHub: %s", e)
+
+
 def reload_config_if_changed(sym_states: dict):
     """Автообновление: если config.py поменяли руками, пока бот работает —
     подхватываем изменения без перезапуска python main.py. Проверяем не
@@ -1202,6 +1234,10 @@ def main(stop_event=None, start_dashboard: bool = True):
                     continue
                 connect_failures = 0
 
+                # Сначала забираем настройки из GitHub, потом перечитываем
+                # config.py: так изменения применяются на этой же итерации, а
+                # не через одну.
+                sync_remote_settings()
                 reload_config_if_changed(sym_states)
 
                 equity = acc_info.equity

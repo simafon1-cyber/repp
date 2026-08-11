@@ -667,6 +667,13 @@ class App:
             # Без галочки автоустановки — только смотрим и спрашиваем.
             self.root.after(6000, lambda: self.check_updates(silent=True))
 
+        # ПОВТОРНАЯ проверка обновлений во время работы.
+        #
+        # Проверки «при запуске» хватало, пока программу открывали и закрывали
+        # каждый день. На сервере она работает неделями и не перезапускается —
+        # там «при запуске» означает «никогда», и новые сборки не доезжают.
+        self._schedule_update_check()
+
         if cfg.USE_WEB_DASHBOARD and not self._dashboard_started:
             try:
                 bot_engine.start_dashboard_thread()
@@ -2679,6 +2686,34 @@ class App:
             self.start_bot()
             return
         self.root.after(500, self._start_bot_when_ready)
+
+    def _schedule_update_check(self):
+        """Проверять обновления не только при запуске, но и во время работы.
+
+        Владелец: «чтобы программа сама проверяла обновления и загружала
+        нововведения». На сервере программа не перезапускается неделями, и
+        проверка при запуске туда просто не доходит.
+
+        Ставим следующую проверку ЗАРАНЕЕ, до самой проверки: если она упадёт
+        (нет сети, GitHub не отвечает), цепочка не оборвётся и следующая
+        попытка всё равно состоится."""
+        minutes = float(getattr(cfg, "UPDATE_CHECK_MINUTES", 0) or 0)
+        if minutes <= 0 or not updater.enabled():
+            return
+        self.root.after(int(minutes * 60_000), self._periodic_update_check)
+
+    def _periodic_update_check(self):
+        self._schedule_update_check()
+        if getattr(self, "_auto_update_busy", False):
+            return
+        try:
+            if getattr(cfg, "UPDATE_AUTO_APPLY", False):
+                self._auto_update_busy = True
+                self._auto_apply_update()
+            else:
+                self.check_updates(silent=True)
+        except Exception as e:      # noqa: BLE001
+            log.warning("Проверка обновлений не удалась: %s", e)
 
     def _auto_apply_update(self):
         """Скачать и поставить обновление без вопросов — только при запуске."""
