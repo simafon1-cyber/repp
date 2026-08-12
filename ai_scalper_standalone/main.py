@@ -37,6 +37,7 @@ import multi_indicator as mi
 import market_hours
 import news_calendar
 import remote_settings
+import symbol_picker
 import telegram_signals
 import telegram_reader
 import dashboard_state as ds
@@ -1092,6 +1093,92 @@ def _sleep_interruptible(seconds: float, stop_event):
         stop_event.wait(timeout=seconds)
 
 
+def survey_symbol(symbol: str) -> dict:
+    """Замерить у брокера всё, что нужно для отбора пары.
+
+    Один замер на пару, только при отборе — не в торговом цикле. Поэтому
+    здесь можно позволить себе обращения к терминалу, которых мы избегаем
+    на каждом проходе."""
+    import MetaTrader5 as mt5
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return {}
+
+    point = float(getattr(info, "point", 0) or 0)
+    tick_value = float(getattr(info, "trade_tick_value", 0) or 0)
+    tick_size = float(getattr(info, "trade_tick_size", 0) or 0)
+    if point <= 0 or tick_value <= 0 or tick_size <= 0:
+        return {}
+
+    df = mt5c.get_rates_df(symbol, cfg.TIMEFRAME, count=60)
+    if df is None or len(df) < 20:
+        return {}
+    # ATR считаем грубо — средним размахом бара. Точности индикатора здесь не
+    # нужно: мы сравниваем инструменты между собой, а не принимаем решение о
+    # входе.
+    span = (df["high"] - df["low"]).tail(50)
+    atr_points = float(span.mean()) / point if point else 0.0
+
+    return {
+        "symbol": symbol,
+        "spread_points": float(getattr(info, "spread", 0) or 0),
+        "atr_points": atr_points,
+        "min_lot": float(getattr(info, "volume_min", 0) or 0),
+        # Стоп берём по тому же правилу, что и в торговле: доля ATR.
+        "stop_points": atr_points * float(getattr(cfg, "MIN_SL_ATR_FRACTION", 1.5) or 1.5),
+        "money_per_point": (point / tick_size) * tick_value,
+        "trade_mode": getattr(info, "trade_mode", None),
+    }
+
+
+def auto_pick_symbols(equity: float) -> list:
+    """Пройти по всему списку брокера и отобрать лучшие пары.
+
+    Владелец просил «работать на всех парах». На всех нельзя: у брокера их
+    сотни, а один проход стоит около 40 мс на пару — три сотни превратили бы
+    пятисекундный круг в двенадцатисекундный, и скальпер торговал бы по ценам
+    двенадцатисекундной давности. Поэтому берём лучшие по цене входа.
+    Подробный разбор — в symbol_picker.py."""
+    if not getattr(cfg, "AUTO_PICK_SYMBOLS", False):
+        return []
+    try:
+        available = mt5c.get_all_symbols()
+    except Exception as e:      # noqa: BLE001
+        log.warning("Не удалось получить список пар у брокера: %s", e)
+        return []
+    if not available:
+        return []
+
+    # Выключенные вручную не рассматриваем вовсе — иначе отбор мог бы вернуть
+    # золото, которое владелец просил отключить.
+    available = [s for s in available if not rm.blocked_symbol_reason(s)]
+
+    surveyed = []
+    for name in available:
+        try:
+            row = survey_symbol(name)
+        except Exception:       # noqa: BLE001
+            continue
+        if row:
+            surveyed.append(row)
+
+    result = symbol_picker.pick(
+        surveyed, equity,
+        limit=int(getattr(cfg, "AUTO_PICK_LIMIT", symbol_picker.DEFAULT_LIMIT)),
+        max_risk_percent=float(getattr(cfg, "MAX_TRADE_RISK_PERCENT_OF_EQUITY", 2.0) or 0),
+        max_spread_ratio=float(getattr(cfg, "AUTO_PICK_MAX_SPREAD_RATIO", 0.25) or 0),
+        per_currency=int(getattr(cfg, "AUTO_PICK_PER_CURRENCY",
+                                 symbol_picker.DEFAULT_PER_CURRENCY)))
+
+    chosen = result["chosen"]
+    if chosen:
+        log.info("%s", symbol_picker.describe(result, len(available)))
+        runtime_events.record("пары", symbol_picker.describe(result, len(available)))
+    for reason in result["rejected"][:10]:
+        log.info("Отбор пар — %s", reason)
+    return chosen
+
+
 def seed_spread_baselines(symbols) -> int:
     """Взять суточную норму спреда из минутных баров MetaTrader.
 
@@ -1217,6 +1304,15 @@ def main(stop_event=None, start_dashboard: bool = True):
 
     acc = mt5c.connect()
     acc_state = AccountState(day_start_equity=acc.equity, peak_equity=acc.equity, last_trade_day=datetime.now())
+
+    # Отбор пар — ДО init_states: он и решает, с каким списком работать.
+    # Делается один раз при запуске: замер всех пар брокера занимает время, а
+    # спред и подвижность инструмента за час не меняются настолько, чтобы
+    # пересматривать список постоянно.
+    picked = auto_pick_symbols(acc.equity)
+    if picked:
+        cfg.SYMBOLS = picked
+
     sym_states = init_states()
     if not sym_states:
         log.error("Ни один символ из SYMBOLS не доступен у брокера — нечего торговать. Останов.")

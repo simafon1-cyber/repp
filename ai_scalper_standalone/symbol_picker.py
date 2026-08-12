@@ -1,0 +1,191 @@
+"""symbol_picker.py — сам выбирает пары у брокера.
+
+ЗАЧЕМ
+Владелец: «можешь добавить, чтобы список сам подгружался — всё, что есть у
+брокера, и он старался работать на всех парах? Если проблематично — выбрать
+самые топовые пары, на которых больше всего вариант заработать».
+
+=====================================================================
+СРАЗУ ЧЕСТНО: НА ВСЕХ ПАРАХ — НЕЛЬЗЯ, И ВОТ ПОЧЕМУ
+=====================================================================
+У брокера их сотни. На каждую пару за один проход программа делает несколько
+обращений к терминалу: бары рабочего таймфрейма, бары трендового, тик,
+описание символа. Осторожная оценка — около 40 мс на пару:
+
+      4 пары ->  0.2 с        100 пар ->  4.0 с
+     30 пар ->  1.2 с        300 пар -> 12.0 с
+
+Полный круг задан POLL_SECONDS = 5 секунд. На трёх сотнях пар круг занимал бы
+двенадцать — то есть скальпер работал бы по ценам двенадцатисекундной
+давности. Для стратегии, где сделка живёт семь минут, это не «чуть медленнее»,
+а совсем другая торговля.
+
+Есть и вторая причина, поважнее скорости. Пары НЕ независимы. EURUSD, GBPUSD,
+AUDUSD и NZDUSD — это в основном ставка на доллар. Открыв «десять разных
+сделок», можно сделать одну и ту же ставку десять раз и получить
+десятикратный убыток там, где казалось, что риск размазан.
+
+=====================================================================
+ЧТО ДЕЛАЕТСЯ ВМЕСТО ЭТОГО
+=====================================================================
+Программа берёт ВЕСЬ список брокера и сама отбирает лучшие пары по признакам,
+которые можно посчитать, а не угадать:
+
+1. ПО КАРМАНУ ЛИ. Минимальный лот брокера рискует не больше, чем разрешено
+   от счёта. Пара, где один минимальный лот стоит 7% депозита, не «рискованная
+   — это просто не наш размер.
+
+2. СКОЛЬКО СТОИТ ВХОД. Главная цифра — спред, делённый на ATR: какую долю
+   обычного движения инструмента съедает плата за вход. У пары со спредом в
+   треть дневного хода заработать нельзя никакой стратегией.
+
+3. ЕСТЬ ЛИ ЧТО ЛОВИТЬ. Совсем неподвижный инструмент бесполезен: движения
+   меньше спреда не окупают даже вход.
+
+4. РАЗРЕШЕНА ЛИ ТОРГОВЛЯ. Прямой ответ брокера.
+
+5. НЕ ОДНА И ТА ЖЕ СТАВКА. Пары ограничиваются по каждой валюте: нельзя
+   набрать шесть пар, где везде продаётся доллар.
+
+Ничего из этого не является предсказанием прибыли. Это отсев заведомо
+невыгодных инструментов — то есть уменьшение расходов, а не поиск сигналов.
+"""
+
+import logging
+
+log = logging.getLogger("symbol_picker")
+
+# Сколько пар брать. 20 при 40 мс на пару — 0.8 секунды на круг при
+# POLL_SECONDS = 5: с запасом.
+DEFAULT_LIMIT = 20
+
+# Не больше стольких пар с одной и той же валютой. Три пары с долларом — это
+# уже во многом одна ставка, шесть — точно одна.
+DEFAULT_PER_CURRENCY = 3
+
+
+def spread_cost_ratio(spread_points: float, atr_points: float) -> float:
+    """Какую долю обычного движения съедает спред. Меньше — лучше.
+
+    Это и есть цена входа, выраженная понятно. Спред в пунктах сам по себе
+    ничего не говорит: 20 пунктов на паре, которая ходит 2000, — это дёшево,
+    а на паре, которая ходит 60, — это половина хода.
+
+    Большое число (999) означает «считать не по чему»: так пара уходит в
+    конец списка, а не наверх."""
+    try:
+        spread = float(spread_points)
+        atr = float(atr_points)
+    except (TypeError, ValueError):
+        return 999.0
+    if atr <= 0 or spread < 0:
+        return 999.0
+    return spread / atr
+
+
+def min_lot_risk_percent(min_lot: float, stop_points: float,
+                         money_per_point_per_lot: float, equity: float) -> float:
+    """Сколько процентов счёта рискует ОДИН минимальный лот брокера.
+
+    Именно минимальный: ниже него объём не опускается, и если он уже слишком
+    дорог, то никакая настройка риска не поможет — решает брокер, а не мы."""
+    try:
+        lot = float(min_lot)
+        points = float(stop_points)
+        per_point = float(money_per_point_per_lot)
+        money = float(equity)
+    except (TypeError, ValueError):
+        return 999.0
+    if money <= 0 or lot <= 0 or points <= 0 or per_point <= 0:
+        return 999.0
+    return (lot * points * per_point) / money * 100.0
+
+
+def reject_reason(candidate: dict, equity: float, max_risk_percent: float,
+                  max_spread_ratio: float) -> str:
+    """Почему эта пара НЕ годится. Пустая строка — годится.
+
+    Причина возвращается текстом, а не флагом: человек должен видеть, почему
+    из трёхсот пар осталось двадцать, иначе отбор выглядит произволом."""
+    name = candidate.get("symbol", "?")
+
+    if candidate.get("trade_mode") == 0:
+        return f"{name}: брокер закрыл торговлю"
+
+    ratio = spread_cost_ratio(candidate.get("spread_points"),
+                              candidate.get("atr_points"))
+    if ratio >= 999:
+        return f"{name}: нет данных для оценки (нет баров или спреда)"
+    if max_spread_ratio > 0 and ratio > max_spread_ratio:
+        return (f"{name}: спред съедает {ratio * 100:.0f}% обычного движения "
+                f"(порог {max_spread_ratio * 100:.0f}%)")
+
+    risk = min_lot_risk_percent(candidate.get("min_lot"),
+                                candidate.get("stop_points"),
+                                candidate.get("money_per_point"), equity)
+    if risk >= 999:
+        return f"{name}: не удалось посчитать риск минимального лота"
+    if max_risk_percent > 0 and risk > max_risk_percent:
+        return (f"{name}: минимальный лот рискует {risk:.1f}% счёта "
+                f"(потолок {max_risk_percent:.1f}%)")
+    return ""
+
+
+def currencies_of(symbol: str) -> tuple:
+    """Из EURUSD -> ('EUR', 'USD'). Нужно, чтобы не набрать шесть пар, где
+    везде одна и та же валюта: это одна ставка, а не шесть.
+
+    Работает только для обычных шестибуквенных валютных пар — для индексов и
+    металлов вернёт пусто, и ограничение к ним просто не применится."""
+    clean = "".join(ch for ch in str(symbol or "").upper() if ch.isalpha())
+    if len(clean) < 6:
+        return ()
+    return (clean[:3], clean[3:6])
+
+
+def pick(candidates: list, equity: float, limit: int = DEFAULT_LIMIT,
+         max_risk_percent: float = 2.0, max_spread_ratio: float = 0.25,
+         per_currency: int = DEFAULT_PER_CURRENCY) -> dict:
+    """Выбрать лучшие пары. Возвращает {"chosen": [...], "rejected": [...]}.
+
+    Порядок — по цене входа: первыми идут те, где спред съедает меньшую долю
+    движения. Это не прогноз прибыли, а отсев дорогих инструментов."""
+    good, rejected = [], []
+    for item in candidates or ():
+        why = reject_reason(item, equity, max_risk_percent, max_spread_ratio)
+        if why:
+            rejected.append(why)
+            continue
+        good.append((spread_cost_ratio(item.get("spread_points"),
+                                       item.get("atr_points")),
+                     str(item.get("symbol"))))
+
+    good.sort(key=lambda row: (row[0], row[1]))
+
+    chosen, used = [], {}
+    for ratio, name in good:
+        if len(chosen) >= max(1, int(limit)):
+            break
+        pair = currencies_of(name)
+        if per_currency > 0 and pair:
+            if any(used.get(cur, 0) >= per_currency for cur in pair):
+                rejected.append(
+                    f"{name}: уже набрано {per_currency} пар с этой валютой — "
+                    f"это была бы та же ставка ещё раз")
+                continue
+            for cur in pair:
+                used[cur] = used.get(cur, 0) + 1
+        chosen.append(name)
+
+    return {"chosen": chosen, "rejected": rejected}
+
+
+def describe(result: dict, total: int = 0) -> str:
+    """Одна строка для окна и журнала."""
+    chosen = result.get("chosen") or []
+    if not chosen:
+        return "Подходящих пар не нашлось — проверьте связь с терминалом."
+    head = f"Выбрано {len(chosen)} пар"
+    if total:
+        head += f" из {total} у брокера"
+    return head + ": " + ", ".join(chosen)
