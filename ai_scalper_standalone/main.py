@@ -1307,11 +1307,13 @@ def auto_pick_symbols(equity: float, deadline: float = None,
     # замеряем: терминал начинает подкачивать историю в момент добавления, и
     # к моменту замера она успевает подойти. Замеряй мы сразу после
     # добавления каждой, последние пары остались бы без баров.
+    added_now = []
     for name in shortlist:
         if time.time() > deadline:
             break
         try:
-            mt5c.ensure_symbol(name)
+            if mt5c.select_symbol(name) == "добавлена":
+                added_now.append(name)
         except Exception:       # noqa: BLE001
             continue
 
@@ -1338,8 +1340,6 @@ def auto_pick_symbols(equity: float, deadline: float = None,
     # успели в этот раз, замерится при следующем запуске, и так пока не будет
     # покрыт весь список брокера.
     cached = symbol_cache.merge(cached, surveyed)
-    if surveyed:
-        symbol_cache.save(cached, server=str(getattr(acc_server, "server", "") or ""))
     line = symbol_cache.describe(cached, len(passed), len(surveyed))
     log.info("%s", line)
     if len(cached) < len(passed):
@@ -1354,6 +1354,34 @@ def auto_pick_symbols(equity: float, deadline: float = None,
                                  symbol_picker.DEFAULT_PER_CURRENCY)))
 
     chosen = result["chosen"]
+
+    # УБИРАЕМ ЗА СОБОЙ. Программа добавляет пары в «Обзор рынка», чтобы их
+    # замерить, — иначе терминал не отдаёт ни баров, ни спреда. Но оставлять
+    # их там нельзя: у брокера тысячи инструментов, и «Обзор рынка», забитый
+    # сотнями чужих акций, замедляет сам терминал. Владелец это и увидел на
+    # снимке экрана: A, AA, AAA, AAAA...
+    #
+    # Убираем ТОЛЬКО то, что добавили сами, и только то, что не нужно: пары в
+    # работе и пары с открытой сделкой остаются на месте.
+    added_all = set(symbol_cache.load_added(
+        server=str(getattr(acc_server, "server", "") or ""))) | set(added_now)
+    try:
+        busy = {p.symbol for p in (mt5c.get_open_positions() or ())}
+    except Exception:           # noqa: BLE001
+        busy = set()
+    extra = symbol_cache.to_clean_up(added_all, chosen, busy)
+    cleaned = 0
+    for name in extra:
+        if mt5c.deselect_symbol(name):
+            cleaned += 1
+            added_all.discard(name)
+    if cleaned:
+        log.info("Убрал из «Обзора рынка» %d пар, которые добавлял для замера",
+                 cleaned)
+
+    symbol_cache.save(cached, server=str(getattr(acc_server, "server", "") or ""),
+                      added=sorted(added_all))
+
     if chosen:
         log.info("%s", symbol_picker.describe(result, len(available)))
         runtime_events.record("пары", symbol_picker.describe(result, len(available)))

@@ -95,17 +95,50 @@ def load(path: str = "", server: str = "") -> dict:
     return {name: row for name, row in rows.items() if isinstance(row, dict)}
 
 
-def save(rows: dict, server: str = "", path: str = "") -> bool:
-    """Записать замеры. Не вышло — не беда: в следующий раз замерим снова."""
+def save(rows: dict, server: str = "", path: str = "",
+         added: list = None) -> bool:
+    """Записать замеры. Не вышло — не беда: в следующий раз замерим снова.
+
+    added — пары, которые программа САМА добавила в «Обзор рынка» терминала.
+    Список нужен, чтобы за собой убрать: убирать можно только своё, а пары,
+    открытые человеком, трогать нельзя."""
     try:
         with open(path or store_path(), "w", encoding="utf-8") as f:
             json.dump({"version": VERSION, "server": server or "",
                        "saved_at": time.time(),
+                       "added_by_us": sorted(set(added or ())),
                        "symbols": rows or {}}, f)
         return True
     except OSError as e:
         log.debug("Не удалось сохранить замеры пар: %s", e)
         return False
+
+
+def load_added(path: str = "", server: str = "") -> list:
+    """Пары, которые программа сама добавляла в «Обзор рынка»."""
+    try:
+        with open(path or store_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict) or data.get("version") != VERSION:
+        return []
+    if server and data.get("server") and data.get("server") != server:
+        return []
+    names = data.get("added_by_us")
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
+def to_clean_up(added, keep, busy=None) -> list:
+    """Кого убрать из «Обзора рынка». Три правила, и все три обязательны.
+
+    1. Убираем ТОЛЬКО то, что добавляли сами.
+    2. Не трогаем пары, которые сейчас в работе, — иначе торговля сломается.
+    3. Не трогаем пары с открытой сделкой: позицию надо довести до конца, а
+       без пары в «Обзоре рынка» терминал не даст ею управлять."""
+    keep = set(str(n) for n in (keep or ()))
+    busy = set(str(n) for n in (busy or ()))
+    return sorted({str(n) for n in (added or ())} - keep - busy)
 
 
 def is_fresh(row: dict, now: float = None,

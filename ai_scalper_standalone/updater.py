@@ -704,9 +704,30 @@ def _open_binary(url: str, accept: str, timeout: int = 300):
         return response
 
 
+# Меньше этого рабочей программой файл быть не может: одна только упаковка
+# Python с библиотеками весит десятки мегабайт. Если скачалось меньше — это
+# обрывок, а не программа.
+MIN_EXE_BYTES = 5 * 1024 * 1024
+
+
+class TruncatedDownload(Exception):
+    """Файл скачался не полностью. Отдельный тип — чтобы не спутать с сетевой
+    ошибкой: сеть можно повторить, а обрывок нельзя ставить НИКОГДА."""
+
+
 def download_binary(url: str, destination: str, accept: str,
-                    progress=None) -> None:
-    """Скачивает большой файл на диск кусками, не держа его целиком в памяти."""
+                    progress=None) -> int:
+    """Скачивает большой файл кусками и ПРОВЕРЯЕТ, что он дошёл целиком.
+
+    ПОЧЕМУ ПРОВЕРКА ЗДЕСЬ ГЛАВНОЕ. Раньше цикл просто заканчивался, когда
+    поток переставал отдавать данные, — а обрыв связи выглядит точно так же.
+    Обрезанный файл молча вставал на место рабочей программы, и она переставала
+    запускаться: у собранного .exe внутри упакованы библиотеки, и на обрубке
+    распаковка падает с невнятной ошибкой вроде «Can't find a usable init.tcl».
+    Именно это и увидел владелец.
+
+    Возвращает число скачанных байт. Не сошлось с обещанным — бросаем
+    TruncatedDownload, и вызывающий обязан НЕ ставить такой файл."""
     with _open_binary(url, accept=accept, timeout=300) as response:
         total = int(response.headers.get("Content-Length") or 0)
         done = 0
@@ -722,6 +743,27 @@ def download_binary(url: str, destination: str, accept: str,
                         progress(f"Скачиваю программу: {done * 100 // total}%")
                     except Exception:
                         pass
+
+    if total and done != total:
+        raise TruncatedDownload(
+            f"файл скачался не полностью: {done} байт из {total}")
+    return done
+
+
+def looks_like_program(path: str) -> str:
+    """Похоже ли скачанное на рабочую программу. Пусто — похоже.
+
+    Вторая застава на случай, если сервер не сказал размер заранее: тогда
+    сверять не с чем, и остаётся здравый смысл — программа не может весить
+    меньше нескольких мегабайт."""
+    try:
+        size = os.path.getsize(path)
+    except OSError as e:
+        return f"скачанный файл не читается ({e})"
+    if size < MIN_EXE_BYTES:
+        return (f"скачано всего {size / 1024 / 1024:.1f} МБ — это обрывок, "
+                f"а не программа (рабочая версия весит десятки мегабайт)")
+    return ""
 
 
 def latest_release_exe() -> dict:
@@ -847,6 +889,12 @@ def download_new_exe(progress=None) -> dict:
             say(f"Скачиваю версию {release.get('tag', '')}...")
             download_binary(release["url"], temporary,
                             accept="application/octet-stream", progress=progress)
+            broken = looks_like_program(temporary)
+            if broken:
+                result["error"] = ("Обновление не установлено: " + broken +
+                                   ". Прежняя версия осталась на месте — "
+                                   "попробуйте ещё раз при устойчивой связи.")
+                return result
             os.replace(temporary, destination)
             result.update(ok=True, source=f"релиз {release.get('tag', '')}")
             return result
@@ -889,6 +937,11 @@ def download_new_exe(progress=None) -> dict:
         try:
             if not _extract_exe(archive_path, temporary):
                 result["error"] = "В сборке не нашёлся .exe."
+                return result
+            broken = looks_like_program(temporary)
+            if broken:
+                result["error"] = ("Обновление не установлено: " + broken +
+                                   ". Прежняя версия осталась на месте.")
                 return result
         finally:
             try:
@@ -1048,6 +1101,21 @@ def apply_pending_swap(attempts: int = 12, pause: float = 0.5) -> str:
     new_path = pending_swap_path()
     if not os.path.exists(new_path):
         return ""
+
+    # ПОСЛЕДНЯЯ ЗАСТАВА ПЕРЕД ПОДМЕНОЙ. Файл мог быть скачан прежней версией
+    # программы, где проверки не было, или испортиться на диске уже после
+    # скачивания. Ставить обрубок на место работающей программы нельзя ни при
+    # каких обстоятельствах: обратно её человек сам не вернёт.
+    broken = looks_like_program(new_path)
+    if broken:
+        try:
+            os.remove(new_path)
+        except OSError:
+            pass
+        log.warning("Скачанное обновление негодно (%s) — не ставлю", broken)
+        return ("Скачанное обновление оказалось повреждено (" + broken +
+                "). Оно удалено, программа осталась прежней. "
+                "Попробуйте обновиться ещё раз при устойчивой связи.")
 
     current = sys.executable
     backup = current + ".old"

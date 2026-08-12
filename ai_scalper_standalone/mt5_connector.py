@@ -214,6 +214,37 @@ def ensure_symbol(symbol: str) -> bool:
     return True
 
 
+def select_symbol(symbol: str) -> str:
+    """Добавить пару в «Обзор рынка» и сказать, ДОБАВИЛИ ли мы её.
+
+    Разница важна. Программа добавляет пары сама, чтобы их замерить, — и
+    обязана за собой убрать. Но убирать можно только то, что добавили МЫ:
+    пары, которые человек открыл сам, трогать нельзя.
+
+    Возвращает "добавлена" — её не было и мы добавили; "была" — уже была
+    открыта; "" — не вышло."""
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return ""
+    if info.visible:
+        return "была"
+    if not mt5.symbol_select(symbol, True):
+        return ""
+    return "добавлена"
+
+
+def deselect_symbol(symbol: str) -> bool:
+    """Убрать пару из «Обзора рынка». Только для тех, кого добавили мы.
+
+    MetaTrader сам не даст убрать пару с открытой позицией или открытым
+    графиком — вернёт отказ, и это правильно."""
+    try:
+        return bool(mt5.symbol_select(symbol, False))
+    except Exception as e:      # noqa: BLE001
+        log.debug("Не удалось убрать %s из «Обзора рынка»: %s", symbol, e)
+        return False
+
+
 def get_rates_df(symbol: str, timeframe: str, count: int = 300):
     import pandas as pd
 

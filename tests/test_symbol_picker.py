@@ -331,11 +331,14 @@ def test_pair_must_be_added_to_market_watch_first() -> None:
 
     src = (APP / "main.py").read_text(encoding="utf-8")
     body = src.split("def auto_pick_symbols", 1)[1].split("\ndef ", 1)[0]
-    check("ensure_symbol" in body,
+    # select_symbol — то же добавление в «Обзор рынка», но оно ещё и говорит,
+    # добавили пару МЫ или она уже была открыта человеком: по этому различию
+    # программа потом убирает за собой только своё.
+    check("select_symbol" in body,
           "Все пары добавляются в «Обзор рынка» до замеров")
     # Порядок: сперва добавить ВСЕ, потом мерить. Иначе первые пары успеют
     # подкачать историю, а последние — нет, и выпадут из отбора на весь сеанс
-    check(body.index("ensure_symbol") < body.index("survey_symbol(name)"),
+    check(body.index("select_symbol") < body.index("survey_symbol(name)"),
           "Сначала добавляются ВСЕ пары, и только потом идут замеры")
 
 

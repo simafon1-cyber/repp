@@ -21,6 +21,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -268,6 +269,128 @@ def test_progress_line_does_not_lie() -> None:
     check(sc.describe({}, total=0, measured_now=0) != "", "Пусто не роняет")
 
 
+def test_market_watch_is_cleaned_up() -> None:
+    """ОТКУДА ЭТОТ ТЕСТ. На снимке экрана владельца «Обзор рынка» терминала
+    забит сотнями чужих акций: A, AA, AAA, AAAA, AAAC... Это добавила моя же
+    программа, чтобы их замерить, и не убрала за собой. Терминал от такого
+    списка сам начинает тормозить."""
+    print("\n[Программа убирает за собой в «Обзоре рынка»]")
+
+    added = ["AAA", "AAAA", "EURUSD", "GBPUSD", "XYZ"]
+    chosen = ["EURUSD", "GBPUSD"]
+
+    extra = sc.to_clean_up(added, chosen)
+    check(extra == ["AAA", "AAAA", "XYZ"], "Убираем лишнее", str(extra))
+    check("EURUSD" not in extra, "Рабочие пары НЕ трогаем — торговля сломается")
+
+    # Пара с открытой сделкой остаётся: без неё терминал не даст вести позицию
+    extra = sc.to_clean_up(added, chosen, busy=["XYZ"])
+    check("XYZ" not in extra, "Пара с открытой сделкой остаётся", str(extra))
+
+    # Чужое не трогаем никогда: убираем только из списка «добавили сами»
+    extra = sc.to_clean_up(["AAA"], [], busy=[])
+    check(extra == ["AAA"], "Своё убираем")
+    extra = sc.to_clean_up([], ["что-угодно"], busy=[])
+    check(extra == [], "Ничего не добавляли — ничего и не убираем")
+
+    check(sc.to_clean_up(None, None, None) == [], "Пусто не роняет")
+
+    # Список «добавили сами» переживает перезапуск
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "s.json")
+        sc.save({"EURUSD": row("EURUSD")}, server="Demo", path=path,
+                added=["AAA", "AAAA"])
+        check(sc.load_added(path=path, server="Demo") == ["AAA", "AAAA"],
+              "Список сохранён и прочитан",
+              str(sc.load_added(path=path, server="Demo")))
+        check(sc.load_added(path=path, server="Другой") == [],
+              "У другого брокера — свой список, чужой не берём")
+        check(sc.load_added(path=os.path.join(folder, "нет.json")) == [],
+              "Нет файла — пустой список, а не падение")
+
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    body = src.split("def auto_pick_symbols", 1)[1].split("\ndef ", 1)[0]
+    check("mt5c.deselect_symbol" in body, "Уборка вызывается при запуске")
+    check("symbol_cache.to_clean_up" in body, "И решает, кого убрать, общий код")
+    # Уборка обязана идти ПОСЛЕ отбора: до него неизвестно, что оставлять
+    check(body.index("chosen = result[") < body.index("to_clean_up"),
+          "Убираем ПОСЛЕ того, как стало известно, какие пары нужны")
+    check("get_open_positions" in body,
+          "Пары с открытой сделкой из уборки исключаются")
+
+    # Уборка обязана идти именно по списку лишних, а не по чему попало
+    func = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.FunctionDef) and n.name == "auto_pick_symbols")
+    loops = [ast.unparse(n.iter) for n in ast.walk(func) if isinstance(n, ast.For)
+             and "deselect_symbol" in ast.unparse(n)]
+    check(loops == ["extra"],
+          "Убираются ровно те пары, которые посчитаны лишними", str(loops))
+
+    # Без записи «эту добавили мы» убирать будет нечего, и Обзор рынка снова
+    # зарастёт. Мутация, которая просто выбрасывала запись, текстовые проверки
+    # проходила — поэтому смотрим на строение цикла.
+    add_loops = [n for n in ast.walk(func) if isinstance(n, ast.For)
+                 and "select_symbol" in ast.unparse(n)
+                 and "deselect_symbol" not in ast.unparse(n)]
+    check(len(add_loops) == 1, "Добавление пар — один цикл", str(len(add_loops)))
+    if add_loops:
+        inner = ast.unparse(add_loops[0])
+        check("added_now.append" in inner,
+              "Добавленная НАМИ пара запоминается — иначе убирать будет нечего")
+        check("добавлена" in inner,
+              "И запоминается только та, которую добавили мы", inner[:200])
+
+    # РАЗЛИЧИЕ «ДОБАВИЛИ МЫ» / «БЫЛА ОТКРЫТА» — проверяем на живом коде.
+    # Спутать их значит убрать у человека пары, которые он открыл сам.
+    real_mt5 = sys.modules.get("MetaTrader5")
+    try:
+        picked_up = []
+        fake = types.ModuleType("MetaTrader5")
+        state = {"visible": False, "ok": True, "info": True}
+        fake.symbol_info = lambda name: (
+            types.SimpleNamespace(visible=state["visible"]) if state["info"] else None)
+
+        def fake_select(name, on):
+            picked_up.append((name, on))
+            return state["ok"]
+
+        fake.symbol_select = fake_select
+        # Константы, которые mt5_connector читает при импорте. Их состав
+        # берётся из самого модуля, а не переписывается сюда руками: иначе
+        # добавят одну новую — и тест сломается на пустом месте.
+        source = (APP / "mt5_connector.py").read_text(encoding="utf-8")
+        for i, const in enumerate(sorted(set(
+                re.findall(r"mt5\.([A-Z][A-Z0-9_]+)", source)))):
+            setattr(fake, const, i + 1)
+        sys.modules["MetaTrader5"] = fake
+        sys.modules.pop("mt5_connector", None)
+        sys.modules["config"] = cfg
+        import mt5_connector as mt5c
+
+        state["visible"] = False
+        check(mt5c.select_symbol("AAA") == "добавлена",
+              "Пары не было — говорим «добавлена», её потом уберём")
+
+        state["visible"] = True
+        picked_up.clear()
+        check(mt5c.select_symbol("EURUSD") == "была",
+              "Пара была открыта ЧЕЛОВЕКОМ — говорим «была», трогать нельзя")
+        check(picked_up == [],
+              "И терминал по ней не дёргаем вовсе", str(picked_up))
+
+        state["visible"] = False
+        state["ok"] = False
+        check(mt5c.select_symbol("BBB") == "",
+              "Не удалось добавить — не считаем своей, иначе уберём чужое")
+
+        state["info"] = False
+        check(mt5c.select_symbol("НЕТУ") == "", "Неизвестной пары нет — пусто")
+    finally:
+        if real_mt5 is not None:
+            sys.modules["MetaTrader5"] = real_mt5
+        sys.modules.pop("mt5_connector", None)
+
+
 if __name__ == "__main__":
     print("=" * 62)
     print("ТЕСТЫ: ЗАМЕРЫ ПАР ХРАНЯТСЯ В ФАЙЛЕ")
@@ -282,6 +405,7 @@ if __name__ == "__main__":
     test_wired_into_startup()
     test_file_is_not_committed()
     test_progress_line_does_not_lie()
+    test_market_watch_is_cleaned_up()
     print()
     print("=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

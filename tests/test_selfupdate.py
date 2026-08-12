@@ -305,8 +305,14 @@ def test_swap_retries_and_backs_up() -> None:
     print("\n[Подмена переживает «файл занят» и оставляет откат]")
     with tempfile.TemporaryDirectory() as d:
         current = os.path.join(d, "AI_Scalper_Pro.exe")
-        Path(current).write_bytes("СТАРАЯ".encode("utf-8"))
-        Path(current + ".new").write_bytes("НОВАЯ".encode("utf-8"))
+        # Размер настоящий: подмена нарочно отказывается ставить файл, который
+        # для программы слишком мал, — обрезанная закачка так и оставляла
+        # человека без работающей программы. Поэтому подделка должна выглядеть
+        # как программа, иначе тест проверял бы недостижимый случай.
+        old_body = "СТАРАЯ".encode("utf-8") + b"\0" * up.MIN_EXE_BYTES
+        new_body = "НОВАЯ".encode("utf-8") + b"\0" * up.MIN_EXE_BYTES
+        Path(current).write_bytes(old_body)
+        Path(current + ".new").write_bytes(new_body)
 
         saved_frozen = getattr(sys, "frozen", None)
         saved_exe = sys.executable
@@ -322,11 +328,39 @@ def test_swap_retries_and_backs_up() -> None:
                 sys.frozen = saved_frozen
 
         check("обновлена" in text, "Подмена удалась", text)
-        check(open(current, "rb").read() == "НОВАЯ".encode("utf-8"), "На месте новая версия")
-        check(open(current + ".old", "rb").read() == "СТАРАЯ".encode("utf-8"),
+        check(open(current, "rb").read() == new_body, "На месте новая версия")
+        check(open(current + ".old", "rb").read() == old_body,
               "Старая сохранена — есть куда вернуться")
         check(not os.path.exists(current + ".new"),
               "Временный файл убран, повторной подмены не будет")
+
+    # А вот обрубок ставиться не должен ни при каких условиях
+    with tempfile.TemporaryDirectory() as d:
+        current = os.path.join(d, "AI_Scalper_Pro.exe")
+        working = "РАБОЧАЯ".encode("utf-8") + b"\0" * up.MIN_EXE_BYTES
+        Path(current).write_bytes(working)
+        Path(current + ".new").write_bytes("обрывок".encode("utf-8"))
+
+        saved_frozen = getattr(sys, "frozen", None)
+        saved_exe = sys.executable
+        sys.frozen = True
+        sys.executable = current
+        try:
+            text = up.apply_pending_swap(attempts=2, pause=0.01)
+        finally:
+            sys.executable = saved_exe
+            if saved_frozen is None:
+                del sys.frozen
+            else:
+                sys.frozen = saved_frozen
+
+        check(open(current, "rb").read() == working,
+              "РАБОЧАЯ ПРОГРАММА ОСТАЛАСЬ НА МЕСТЕ — главное во всём этом тесте")
+        check("повреждено" in text, "И человеку сказано, что случилось", text)
+        check(not os.path.exists(current + ".new"),
+              "Обрубок удалён, чтобы не мешать при следующем запуске")
+        check(not os.path.exists(current + ".old"),
+              "И откат не создавался: заменять было нечем")
 
     # Без скачанного файла подмена молчит
     saved_frozen = getattr(sys, "frozen", None)
@@ -868,11 +902,93 @@ def main() -> int:
     test_artifact_download_explains_real_reason()
     test_version_is_visible()
     test_update_everything_covers_both()
+    test_truncated_download_never_replaces_working_program()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
     print("=" * 62)
     return 1 if failed else 0
+
+
+def test_truncated_download_never_replaces_working_program() -> None:
+    """САМЫЙ ДОРОГОЙ СБОЙ ИЗ ВСЕХ. Владелец прислал снимок экрана: программа
+    не запускается вовсе, «Can't find a usable init.tcl... This probably means
+    that Tcl wasn't installed properly».
+
+    Причина была здесь. Скачивание просто крутило цикл, пока поток отдаёт
+    данные, — а обрыв связи выглядит ровно так же, как конец файла. Обрезанный
+    файл молча вставал на место работающей программы. Внутри собранного .exe
+    упакованы библиотеки; на обрубке распаковка падает, и человек остаётся без
+    программы, которую сам вернуть не может.
+
+    Правило простое: не уверены, что файл дошёл целиком — НЕ СТАВИМ."""
+    print("\n[Обрезанная закачка не может заменить рабочую программу]")
+
+    class FakeResponse(io.BytesIO):
+        def __init__(self, data, promised):
+            super().__init__(data)
+            self.headers = {"Content-Length": str(promised)}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    with tempfile.TemporaryDirectory() as folder:
+        target = os.path.join(folder, "prog.exe")
+        original = up._open_binary
+        try:
+            # Обещано 10 МБ, пришло 3 — это обрыв
+            up._open_binary = lambda *a, **k: FakeResponse(b"x" * (3 * 1024 * 1024),
+                                                           10 * 1024 * 1024)
+            try:
+                up.download_binary("http://x", target, accept="*/*")
+                check(False, "Недокачка обязана быть замечена")
+            except up.TruncatedDownload as e:
+                check(True, "Недокачка замечена и названа своим именем")
+                check("3" in str(e) and "10" in str(e),
+                      "И сказано, сколько пришло из скольких", str(e))
+
+            # Пришло ровно столько, сколько обещано — это нормально
+            up._open_binary = lambda *a, **k: FakeResponse(b"y" * 2048, 2048)
+            got = up.download_binary("http://x", target, accept="*/*")
+            check(got == 2048, "Полная закачка проходит", str(got))
+        finally:
+            up._open_binary = original
+
+        # Вторая застава: размер. Нужна, когда сервер не сказал размер заранее
+        small = os.path.join(folder, "small.exe")
+        with open(small, "wb") as f:
+            f.write(b"z" * 1024)
+        why = up.looks_like_program(small)
+        check(why != "", "Файл в килобайт — не программа", why or "(пусто)")
+        check("обрывок" in why, "И человеку сказано понятно", why)
+
+        big = os.path.join(folder, "big.exe")
+        with open(big, "wb") as f:
+            f.write(b"z" * (up.MIN_EXE_BYTES + 1))
+        check(up.looks_like_program(big) == "", "Нормальный размер проходит")
+        check(up.looks_like_program(os.path.join(folder, "нет")) != "",
+              "Отсутствующий файл — тоже негоден")
+
+    src = (APP / "updater.py").read_text(encoding="utf-8")
+
+    # Проверка обязана стоять ПЕРЕД подменой файла, а не после
+    swap = src.split("def apply_pending_swap", 1)[1].split("\ndef ", 1)[0]
+    check("looks_like_program" in swap, "Перед подменой файл проверяется")
+    check(swap.index("looks_like_program") < swap.index("os.replace(current, backup)"),
+          "И именно ДО подмены, а не после")
+    check("os.remove(new_path)" in swap,
+          "Негодный файл удаляется, чтобы не мешать при следующем запуске")
+
+    download = src.split("def download_new_exe", 1)[1].split("\ndef ", 1)[0]
+    check(download.count("looks_like_program") >= 2,
+          "Оба пути скачивания (релиз и сборка) проверяются",
+          str(download.count("looks_like_program")))
+    for piece in download.split("looks_like_program")[1:]:
+        check("os.replace(temporary, destination)" not in piece.split("if broken")[0],
+              "Подмена не делается раньше проверки")
 
 
 if __name__ == "__main__":
