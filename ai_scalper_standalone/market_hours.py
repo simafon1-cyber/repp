@@ -259,6 +259,39 @@ def save_baseline(path: str = "") -> bool:
         return False
 
 
+def seed_baseline(symbol: str, spreads) -> int:
+    """Заполнить норму готовой историей спреда (из баров MT5).
+
+    ЗАЧЕМ. Без этого после КАЖДОЙ установки программы защита от неликвида
+    молчала целый час: нормы ещё нет, сравнивать не с чем, а выдумывать
+    запрет нельзя. Владелец это и заметил — «скачал обновление, перезапустил,
+    и опять пошли сделки».
+
+    Ждать час не нужно: MetaTrader хранит спред в каждом баре. Минутные бары
+    за сутки — это готовая суточная норма, настоящая и по этому же брокеру.
+
+    Заполняем только если своих замеров ещё мало: живые данные всегда
+    точнее исторических, затирать их нельзя."""
+    clean = []
+    for value in spreads or ():
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 < v < 1_000_000:
+            clean.append(v)
+    if not clean:
+        return 0
+    global _dirty
+    with _lock:
+        have = len(_baseline.get(symbol, ()))
+        if have >= BASELINE_MIN_SAMPLES:
+            return 0                      # уже есть свои наблюдения
+        _baseline[symbol] = clean[-BASELINE_SAMPLES:]
+        _dirty = True
+        return len(_baseline[symbol])
+
+
 def load_baseline(path: str = "") -> int:
     """Прочитать норму прошлого запуска. Возвращает число загруженных пар."""
     try:

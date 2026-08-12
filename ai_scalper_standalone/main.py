@@ -895,6 +895,7 @@ _last_config_check = datetime.now()
 
 
 _last_remote_sync = None
+_baselines_seeded = {"done": False}
 
 
 def sync_remote_settings():
@@ -1091,6 +1092,38 @@ def _sleep_interruptible(seconds: float, stop_event):
         stop_event.wait(timeout=seconds)
 
 
+def seed_spread_baselines(symbols) -> int:
+    """Взять суточную норму спреда из минутных баров MetaTrader.
+
+    Владелец: «скачал обновление, перезакрыл, заново открыл — и опять пошли
+    сделки». Одна из причин была именно здесь, и создал её я. Защита от
+    неликвида не судит, пока не накопит час наблюдений, — а после каждой
+    установки программы наблюдений НЕТ, и первый час она молчала. Перезапуск
+    буквально снимал защиту на час.
+
+    Ждать час не нужно: MetaTrader хранит спред в КАЖДОМ баре. 1440 минутных
+    баров — это готовая суточная норма, по этому же брокеру и этой же паре.
+
+    Возвращает, скольким парам норма проставлена."""
+    seeded = 0
+    for symbol in symbols or ():
+        try:
+            df = mt5c.get_rates_df(symbol, "M1", count=market_hours.BASELINE_SAMPLES)
+            if df is None or "spread" not in df:
+                continue
+            if market_hours.seed_baseline(symbol, df["spread"].tolist()):
+                seeded += 1
+        except Exception as e:      # noqa: BLE001
+            # История спреда — приятное дополнение, а не условие работы.
+            # Не вышло по одной паре — молча идём дальше.
+            log.debug("Не удалось взять историю спреда по %s: %s", symbol, e)
+    if seeded:
+        log.info("Норма спреда взята из истории по %d парам — защита от "
+                 "неликвида работает сразу, а не через час", seeded)
+        market_hours.save_baseline()
+    return seeded
+
+
 def _bot_tickets(positions) -> set:
     """Тикеты открытых сделок ЭТОГО бота — набор для cleanup_peak_profit().
 
@@ -1240,6 +1273,15 @@ def main(stop_event=None, start_dashboard: bool = True):
                     _sleep_interruptible(cfg.POLL_SECONDS, stop_event)
                     continue
                 connect_failures = 0
+
+                # Норму спреда добираем из истории ОДИН раз за запуск, сразу
+                # после того как связь есть: до подключения MetaTrader баров
+                # не отдаст. Без этого защита от неликвида молчала первый час
+                # после КАЖДОЙ установки программы — перезапуск буквально
+                # снимал её (см. seed_spread_baselines).
+                if not _baselines_seeded["done"]:
+                    _baselines_seeded["done"] = True
+                    seed_spread_baselines(list(sym_states.keys()))
 
                 # Сначала забираем настройки из GitHub, потом перечитываем
                 # config.py: так изменения применяются на этой же итерации, а

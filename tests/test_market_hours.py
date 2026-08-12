@@ -260,6 +260,78 @@ def test_baseline_is_throttled_to_once_a_minute() -> None:
           f"{hours:.0f} ч")
 
 
+def test_restart_does_not_disable_the_guard() -> None:
+    """ЖАЛОБА ВЛАДЕЛЬЦА: «скачал обновление, перезакрыл, заново открыл — и
+    опять пошли сделки».
+
+    Причину создал я. Защита не судит, пока не накопит час наблюдений — это
+    правильно, судить не с чем. Но после КАЖДОЙ установки программы
+    наблюдений нет, и первый час защиты не было вовсе. Перезапуск буквально
+    снимал её на час.
+
+    Ждать не нужно: MetaTrader хранит спред в каждом баре, и суточная норма
+    берётся из истории сразу."""
+    print("\n[Перезапуск не снимает защиту на час]")
+    mh.reset()
+    check(mh.normal_spread("EURUSD") == 0.0,
+          "Сразу после запуска нормы нет — судить не с чем")
+    check(mh.thin_reason(100, mh.normal_spread("EURUSD"),
+                         mh.spread_samples("EURUSD"), 2.5, 30) == "",
+          "И широкий спред в этот момент не ловится — вот она, дыра")
+
+    # История из баров: сутки спокойного рынка
+    seeded = mh.seed_baseline("EURUSD", [10] * 1440)
+    check(seeded > 0, "Норма взята из истории", str(seeded))
+    check(mh.normal_spread("EURUSD") == 10, "И это спокойный спред")
+    check(mh.thin_reason(40, mh.normal_spread("EURUSD"),
+                         mh.spread_samples("EURUSD"), 2.5, 30) != "",
+          "Теперь широкий спред ловится СРАЗУ, без часа ожидания")
+
+
+def test_seeding_never_overwrites_live_data() -> None:
+    """Живые замеры точнее исторических: история усреднена по минуте, а мы
+    видим спред как он есть. Затирать своё чужим нельзя."""
+    print("\n[История не затирает собственные наблюдения]")
+    mh.reset()
+    _fill_baseline("EURUSD", [30] * 200)          # свои наблюдения
+    before = mh.normal_spread("EURUSD")
+    check(mh.seed_baseline("EURUSD", [5] * 1440) == 0,
+          "Своих наблюдений хватает — история не подставляется")
+    check(mh.normal_spread("EURUSD") == before,
+          "И норма не изменилась", f"{before} -> {mh.normal_spread('EURUSD')}")
+
+    # А если своих мало — история нужна
+    mh.reset()
+    _fill_baseline("EURUSD", [30] * 5)
+    check(mh.seed_baseline("EURUSD", [5] * 1440) > 0,
+          "Своих мало — историю берём")
+
+    # Мусор в истории не должен ломать норму
+    mh.reset()
+    check(mh.seed_baseline("EURUSD", []) == 0, "Пустая история — ничего")
+    check(mh.seed_baseline("EURUSD", [0, -3, "мусор", None]) == 0,
+          "Негодные значения отброшены целиком")
+    check(mh.seed_baseline("EURUSD", [10, "мусор", 12]) > 0,
+          "А годные из смеси — берутся")
+
+
+def test_seeding_is_wired_at_startup() -> None:
+    print("\n[Норма из истории берётся при запуске]")
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    check("def seed_spread_baselines" in src, "Функция есть")
+    check("seed_spread_baselines(" in src.split("while True:", 1)[1],
+          "И вызывается из торгового цикла")
+    body = src.split("def seed_spread_baselines", 1)[1].split("\ndef ", 1)[0]
+    check('"M1"' in body, "Берутся МИНУТНЫЕ бары — по ним и считается норма")
+    check("BASELINE_SAMPLES" in body,
+          "Столько же баров, сколько ячеек в норме (сутки)")
+    check('"spread"' in body, "Из баров берётся именно колонка спреда")
+    # Один раз за запуск, а не каждую итерацию: 1440 баров на пару — дорого
+    loop = src.split("while True:", 1)[1]
+    check("_baselines_seeded" in loop,
+          "Делается один раз за запуск, а не на каждом проходе")
+
+
 def test_no_verdict_without_enough_history() -> None:
     print("\n[Без накопленной нормы не судим]")
     mh.reset()
@@ -597,6 +669,9 @@ def main() -> int:
     test_normal_is_calm_market_not_average_day()
     test_sustained_wide_spread_is_caught()
     test_baseline_is_throttled_to_once_a_minute()
+    test_restart_does_not_disable_the_guard()
+    test_seeding_never_overwrites_live_data()
+    test_seeding_is_wired_at_startup()
     test_no_verdict_without_enough_history()
     test_baseline_survives_restart()
     test_thin_market()
