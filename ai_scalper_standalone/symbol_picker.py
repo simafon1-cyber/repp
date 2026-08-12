@@ -156,6 +156,72 @@ def currencies_of(symbol: str) -> tuple:
     return (clean[:3], clean[3:6])
 
 
+# Грубая мерка стопа для ПЕРВИЧНОГО отсева, в пунктах. Настоящий стоп
+# считается из ATR и спреда, но на первом этапе ни того, ни другого ещё нет —
+# а отсеять заведомо неподъёмные инструменты надо ДО того, как мы полезем за
+# барами. 200 пунктов — обычный порядок величины стопа на M5.
+STAGE1_STOP_POINTS = 200
+
+# Сколько пар доводить до настоящего замера. Ограничение существует не ради
+# красоты: замер требует добавить пару в «Обзор рынка», после чего терминал
+# лезет за историей на сервер. Это и есть та работа, которая при сотнях пар
+# превращала запуск в зависание.
+DEFAULT_SURVEY_LIMIT = 60
+
+
+def prefilter(candidates: list, equity: float, max_risk_percent: float,
+              assumed_stop_points: float = STAGE1_STOP_POINTS,
+              limit: int = DEFAULT_SURVEY_LIMIT) -> dict:
+    """ПЕРВЫЙ, ДЕШЁВЫЙ ЭТАП: отсев по постоянным данным контракта.
+
+    ЗАЧЕМ ОН ПОЯВИЛСЯ. Сначала отбор сразу шёл за барами по каждой паре
+    брокера. Владелец: «нет отклика от программы, виснет». Так и было:
+    чтобы получить бары, пару надо добавить в «Обзор рынка», после чего
+    терминал идёт за историей на сервер — и на сотнях пар запуск растягивался
+    на минуты. Программа не падала, она честно работала, но выглядело это как
+    зависание, а это одно и то же для того, кто на неё смотрит.
+
+    Здесь используются только те данные, которые терминал знает и БЕЗ
+    добавления пары в «Обзор рынка»: минимальный лот, цена пункта, разрешение
+    на торговлю. Ни баров, ни спреда — они дороги и на этом этапе не нужны.
+
+    Возвращает {"kept": [имена], "rejected": [причины]}. Порядок kept — от
+    самых дешёвых для счёта к дорогим: если до настоящего замера дойдут не
+    все, дойдут хотя бы посильные."""
+    good, rejected = [], []
+    for item in candidates or ():
+        name = str(item.get("symbol", "?"))
+
+        if item.get("trade_mode") == 0:
+            rejected.append(f"{name}: брокер закрыл торговлю")
+            continue
+
+        risk = min_lot_risk_percent(item.get("min_lot"), assumed_stop_points,
+                                    item.get("money_per_point"), equity)
+        if risk >= 999:
+            rejected.append(f"{name}: брокер не дал данных о контракте")
+            continue
+        if max_risk_percent > 0 and risk > max_risk_percent:
+            rejected.append(
+                f"{name}: даже минимальный лот рискует около {risk:.1f}% счёта "
+                f"(потолок {max_risk_percent:.1f}%)")
+            continue
+        good.append((risk, name))
+
+    good.sort(key=lambda row: (row[0], row[1]))
+    names = [name for _, name in good]
+    try:
+        cap = int(limit)
+    except (TypeError, ValueError):
+        cap = DEFAULT_SURVEY_LIMIT
+    if cap > 0 and len(names) > cap:
+        rejected.append(
+            f"ещё {len(names) - cap} пар не проверялись: за один запуск "
+            f"замеряется не больше {cap} — иначе запуск растягивается на минуты")
+        names = names[:cap]
+    return {"kept": names, "rejected": rejected}
+
+
 def pick(candidates: list, equity: float, limit: int = DEFAULT_LIMIT,
          max_risk_percent: float = 2.0, max_spread_ratio: float = 0.25,
          per_currency: int = DEFAULT_PER_CURRENCY) -> dict:

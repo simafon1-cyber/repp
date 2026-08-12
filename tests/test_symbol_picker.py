@@ -405,11 +405,139 @@ def main() -> int:
     test_stop_estimate_matches_real_trading()
     test_pair_must_be_added_to_market_watch_first()
     test_honest_about_all_pairs()
+    test_startup_cannot_hang()
+    test_window_says_it_is_busy()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
     print("=" * 62)
     return 1 if failed else 0
+
+
+def test_startup_cannot_hang() -> None:
+    """ОТКУДА ЭТОТ ТЕСТ. Владелец: «нет отклика от программы, виснет».
+
+    Отбор шёл по ВСЕМ парам брокера сразу за барами. Чтобы получить бары,
+    пару надо добавить в «Обзор рынка», после чего терминал идёт за историей
+    на сервер — на сотнях пар запуск растягивался на минуты. Программа честно
+    работала, но для человека перед экраном это то же самое, что зависла.
+
+    Здесь проверяется, что дорогая работа ОГРАНИЧЕНА: и по числу пар, и по
+    времени."""
+    print("\n[Запуск не может длиться бесконечно]")
+
+    # Первый этап — только описание контракта, без баров
+    # Цена пункта растёт чуть-чуть: все 200 пар счёту по карману, и проверяется
+    # именно ЛИМИТ, а не отсев по риску. С крупным шагом (1.0 + i) отсеивалось
+    # бы 195 пар по риску, и тест проверял бы совсем другое.
+    facts = [{"symbol": f"AA{i:02d}BB", "min_lot": 0.01,
+              "money_per_point": 1.0 + i * 0.001, "trade_mode": 4}
+             for i in range(200)]
+    stage1 = sp.prefilter(facts, equity=500, max_risk_percent=2.0, limit=60)
+    check(len(stage1["kept"]) == 60,
+          "До настоящего замера доходит не больше заданного числа пар",
+          str(len(stage1["kept"])))
+    check(any("не проверялись" in r for r in stage1["rejected"]),
+          "И об отброшенных сказано прямо, а не молча")
+
+    # Порядок: самые посильные для счёта — первыми. Если время кончится,
+    # успеют именно те, на которых счёт может торговать. Вход НАРОЧНО подан
+    # в обратном порядке: иначе проверка проходила бы и без сортировки.
+    shuffled = [{"symbol": "DEAR", "min_lot": 0.01, "money_per_point": 9.0,
+                 "trade_mode": 4},
+                {"symbol": "MIDDLE", "min_lot": 0.01, "money_per_point": 4.0,
+                 "trade_mode": 4},
+                {"symbol": "CHEAP", "min_lot": 0.01, "money_per_point": 1.0,
+                 "trade_mode": 4}]
+    order = sp.prefilter(shuffled, equity=5000, max_risk_percent=2.0)["kept"]
+    check(order == ["CHEAP", "MIDDLE", "DEAR"],
+          "Первыми идут самые дешёвые для счёта, а не как пришли", str(order))
+    # И при нехватке времени успевает именно посильная пара
+    limited = sp.prefilter(shuffled, equity=5000, max_risk_percent=2.0, limit=1)
+    check(limited["kept"] == ["CHEAP"],
+          "Успеет одна — успеет самая посильная", str(limited["kept"]))
+
+    # Неподъёмное отсекается ещё до баров
+    heavy = [{"symbol": "BTCUSD", "min_lot": 0.01, "money_per_point": 1000.0,
+              "trade_mode": 4},
+             {"symbol": "EURUSD", "min_lot": 0.01, "money_per_point": 1.0,
+              "trade_mode": 4},
+             {"symbol": "CLOSED", "min_lot": 0.01, "money_per_point": 1.0,
+              "trade_mode": 0}]
+    stage1 = sp.prefilter(heavy, equity=500, max_risk_percent=2.0)
+    check(stage1["kept"] == ["EURUSD"],
+          "Неподъёмное и закрытое отсеяно ДО обращения за барами",
+          str(stage1["kept"]))
+    check(any("BTCUSD" in r for r in stage1["rejected"]), "Причина названа")
+
+    check(sp.prefilter([], 500, 2.0)["kept"] == [], "Пустой список не роняет")
+    check(sp.prefilter(None, 500, 2.0)["kept"] == [], "None тоже")
+    check(sp.prefilter(facts, 500, 2.0, limit=0)["kept"] != [],
+          "Нулевой лимит не означает «ни одной пары»")
+
+    # Ограничение по ВРЕМЕНИ — в самом коде запуска
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    body = src.split("def auto_pick_symbols", 1)[1].split("\ndef ", 1)[0]
+    check("deadline" in body, "У отбора есть срок")
+    check(body.count("time.time() > deadline") >= 3,
+          "Срок проверяется на каждом дорогом шаге, а не один раз",
+          str(body.count("time.time() > deadline")))
+    # Проверяем СТРОЕНИЕ, а не наличие текста: «stage1 = что-угодно or
+    # symbol_picker.prefilter(...)» текст содержит, а дешёвый этап обходит.
+    func = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.FunctionDef) and n.name == "auto_pick_symbols")
+    calls = [ast.unparse(n.value.func) for n in ast.walk(func)
+             if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+             and ast.unparse(n.targets[0]) == "stage1"]
+    check(calls == ["symbol_picker.prefilter"],
+          "Результат дешёвого этапа берётся прямо из prefilter, без обходных путей",
+          str(calls))
+    check(body.index("prefilter") < body.index("survey_symbol(name)"),
+          "И именно ДО дорогого замера")
+    # Дорогой замер идёт ТОЛЬКО по выжившим, а не по всему списку брокера
+    check("for name in shortlist:" in body,
+          "Замеряются только прошедшие первый этап")
+    check("for name in available:\n        try:\n            row = survey_symbol" not in body,
+          "И весь список брокера в замер не идёт")
+    check("AUTO_PICK_MAX_SECONDS" in body, "Срок берётся из настроек")
+
+    # Дешёвый этап не должен трогать «Обзор рынка» — иначе он не дешёвый
+    facts_fn = src.split("def contract_facts", 1)[1].split("\ndef ", 1)[0]
+    check("ensure_symbol" not in facts_fn,
+          "Первый этап НЕ добавляет пары в «Обзор рынка» — в этом весь смысл")
+    check("get_rates_df" not in facts_fn, "И не запрашивает бары")
+
+    # Норма спреда — второе место, где запуск мог растянуться
+    seed = src.split("def seed_spread_baselines", 1)[1].split("\ndef ", 1)[0]
+    check("deadline" in seed, "Загрузка нормы спреда тоже ограничена по времени")
+    check("time.time() > deadline" in seed, "И срок реально проверяется")
+
+    check(int(CFG.AUTO_PICK_MAX_SECONDS) > 0, "Срок задан в настройках",
+          str(CFG.AUTO_PICK_MAX_SECONDS))
+    check(int(CFG.AUTO_PICK_SURVEY_LIMIT) > 0, "И число пар для замера тоже")
+
+
+def test_window_says_it_is_busy() -> None:
+    """Пока идёт подготовка, окно обязано об этом говорить. Молчащая
+    программа неотличима от зависшей — ровно это владелец и увидел."""
+    print("\n[Окно говорит, что занято, а не молчит]")
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    loop = ui.split("def _refresh_loop", 1)[1].split("\n    def ", 1)[0]
+
+    check("Подготовка" in loop,
+          "Пока первого круга не было, написано «Подготовка», а не «Работает»")
+    # События должны показываться и БЕЗ снимка: снимок появляется только
+    # после первого круга, а подготовка идёт до него
+    events_at = loop.index("runtime_events.describe(3)")
+    snap_block = loop.index("if snap:")
+    tail = loop[events_at:]
+    check(tail.count("problems.append") >= 1, "События попадают в список сообщений")
+    check(events_at > snap_block, "Проверка самого теста: блок идёт после снимка")
+    line = loop[loop.rindex("\n", 0, events_at) + 1:].split("\n", 1)[0]
+    indent = len(line) - len(line.lstrip())
+    check(indent == 12,
+          "Показ событий НЕ вложен внутрь «если есть снимок» — иначе во время "
+          "подготовки окно молчит", f"отступ {indent}: {line.strip()}")
 
 
 if __name__ == "__main__":

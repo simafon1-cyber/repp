@@ -1190,16 +1190,56 @@ def survey_symbol(symbol: str) -> dict:
     }
 
 
-def auto_pick_symbols(equity: float) -> list:
-    """Пройти по всему списку брокера и отобрать лучшие пары.
+def contract_facts(symbol: str) -> dict:
+    """Постоянные данные контракта — БЕЗ добавления пары в «Обзор рынка».
 
-    Владелец просил «работать на всех парах». На всех нельзя: у брокера их
-    сотни, а один проход стоит около 40 мс на пару — три сотни превратили бы
-    пятисекундный круг в двенадцатисекундный, и скальпер торговал бы по ценам
-    двенадцатисекундной давности. Поэтому берём лучшие по цене входа.
-    Подробный разбор — в symbol_picker.py."""
+    Терминал знает их и по паре, которую человек никогда не открывал: это
+    описание инструмента, а не котировки. Поэтому первый этап отбора стоит
+    почти ничего, а дорогая работа (история баров) достаётся только тем, кто
+    его прошёл."""
+    import MetaTrader5 as mt5
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return {}
+    point = float(getattr(info, "point", 0) or 0)
+    tick_value = float(getattr(info, "trade_tick_value", 0) or 0)
+    tick_size = float(getattr(info, "trade_tick_size", 0) or 0)
+    if point <= 0 or tick_value <= 0 or tick_size <= 0:
+        return {}
+    return {
+        "symbol": symbol,
+        "min_lot": float(getattr(info, "volume_min", 0) or 0),
+        "money_per_point": (point / tick_size) * tick_value,
+        "trade_mode": getattr(info, "trade_mode", None),
+    }
+
+
+def auto_pick_symbols(equity: float, deadline: float = None) -> list:
+    """Взять список пар у брокера и отобрать подходящие.
+
+    ОТБОР ИДЁТ В ДВА ЭТАПА, И ЭТО ГЛАВНОЕ В ЭТОЙ ФУНКЦИИ.
+
+    Сначала он был в один: по каждой паре брокера сразу запрашивались бары.
+    Владелец: «нет отклика от программы, виснет». Так и было. Чтобы получить
+    бары, пару надо добавить в «Обзор рынка», после чего терминал идёт за
+    историей на сервер — и на сотнях пар запуск растягивался на минуты.
+    Программа при этом честно работала, но для человека перед экраном
+    «работает минутами без признаков жизни» и «зависла» — одно и то же.
+
+    Этап 1 — дешёвый: только описание контракта (минимальный лот, цена
+    пункта, разрешена ли торговля). Ни баров, ни «Обзора рынка». Отсеивает
+    то, что счёту заведомо не по карману.
+
+    Этап 2 — дорогой: бары и спред, но только для выживших, не больше
+    AUTO_PICK_SURVEY_LIMIT штук и не дольше AUTO_PICK_MAX_SECONDS.
+
+    Время ограничено ЖЁСТКО. Кончилось — берём то, что успели: неполный
+    список лучше запуска, который не кончается."""
     if not getattr(cfg, "AUTO_PICK_SYMBOLS", False):
         return []
+    if deadline is None:
+        deadline = time.time() + float(
+            getattr(cfg, "AUTO_PICK_MAX_SECONDS", 20) or 20)
     try:
         available = mt5c.get_all_symbols()
     except Exception as e:      # noqa: BLE001
@@ -1211,20 +1251,56 @@ def auto_pick_symbols(equity: float) -> list:
     # Выключенные вручную не рассматриваем вовсе — иначе отбор мог бы вернуть
     # золото, которое владелец просил отключить.
     available = [s for s in available if not rm.blocked_symbol_reason(s)]
+    log.info("Отбор пар: у брокера %d инструментов, смотрю описания...",
+             len(available))
 
-    # Сначала добавляем ВСЕ пары в «Обзор рынка», и только потом замеряем.
-    # Порядок важен: терминал начинает подкачивать историю в тот момент, когда
-    # пара выбрана. Замеряй мы сразу после выбора каждой, первые пары успели
-    # бы, а по остальным баров ещё не было бы — и они выпали бы из отбора на
-    # весь сеанс, потому что отбор идёт один раз при запуске.
+    # ---- ЭТАП 1: дешёвый отсев по описанию контракта --------------------
+    facts = []
     for name in available:
+        if time.time() > deadline:
+            log.warning("Отбор пар: время вышло на первом этапе — "
+                        "успел посмотреть %d из %d", len(facts), len(available))
+            break
+        try:
+            row = contract_facts(name)
+        except Exception:       # noqa: BLE001
+            continue
+        if row:
+            facts.append(row)
+
+    stage1 = symbol_picker.prefilter(
+        facts, equity,
+        max_risk_percent=float(getattr(cfg, "MAX_TRADE_RISK_PERCENT_OF_EQUITY", 2.0) or 0),
+        limit=int(getattr(cfg, "AUTO_PICK_SURVEY_LIMIT",
+                          symbol_picker.DEFAULT_SURVEY_LIMIT)))
+    shortlist = stage1["kept"]
+    log.info("Отбор пар: по описанию контракта прошли %d, замеряю их...",
+             len(shortlist))
+    runtime_events.record(
+        "пары", f"отбор: из {len(available)} инструментов брокера подходят по "
+                f"размеру {len(shortlist)}, замеряю")
+
+    # ---- ЭТАП 2: настоящий замер, только для выживших -------------------
+    # Сначала добавляем в «Обзор рынка» ВСЕХ выживших, и только потом
+    # замеряем: терминал начинает подкачивать историю в момент добавления, и
+    # к моменту замера она успевает подойти. Замеряй мы сразу после
+    # добавления каждой, последние пары остались бы без баров.
+    for name in shortlist:
+        if time.time() > deadline:
+            break
         try:
             mt5c.ensure_symbol(name)
         except Exception:       # noqa: BLE001
             continue
 
-    surveyed, no_data = [], 0
-    for name in available:
+    surveyed, no_data, skipped = [], 0, 0
+    for name in shortlist:
+        if time.time() > deadline:
+            skipped = len(shortlist) - len(surveyed) - no_data
+            log.warning("Отбор пар: время вышло — замерено %d из %d, "
+                        "остальные посмотрю при следующем запуске",
+                        len(surveyed), len(shortlist))
+            break
         try:
             row = survey_symbol(name)
         except Exception:       # noqa: BLE001
@@ -1234,8 +1310,7 @@ def auto_pick_symbols(equity: float) -> list:
         else:
             no_data += 1
     if no_data:
-        log.info("Отбор пар: по %d из %d пар брокер не дал данных — пропущены",
-                 no_data, len(available))
+        log.info("Отбор пар: по %d парам брокер не дал баров — пропущены", no_data)
 
     result = symbol_picker.pick(
         surveyed, equity,
@@ -1249,12 +1324,16 @@ def auto_pick_symbols(equity: float) -> list:
     if chosen:
         log.info("%s", symbol_picker.describe(result, len(available)))
         runtime_events.record("пары", symbol_picker.describe(result, len(available)))
-    for reason in result["rejected"][:10]:
+    else:
+        log.warning("Отбор пар ничего не выбрал — работаю по списку из настроек")
+    for reason in (stage1["rejected"] + result["rejected"])[:10]:
         log.info("Отбор пар — %s", reason)
+    if skipped > 0:
+        log.info("Отбор пар — %d пар не успели попасть в замер", skipped)
     return chosen
 
 
-def seed_spread_baselines(symbols) -> int:
+def seed_spread_baselines(symbols, deadline: float = None) -> int:
     """Взять суточную норму спреда из минутных баров MetaTrader.
 
     Владелец: «скачал обновление, перезакрыл, заново открыл — и опять пошли
@@ -1266,9 +1345,23 @@ def seed_spread_baselines(symbols) -> int:
     Ждать час не нужно: MetaTrader хранит спред в КАЖДОМ баре. 1440 минутных
     баров — это готовая суточная норма, по этому же брокеру и этой же паре.
 
+    ОГРАНИЧЕНО ПО ВРЕМЕНИ. Здесь запрашивается 1440 минутных баров НА КАЖДУЮ
+    пару. Пока пар было четыре, это никого не касалось; когда программа стала
+    отбирать десятки, тот же цикл превратился в минуты ожидания на запуске —
+    ровно то, из-за чего владелец написал «нет отклика, виснет». Норма спреда
+    полезна, но она НЕ условие работы: не успели по всем — возьмём остальные
+    на следующем запуске, а торговать можно уже сейчас.
+
     Возвращает, скольким парам норма проставлена."""
+    if deadline is None:
+        deadline = time.time() + float(
+            getattr(cfg, "BASELINE_SEED_MAX_SECONDS", 15) or 15)
     seeded = 0
     for symbol in symbols or ():
+        if time.time() > deadline:
+            log.info("Норма спреда: время вышло, взял по %d парам — остальные "
+                     "накопятся сами или подтянутся при следующем запуске", seeded)
+            break
         try:
             df = mt5c.get_rates_df(symbol, "M1", count=market_hours.BASELINE_SAMPLES)
             if df is None or "spread" not in df:

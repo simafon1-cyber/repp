@@ -4398,6 +4398,7 @@ class App:
     def _refresh_loop(self):
         try:
             snap = ds.get_snapshot()
+            problems = []
             if snap:
                 acc = snap.get("account", {})
                 mode_txt = "LIVE" if snap.get("live_trading") else "DRY-RUN"
@@ -4422,26 +4423,36 @@ class App:
                 # мелким текстом. Из-за этого «затишье» выглядело как поломка,
                 # хотя программа знала причину и молчала о ней.
                 problems = list(problems) + self._silence_reasons(snap)
-                # Недавние происшествия: обрывы связи, сбои, перезапуски
-                # сторожем. Владелец несколько раз писал «останавливается,
-                # перезапустил — пошло»; без такой ленты каждый раз
-                # приходилось гадать, что именно случилось.
-                events = runtime_events.describe(3)
-                if events:
-                    problems.append("Недавние события:\n  " + events.replace("\n", "\n  "))
-                if problems:
-                    self.trade_warning_var.set("• " + "\n• ".join(problems))
-                    # Рамка появляется, ТОЛЬКО когда есть что сказать: пустая
-                    # рамка «Внимание» на пол-экрана пугает без причины.
-                    if not self.trade_warning_frame.winfo_ismapped():
-                        self.trade_warning_frame.pack(fill="x", padx=12, pady=6)
-                else:
-                    self.trade_warning_var.set("")
-                    if self.trade_warning_frame.winfo_ismapped():
-                        self.trade_warning_frame.pack_forget()
+            # СОБЫТИЯ ПОКАЗЫВАЮТСЯ ДАЖЕ БЕЗ СНИМКА — и это важно.
+            # Снимок появляется только после того, как торговый цикл прошёл
+            # первый круг, а до него идёт подготовка: подключение к терминалу
+            # и отбор пар у брокера. Раньше этот блок стоял ВНУТРИ «если есть
+            # снимок», поэтому во время подготовки окно не говорило ничего —
+            # и занятая работой программа выглядела зависшей. Владелец так и
+            # написал: «нет отклика от программы, виснет».
+            events = runtime_events.describe(3)
+            if events:
+                problems.append("Недавние события:\n  " + events.replace("\n", "\n  "))
+            if problems:
+                self.trade_warning_var.set("• " + "\n• ".join(problems))
+                # Рамка появляется, ТОЛЬКО когда есть что сказать: пустая
+                # рамка «Внимание» на пол-экрана пугает без причины.
+                if not self.trade_warning_frame.winfo_ismapped():
+                    self.trade_warning_frame.pack(fill="x", padx=12, pady=6)
+            else:
+                self.trade_warning_var.set("")
+                if self.trade_warning_frame.winfo_ismapped():
+                    self.trade_warning_frame.pack_forget()
+
             if self.bot_thread and self.bot_thread.is_alive():
                 pause_txt = " (пауза)" if control.is_paused() else ""
-                self.status_var.set("Работает" + pause_txt)
+                # Пока первого круга не было, «Работает» вводит в заблуждение:
+                # цикл ещё готовится (подключение, отбор пар), сделок нет и не
+                # будет несколько секунд. Пишем правду.
+                if not snap:
+                    self.status_var.set("Подготовка: подключение и отбор пар...")
+                else:
+                    self.status_var.set("Работает" + pause_txt)
             self._watchdog_tick()
             self._refresh_top_bar()
 
