@@ -13,6 +13,7 @@ from datetime import datetime
 
 import config as cfg
 import mt5_connector as mt5c
+import symbol_picker
 from control import control
 from state import AccountState, SymbolState, pause_active
 
@@ -540,6 +541,46 @@ def apply_min_risk_reward_floor(tp_dist: float, sl_dist: float) -> float:
     if min_rr <= 0 or sl_dist <= 0:
         return tp_dist
     return max(tp_dist, sl_dist * min_rr)
+
+
+def currency_exposure_reason(symbol: str, open_symbols, limit: int) -> str:
+    """Не даём открыть ОДНУ И ТУ ЖЕ ставку много раз. Пусто — можно.
+
+    ЗАЧЕМ. Программа сама подтягивает у брокера сотню пар, и это правильно.
+    Но пары не независимы: EURUSD, GBPUSD, AUDUSD и NZDUSD — это в основном
+    ставка против доллара. Открыв «четыре разные сделки», можно сделать одну
+    ставку четыре раза. Пока доллар ходит туда-сюда, разницы не видно; в день,
+    когда он двинется против нас, все четыре стопа сработают вместе.
+
+    Именно поэтому ограничение стоит ЗДЕСЬ, на открытых сделках, а не на
+    списке пар для просмотра. Смотреть можно сколько угодно инструментов —
+    это ничего не стоит. Платим мы за одновременно открытые."""
+    try:
+        cap = int(limit)
+    except (TypeError, ValueError):
+        return ""
+    if cap <= 0:
+        return ""
+
+    # currencies_of сам приводит имя к чистому виду (заглавные, только буквы),
+    # поэтому суффиксы брокера — EURUSDs, EURUSD.a, eur/usd — разбираются
+    # одинаково, и отдельная нормализация здесь была бы лишним слоем.
+    mine = symbol_picker.currencies_of(symbol)
+    if not mine:
+        return ""
+
+    counts = {}
+    for name in open_symbols or ():
+        for cur in symbol_picker.currencies_of(name):
+            counts[cur] = counts.get(cur, 0) + 1
+
+    for cur in mine:
+        have = counts.get(cur, 0)
+        if have >= cap:
+            return (f"уже открыто {have} сделок с валютой {cur} при потолке "
+                    f"{cap} (MAX_POSITIONS_PER_CURRENCY) — это была бы та же "
+                    f"ставка ещё раз")
+    return ""
 
 
 def blocked_symbol_reason(symbol: str) -> str:

@@ -37,6 +37,7 @@ import multi_indicator as mi
 import market_hours
 import news_calendar
 import remote_settings
+import scan_rotation
 import symbol_picker
 import telegram_signals
 import telegram_reader
@@ -465,6 +466,18 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
                 f"Уже открыто {open_now} сделок при потолке {max_all} "
                 f"(MAX_SIMULTANEOUS_POSITIONS)")
             return
+
+    # Пар в работе теперь много, и главная опасность не в их числе, а в том,
+    # что они НЕ независимы: EURUSD, GBPUSD и AUDUSD — это в основном одна
+    # ставка против доллара. Ограничение стоит на открытых сделках, а не на
+    # списке для просмотра: смотреть можно сколько угодно пар, платим мы
+    # только за одновременно открытые. См. rm.currency_exposure_reason().
+    same_bet = rm.currency_exposure_reason(
+        symbol, _open_symbols(all_positions),
+        getattr(cfg, "MAX_POSITIONS_PER_CURRENCY", 0))
+    if same_bet:
+        sym_state.last_reject_reason = same_bet
+        return
 
     direction = 0
     score = 0.0
@@ -1100,6 +1113,13 @@ def survey_symbol(symbol: str) -> dict:
     здесь можно позволить себе обращения к терминалу, которых мы избегаем
     на каждом проходе."""
     import MetaTrader5 as mt5
+    # БЕЗ ЭТОЙ СТРОКИ ОТБОР НЕ РАБОТАЕТ. symbols_get() отдаёт все сотни пар
+    # брокера, но данные — бары и спред — терминал отдаёт только по тем, что
+    # добавлены в «Обзор рынка». По остальным замер молча возвращал бы пусто,
+    # и отбор видел бы лишь те несколько пар, что уже открыты у человека, —
+    # то есть «весь список брокера» оказался бы неправдой.
+    if not mt5c.ensure_symbol(symbol):
+        return {}
     info = mt5.symbol_info(symbol)
     if info is None:
         return {}
@@ -1163,7 +1183,18 @@ def auto_pick_symbols(equity: float) -> list:
     # золото, которое владелец просил отключить.
     available = [s for s in available if not rm.blocked_symbol_reason(s)]
 
-    surveyed = []
+    # Сначала добавляем ВСЕ пары в «Обзор рынка», и только потом замеряем.
+    # Порядок важен: терминал начинает подкачивать историю в тот момент, когда
+    # пара выбрана. Замеряй мы сразу после выбора каждой, первые пары успели
+    # бы, а по остальным баров ещё не было бы — и они выпали бы из отбора на
+    # весь сеанс, потому что отбор идёт один раз при запуске.
+    for name in available:
+        try:
+            mt5c.ensure_symbol(name)
+        except Exception:       # noqa: BLE001
+            continue
+
+    surveyed, no_data = [], 0
     for name in available:
         try:
             row = survey_symbol(name)
@@ -1171,6 +1202,11 @@ def auto_pick_symbols(equity: float) -> list:
             continue
         if row:
             surveyed.append(row)
+        else:
+            no_data += 1
+    if no_data:
+        log.info("Отбор пар: по %d из %d пар брокер не дал данных — пропущены",
+                 no_data, len(available))
 
     result = symbol_picker.pick(
         surveyed, equity,
@@ -1231,6 +1267,22 @@ def _bot_tickets(positions) -> set:
     if not positions:
         return set()
     return {p.ticket for p in positions if getattr(p, "magic", None) == cfg.MAGIC_NUMBER}
+
+
+def _open_symbols(positions) -> set:
+    """Пары, по которым СЕЙЧАС есть открытая сделка бота.
+
+    Эти пары обходятся на каждом проходе без очереди: по ним работает
+    трейлинг-стоп и безубыток, и пропущенный проход стоит денег."""
+    if not positions:
+        return set()
+    return {p.symbol for p in positions
+            if getattr(p, "magic", None) == cfg.MAGIC_NUMBER}
+
+
+# Состояние обхода пар по кругу: докуда дошли, сколько берём за проход и
+# сколько прошлый проход занял на самом деле. Живёт между итерациями цикла.
+_scan = {"cursor": 0, "size": 0, "spent": 0.0}
 
 
 def _fast_position_monitor(sym_states, stop_event, total_seconds: float):
@@ -1420,11 +1472,34 @@ def main(stop_event=None, start_dashboard: bool = True):
 
                 process_close_requests(all_positions)
 
-                for sym, st in sym_states.items():
+                # Обход пар: с открытой сделкой — всегда, остальные по очереди.
+                # Так список может быть в разы длиннее, а круг не растягивается.
+                # Разбор, почему это правильно и почему потолок в 20 пар был
+                # ненастоящим, — в scan_rotation.py.
+                _scan["size"] = scan_rotation.adjust_slice(
+                    _scan["size"] or scan_rotation.planned_slice(
+                        len(sym_states), cfg.POLL_SECONDS,
+                        float(getattr(cfg, "SCAN_ROTATE_SECONDS",
+                                      scan_rotation.ROTATE_SECONDS))),
+                    _scan["spent"], cfg.POLL_SECONDS, len(sym_states))
+                step = scan_rotation.plan(list(sym_states.keys()),
+                                          _open_symbols(all_positions),
+                                          _scan["cursor"], _scan["size"])
+                _scan["cursor"] = step["cursor"]
+
+                _scan_started = time.time()
+                for sym in step["symbols"]:
+                    st = sym_states.get(sym)
+                    if st is None:
+                        continue
                     try:
                         process_symbol(sym, st, acc_state, equity, acc_info, all_positions)
                     except Exception as e:
                         log.exception("Ошибка обработки %s: %s", sym, e)
+                # Время замеряем ФАКТИЧЕСКОЕ: на медленном терминале порция
+                # сама уменьшится, на быстром — подрастёт. Иначе моя оценка
+                # «40 мс на пару» стала бы обещанием, за которое платит владелец.
+                _scan["spent"] = time.time() - _scan_started
 
                 if cfg.USE_WEB_DASHBOARD:
                     ds.update_snapshot(build_snapshot(acc_info, acc_state, sym_states, all_positions))

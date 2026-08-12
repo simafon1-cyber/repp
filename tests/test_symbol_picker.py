@@ -266,11 +266,62 @@ def _load_survey_symbol(spread_points, atr_bar_range, stops_level=0):
                 return FakeSeries(self.rows)
             return FakeSeries([0.0] * len(self.rows))
 
+    selected = []
     ns = {"cfg": cfg,
           "mt5c": types.SimpleNamespace(
-              get_rates_df=lambda *a, **k: FakeDF(atr_bar_range))}
+              get_rates_df=lambda *a, **k: FakeDF(atr_bar_range),
+              ensure_symbol=lambda name: (selected.append(name), True)[1])}
     exec(compile(ast.Module(body=[func], type_ignores=[]), "main.py", "exec"), ns)
-    return ns["survey_symbol"]("EURUSD")
+    row = ns["survey_symbol"]("EURUSD")
+    row["_selected"] = list(selected)
+    return row
+
+
+def _survey_with_unavailable_symbol():
+    """Тот же настоящий survey_symbol, но брокер не даёт добавить пару."""
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    func = next(n for n in tree.body
+                if isinstance(n, ast.FunctionDef) and n.name == "survey_symbol")
+    mt5 = types.ModuleType("MetaTrader5")
+
+    def boom(name):
+        raise AssertionError("замер пошёл дальше, хотя пара недоступна")
+
+    mt5.symbol_info = boom
+    sys.modules["MetaTrader5"] = mt5
+    ns = {"cfg": cfg,
+          "mt5c": types.SimpleNamespace(ensure_symbol=lambda name: False,
+                                        get_rates_df=boom)}
+    exec(compile(ast.Module(body=[func], type_ignores=[]), "main.py", "exec"), ns)
+    try:
+        return ns["survey_symbol"]("EURUSD")
+    finally:
+        sys.modules["MetaTrader5"] = types.ModuleType("MetaTrader5")
+
+
+def test_pair_must_be_added_to_market_watch_first() -> None:
+    """БЕЗ ЭТОГО ОТБОР НЕ РАБОТАЕТ ВООБЩЕ. symbols_get() отдаёт все сотни пар
+    брокера, но бары и спред терминал даёт только по тем, что добавлены в
+    «Обзор рынка». Без добавления замер по остальным вернул бы пусто, и отбор
+    молча видел бы лишь те несколько пар, что уже открыты у человека."""
+    print("\n[Пара сначала добавляется в «Обзор рынка», потом замеряется]")
+    row = _load_survey_symbol(spread_points=10, atr_bar_range=0.0020)
+    check(row.get("_selected") == ["EURUSD"],
+          "Перед замером пара добавляется в «Обзор рынка»",
+          str(row.get("_selected")))
+
+    check(_survey_with_unavailable_symbol() == {},
+          "Не удалось добавить — пара пропускается, а не считается по мусору")
+
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    body = src.split("def auto_pick_symbols", 1)[1].split("\ndef ", 1)[0]
+    check("ensure_symbol" in body,
+          "Все пары добавляются в «Обзор рынка» до замеров")
+    # Порядок: сперва добавить ВСЕ, потом мерить. Иначе первые пары успеют
+    # подкачать историю, а последние — нет, и выпадут из отбора на весь сеанс
+    check(body.index("ensure_symbol") < body.index("survey_symbol(name)"),
+          "Сначала добавляются ВСЕ пары, и только потом идут замеры")
 
 
 def test_stop_estimate_matches_real_trading() -> None:
@@ -352,6 +403,7 @@ def main() -> int:
     test_nothing_suitable_is_said_plainly()
     test_wired_into_startup()
     test_stop_estimate_matches_real_trading()
+    test_pair_must_be_added_to_market_watch_first()
     test_honest_about_all_pairs()
 
     print("\n" + "=" * 62)
