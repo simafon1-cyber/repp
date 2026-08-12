@@ -1100,31 +1100,25 @@ class App:
 
     # ---- вкладка "Символы" ---------------------------------------------------
     def _build_tab_symbols(self, parent):
-        ttk.Label(parent, text="Двойной клик по 'Вкл' — включить/выключить пару. По 'Лот' — задать "
-                               "фиксированный лот. По 'Символ' — мини-график цены.",
+        # ПОЛЯ «ДОБАВИТЬ СИМВОЛ» ЗДЕСЬ БОЛЬШЕ НЕТ. Список пар программа берёт
+        # у брокера сама и сама отбирает подходящие (symbol_picker.py), так
+        # что вписывать пары руками стало не нужно — а поле ввода, которое
+        # ничего не решает, только путает.
+        #
+        # А вот таблица нужна СИЛЬНЕЕ прежнего: пар теперь не четыре, а
+        # десятки, и это единственное место, где видно, что именно выбрано и
+        # почему пара сейчас не торгует (колонка «Отказ»).
+        ttk.Label(parent, text="Пары программа выбирает у брокера сама. Двойной клик по «Вкл» — "
+                               "выключить пару вручную. По «Лот» — задать фиксированный лот. "
+                               "По «Символ» — мини-график цены.",
                   foreground=self.colors["muted"], wraplength=800, justify="left").pack(padx=10, pady=6, anchor="w")
 
-        add_frame = ttk.Frame(parent)
-        add_frame.pack(fill="x", padx=10, pady=(0, 6))
-        ttk.Label(add_frame, text="Добавить символ:").grid(row=0, column=0, padx=(0, 6))
-        self.new_symbol_var = tk.StringVar()
-        # Combobox вместо свободного текста — список тянется из реального
-        # списка символов брокера (mt5.symbols_get(), см. mt5_connector.get_all_symbols
-        # и main.py._refresh_available_symbols_cache). Поле остаётся редактируемым
-        # (не readonly), чтобы можно было ввести символ, которого ещё нет в кэше,
-        # но по умолчанию показывает подтверждённые доступные у брокера пары —
-        # это убирает частую ошибку "добавил пару, а она не работает" из-за
-        # опечатки/неверного суффикса.
-        self.symbol_picker = ttk.Combobox(add_frame, textvariable=self.new_symbol_var, width=18)
-        self.symbol_picker.grid(row=0, column=1, padx=(0, 6))
-        self.symbol_picker.bind("<Return>", lambda e: self.add_symbol())
-        ttk.Button(add_frame, text="Добавить", command=self.add_symbol).grid(row=0, column=2, padx=4)
-        ttk.Button(add_frame, text="Удалить выбранный", command=self.remove_selected_symbol).grid(row=0, column=3, padx=4)
         self.available_symbols_var = tk.StringVar(
-            value="Список пар брокера ещё не загружен (появится, когда бот запущен и подключён к MT5)."
+            value="Отбор пар ещё не выполнен (появится, когда бот запущен и подключён к MT5)."
         )
-        ttk.Label(add_frame, textvariable=self.available_symbols_var, foreground=self.colors["muted"]).grid(
-            row=1, column=0, columnspan=4, sticky="w", padx=(0, 6), pady=(4, 0))
+        ttk.Label(parent, textvariable=self.available_symbols_var,
+                  foreground=self.colors["muted"], wraplength=800,
+                  justify="left").pack(padx=10, pady=(0, 6), anchor="w")
 
         self.symbols_columns = ("enabled", "symbol", "lot", "buy", "sell", "regime", "ai", "custom", "multi", "learn", "paused", "reject", "risk")
         headings = ("Вкл", "Символ", "Лот", "BUY", "SELL", "Режим", "AI", "Своя стратегия", "Индикаторы", "Автообучение", "Пауза", "Отказ", "Риск лота")
@@ -1142,56 +1136,6 @@ class App:
         self.symbols_tree.tag_configure("risk_over", foreground=self.colors["loss"])
         self.symbols_tree.pack(fill="both", expand=True, padx=10, pady=6)
         self.symbols_tree.bind("<Double-1>", self._on_symbols_double_click)
-
-    def add_symbol(self):
-        sym = self.new_symbol_var.get().strip().upper()
-        if not sym:
-            return
-        symbols = list(cfg.SYMBOLS)
-        if sym in symbols:
-            messagebox.showinfo(APP_TITLE, f"{sym} уже есть в списке.")
-            return
-
-        available = list(getattr(self, "_available_symbols_cache", []) or [])
-        if available and sym not in available:
-            close_matches = [s for s in available if sym in s or s in sym][:8]
-            hint = (
-                f"Похожие пары у брокера: {', '.join(close_matches)}."
-                if close_matches else
-                "Похожих пар у брокера не найдено — проверь написание."
-            )
-            if not messagebox.askyesno(
-                APP_TITLE,
-                f"У брокера НЕТ символа '{sym}' в списке доступных ({len(available)} пар). {hint}\n\n"
-                f"Всё равно добавить как есть?"
-            ):
-                return
-
-        symbols.append(sym)
-        self._write_symbols(symbols)
-        self.new_symbol_var.set("")
-        messagebox.showinfo(APP_TITLE, f"{sym} добавлен. Если бот запущен — подключится сам в течение "
-                                        f"{getattr(cfg, 'CONFIG_RELOAD_CHECK_SECONDS', 15)} сек, "
-                                        f"иначе — при следующем нажатии Старт.")
-
-    def remove_selected_symbol(self):
-        sel = self.symbols_tree.selection()
-        if not sel:
-            messagebox.showinfo(APP_TITLE, "Выбери символ в таблице.")
-            return
-        sym = sel[0]
-        symbols = [s for s in cfg.SYMBOLS if s != sym]
-        self._write_symbols(symbols)
-        messagebox.showinfo(APP_TITLE, f"{sym} убран из списка новых сделок "
-                                        f"(уже открытые по нему позиции продолжат вестись).")
-
-    def _write_symbols(self, symbols_list):
-        literal = "[" + ", ".join(repr(s) for s in symbols_list) + "]"
-        _write_config_value("SYMBOLS", literal)
-        try:
-            _reload_cfg()
-        except Exception:
-            pass
 
     def _on_symbols_double_click(self, event):
         region = self.symbols_tree.identify("region", event.x, event.y)
@@ -1260,15 +1204,21 @@ class App:
         snap = ds.get_snapshot()
         symbols = snap.get("symbols", {}) if snap else {}
 
+        # Строка показывает РЕЗУЛЬТАТ ОТБОРА, а не просто «сколько пар у
+        # брокера»: раз пары выбирает программа, человеку важно видеть, из
+        # скольких выбрано и сколько сейчас в работе.
         available = (snap.get("available_symbols", []) if snap else []) or []
-        if available != getattr(self, "_available_symbols_cache", None):
+        if available != getattr(self, "_available_symbols_cache", None) or symbols:
             self._available_symbols_cache = available
-            self.symbol_picker["values"] = available
-            if available:
-                self.available_symbols_var.set(f"Доступно у брокера: {len(available)} пар (выпадающий список).")
+            if symbols and available:
+                self.available_symbols_var.set(
+                    f"В работе {len(symbols)} пар — отобраны программой из "
+                    f"{len(available)} доступных у брокера.")
+            elif symbols:
+                self.available_symbols_var.set(f"В работе {len(symbols)} пар.")
             else:
                 self.available_symbols_var.set(
-                    "Список пар брокера ещё не загружен (появится, когда бот запущен и подключён к MT5)."
+                    "Отбор пар ещё не выполнен (появится, когда бот запущен и подключён к MT5)."
                 )
 
         for item in self.symbols_tree.get_children():
@@ -4096,10 +4046,15 @@ class App:
           "из двух мест одновременно).")
 
         h2("4. Символы")
-        p("Список торгуемых инструментов. Можно добавлять/удалять пары прямо здесь, "
-          "без правки файлов. Двойной клик по названию символа открывает мини-график "
-          "цены. Видно score BUY/SELL, режим рынка (тренд/флэт), сигнал AI, статус "
-          "автообучения и причину, по которой последний раз не открылась сделка.\n\n"
+        p("Список торгуемых инструментов. Вписывать пары руками БОЛЬШЕ НЕ НУЖНО: "
+          "при запуске программа берёт весь список брокера и сама отбирает "
+          "подходящие — по карману ли минимальный лот, какую долю движения "
+          "съедает спред, есть ли движение, разрешена ли торговля. Сверху "
+          "написано, сколько пар в работе и из скольких они выбраны.\n\n"
+          "Двойной клик по названию символа открывает мини-график цены, по «Вкл» — "
+          "выключает пару вручную. Видно score BUY/SELL, режим рынка (тренд/флэт), "
+          "сигнал AI, статус автообучения и причину, по которой последний раз не "
+          "открылась сделка.\n\n"
           "Колонка «Риск лота» — предупреждение на маленьком депозите: минимальный "
           "лот брокера иногда рискует БОЛЬШЕ, чем разрешает настроенный процент "
           "риска (ниже минимального лота опуститься нельзя, сколько ни настраивай "

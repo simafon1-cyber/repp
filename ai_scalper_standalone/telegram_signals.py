@@ -98,11 +98,6 @@ def max_score_bonus() -> float:
 # =====================================================================
 # РАЗБОР ТЕКСТА
 # =====================================================================
-def normalize_instrument(raw: str) -> str:
-    up = re.sub(r"[^A-ZА-Я]", "", raw.upper())
-    return _ALIASES.get(up, up)
-
-
 def parse_direction(text: str) -> int:
     """1 = покупка, -1 = продажа, 0 = не понял.
 

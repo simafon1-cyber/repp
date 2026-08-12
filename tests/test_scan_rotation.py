@@ -337,6 +337,77 @@ def test_describe_tells_the_real_interval() -> None:
     check(sr.describe(0, 0, 5) != "", "Пустой список не роняет строку")
 
 
+def test_light_scan_skips_the_expensive_work() -> None:
+    """ГЛАВНОЕ УСКОРЕНИЕ. Самая дорогая работа — выкачать 300 баров и
+    посчитать индикаторы: замерено 8.4 мс на пару только на счёт. Вход
+    возможен ТОЛЬКО на новом баре, на M5 это раз в 300 секунд — значит из
+    шестидесяти проходов между барами пятьдесят девять эту работу выбрасывали.
+
+    Смена бара считается делением по времени тика, который и так запрошен."""
+    print("\n[Лёгкий проход: не считаем то, что всё равно выбросим]")
+
+    check(sr.timeframe_seconds("M5") == 300, "M5 — бар 300 секунд")
+    check(sr.timeframe_seconds("m1") == 60, "Регистр не важен")
+    check(sr.timeframe_seconds("H4") == 14400, "H4 — четыре часа")
+    check(sr.timeframe_seconds("непонятно") == 0, "Незнакомый ТФ — 0, а не догадка")
+
+    # Начало бара — отметка, округлённая вниз до длины бара
+    check(sr.bar_start(1000, 300) == 900, "1000 -> бар начался в 900",
+          str(sr.bar_start(1000, 300)))
+    check(sr.bar_start(900, 300) == 900, "Ровное начало бара — само себя")
+    check(sr.bar_start(1199, 300) == 900, "Конец того же бара — то же начало")
+    check(sr.bar_start(1200, 300) == 1200, "Следующий бар — новое начало")
+    check(sr.bar_start(None, 300) is None, "Нет тика — считать нельзя, не гадаем")
+    check(sr.bar_start(1000, 0) is None, "Незнакомый ТФ — считать нельзя")
+    check(sr.bar_start("мусор", 300) is None, "Мусор не роняет")
+
+    # Внутри одного бара отметка НЕ меняется — на этом и держится экономия
+    same = {sr.bar_start(t, 300) for t in range(900, 1200)}
+    check(len(same) == 1, "Внутри бара значение постоянно — есть с чем сравнивать")
+
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    func = src.split("def process_symbol", 1)[1].split("\ndef ", 1)[0]
+    heavy = func.index("get_rates_df")
+    guard = func.index("scan_rotation.bar_start")
+    check(guard < heavy, "Проверка бара идёт ДО тяжёлой загрузки баров")
+    check("last_scanned_bar" in func, "Разобранный бар запоминается")
+
+    # Пара с ОТКРЫТОЙ сделкой пропускаться не должна никогда: ей нужен свежий
+    # ATR для трейлинг-стопа
+    check("has_position" in func, "Открытая сделка учитывается")
+    check("not has_position" in func,
+          "Пара со сделкой тяжёлый путь проходит всегда — иначе позиция ведётся вслепую")
+
+    # Отметка ставится ТОЛЬКО после удачной загрузки: иначе обрыв связи
+    # заставил бы пропустить весь бар
+    fetched = func.index("df_raw = mt5c.get_rates_df")
+    marked = func.index("sym_state.last_scanned_bar = _bar_seen")
+    check(fetched < marked,
+          "Бар отмечается разобранным ПОСЛЕ удачной загрузки, а не до")
+
+    check(bool(CFG.USE_LIGHT_SCAN), "По умолчанию ускорение включено")
+
+
+def test_manual_symbol_entry_is_gone() -> None:
+    """Владелец: «если мы уже не вносим пары, удали вкладку». Поля ввода
+    больше нет — оно ничего не решает и только путает. Сама таблица осталась:
+    пар теперь десятки, и это единственное место, где видно, что выбрано и
+    почему пара не торгует."""
+    print("\n[Ручного добавления пар в окне больше нет]")
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    for gone in ("def add_symbol", "def remove_selected_symbol",
+                 "def _write_symbols", "Добавить символ:"):
+        check(gone not in ui, f"Убрано: {gone}")
+
+    check("_build_tab_symbols" in ui, "Вкладка осталась")
+    check("symbols_tree" in ui, "И таблица на ней тоже")
+    check("Пары программа выбирает у брокера сама" in ui,
+          "Человеку написано, что список теперь подбирается сам")
+    tab = ui.split("def _build_tab_symbols", 1)[1].split("\n    def ", 1)[0]
+    check("reject" in tab, "Колонка «Отказ» на месте — по ней видно, почему нет сделок")
+    check("risk" in tab, "И предупреждение о риске минимального лота")
+
+
 if __name__ == "__main__":
     print("=" * 62)
     print("ТЕСТЫ: ОБХОД МНОГИХ ПАР ПО ОЧЕРЕДИ")
@@ -350,6 +421,8 @@ if __name__ == "__main__":
     test_no_artificial_cap_on_the_list()
     test_explanation_has_numbers()
     test_describe_tells_the_real_interval()
+    test_light_scan_skips_the_expensive_work()
+    test_manual_symbol_entry_is_gone()
     print()
     print("=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

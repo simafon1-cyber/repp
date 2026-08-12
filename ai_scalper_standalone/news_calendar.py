@@ -243,15 +243,3 @@ def explain_news_entry(symbol: str, window_minutes: int = 0) -> str:
             f"входа.")
 
 
-def upcoming_events(days_ahead: int = 3, min_impact: str = "medium"):
-    """Для вкладки "Новости" в desktop_app.py: возвращает (events, error_or_None)."""
-    events, error = _get_events()
-    impact_rank = {"low": 0, "medium": 1, "high": 2}
-    min_rank = impact_rank.get(min_impact, 1)
-    now = datetime.now()
-    horizon = now + timedelta(days=days_ahead)
-    filtered = [
-        e for e in events
-        if impact_rank.get(e["impact"], 0) >= min_rank and now <= e["time"] <= horizon
-    ]
-    return filtered, error

@@ -521,10 +521,18 @@ def test_news_entry_threshold() -> None:
           "Важность больше не зашита в код намертво")
     check("NEWS_TRADE_MIN_IMPACT" in src, "Берётся из настроек")
 
-    # На вкладке «Новости» видны ВСЕ события, независимо от порога входа
-    upcoming = src.split("def upcoming_events", 1)[1][:600]
-    check("NEWS_TRADE_MIN_IMPACT" not in upcoming,
+    # На вкладке «Новости» видны ВСЕ события, независимо от порога входа.
+    # Проверяем ТО МЕСТО, где список для вкладки собирается на самом деле.
+    # Раньше здесь разбиралась функция news_calendar.upcoming_events — но
+    # вкладка её не вызывала: она делала ту же фильтрацию у себя, а функция
+    # осталась мёртвым дубликатом. Тест исправно проверял код, который не
+    # выполнялся ни разу.
+    ui = (APP.parent / "ai_scalper_standalone" / "desktop_app.py").read_text(encoding="utf-8")
+    worker = ui.split("def _refresh_news_worker", 1)[1].split("\n    def ", 1)[0]
+    check("NEWS_TRADE_MIN_IMPACT" not in worker,
           "Список новостей на вкладке порогом входа не режется")
+    check("news_calendar.get_events_with_source()" in worker,
+          "И собирается он из общего источника новостей")
 
 
 def test_news_mode_is_on() -> None:

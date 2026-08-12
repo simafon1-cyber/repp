@@ -71,11 +71,3 @@ def regime_score_adjustment(sym_state: SymbolState) -> float:
     return 0.0
 
 
-def regime_text(sym_state: SymbolState) -> str:
-    if not cfg.USE_MARKET_REGIME_FILTER:
-        return "выкл"
-    if sym_state.current_regime == "trend":
-        return f"ТРЕНД (+{cfg.REGIME_TREND_BONUS:.0f} score)"
-    if sym_state.current_regime == "range":
-        return f"ФЛЭТ (-{cfg.REGIME_RANGE_PENALTY:.0f} score)"
-    return "определяется..."

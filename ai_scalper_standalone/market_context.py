@@ -41,15 +41,3 @@ def market_context_score_adjustment(symbol: str, direction: int) -> float:
     return adj
 
 
-def market_context_text(symbol: str) -> str:
-    if not cfg.USE_MARKET_CONTEXT:
-        return "выкл"
-    slots = cfg.MARKET_CONTEXT.get(symbol, [])
-    if not slots:
-        return "нет настроенных символов"
-    parts = []
-    for context_symbol, _ in slots:
-        trend = get_context_trend(context_symbol)
-        t = "ВВЕРХ" if trend == 1 else ("ВНИЗ" if trend == -1 else "?")
-        parts.append(f"{context_symbol}:{t}")
-    return "  ".join(parts)

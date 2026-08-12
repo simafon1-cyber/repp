@@ -36,6 +36,12 @@ class SymbolState:
     last_bar_time: datetime = None
     bar_counter: int = 0
 
+    # Начало бара, на котором пара разбиралась в последний раз. Считается
+    # делением из времени тика (scan_rotation.bar_start) и позволяет НЕ
+    # выкачивать 300 баров и не считать индикаторы, пока бар тот же: вход всё
+    # равно возможен только на новом баре. См. process_symbol().
+    last_scanned_bar: int = 0
+
     last_close_direction: int = 0   # 1 = закрылась BUY, -1 = закрылась SELL, 0 = сделок ещё не было
     last_close_bar_index: int = -1000
 

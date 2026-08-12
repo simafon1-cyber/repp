@@ -466,11 +466,57 @@ def main() -> int:
     test_syntax_is_valid()
     test_no_undefined_names()
     test_no_self_outside_classes()
+    test_no_dead_code()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
     print("=" * 62)
     return 1 if failed else 0
+
+
+def test_no_dead_code() -> None:
+    """Функция, которую никто не вызывает, — это не «запас на будущее», а
+    мусор: её читают, в ней ищут ошибки, её правят при переименованиях, и она
+    молча устаревает. Проверка постоянная, чтобы мёртвый код не накапливался
+    заново.
+
+    Обработчики веб-страниц и подобное вызываются НЕ по имени, а через
+    декоратор (@app.route, @app.before_request) — их отсекаем по наличию
+    декоратора, иначе проверка ругалась бы на живой код."""
+    print("\n[Мёртвого кода нет]")
+    defined = {}
+    for path in sorted(APP.glob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if node.decorator_list or node.name.startswith("__"):
+                continue
+            defined[node.name] = path.name
+
+    used = set()
+    for path in sorted(APP.glob("*.py")) + sorted(BASE.glob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                used.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                used.add(node.attr)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                used.add(node.value.strip())
+
+    dead = sorted(f"{where}:{name}" for name, where in defined.items()
+                  if name not in used)
+    check(not dead, "Ни одной функции, которую никто не вызывает",
+          "; ".join(dead[:8]))
+    check(len(defined) > 100, "Проверка действительно прошла по программе",
+          str(len(defined)))
 
 
 if __name__ == "__main__":

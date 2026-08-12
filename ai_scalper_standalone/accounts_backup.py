@@ -141,18 +141,3 @@ def restore() -> dict:
     return result
 
 
-def last_backup_info() -> dict:
-    """Что сейчас лежит в облаке — не скачивая файл целиком, только когда
-    обновлялся. {"exists", "error"}."""
-    result = {"exists": False, "error": ""}
-    ok, reason = ready()
-    if not ok:
-        result["error"] = reason
-        return result
-    try:
-        sha = cj.remote_sha(BACKUP_PATH)
-    except Exception as e:  # noqa: BLE001
-        result["error"] = cj.explain_error(e)
-        return result
-    result["exists"] = bool(sha)
-    return result

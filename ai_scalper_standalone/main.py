@@ -321,10 +321,39 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         # замерший рынок при живых котировках.
         market_hours.note_quote(symbol, _tick_time)
 
+    # САМАЯ ДОРОГАЯ РАБОТА В ПРОГРАММЕ — и почти всегда напрасная. Ниже
+    # выкачиваются 300 баров и считаются все индикаторы: 8.4 мс на пару
+    # только на счёт, плюс сам запрос к терминалу. А вход в сделку возможен
+    # ТОЛЬКО на новом баре, и на M5 бар меняется раз в 300 секунд — то есть
+    # из шестидесяти проходов между барами пятьдесят девять эту работу
+    # выбрасывали.
+    #
+    # Теперь смена бара определяется делением по времени тика, который уже
+    # запрошен выше (scan_rotation.bar_start) — без единого лишнего обращения
+    # к терминалу. Если бар тот же И по паре нет открытой сделки, делать
+    # нечего: решение всё равно будет прежним.
+    #
+    # Пара с ОТКРЫТОЙ сделкой этот путь не проходит никогда: ей нужен свежий
+    # ATR для трейлинг-стопа, и экономить здесь — значит вести позицию вслепую.
+    if getattr(cfg, "USE_LIGHT_SCAN", True):
+        bar_now = scan_rotation.bar_start(
+            _tick_time, scan_rotation.timeframe_seconds(cfg.TIMEFRAME))
+        has_position = rm.count_open_positions(symbol, positions=all_positions) > 0
+        if bar_now and not has_position and sym_state.last_scanned_bar == bar_now:
+            return
+
     df_raw = mt5c.get_rates_df(symbol, cfg.TIMEFRAME, count=max(300, cfg.EMA_TREND_PERIOD + 50))
     if df_raw is None or len(df_raw) < cfg.EMA_SLOW_PERIOD + 5:
         sym_state.last_reject_reason = "Недостаточно данных с MT5"
         return
+
+    # Отмечаем разобранный бар ТОЛЬКО после удачной загрузки: иначе сбой связи
+    # заставил бы пропустить весь бар целиком.
+    if getattr(cfg, "USE_LIGHT_SCAN", True):
+        _bar_seen = scan_rotation.bar_start(
+            _tick_time, scan_rotation.timeframe_seconds(cfg.TIMEFRAME))
+        if _bar_seen:
+            sym_state.last_scanned_bar = _bar_seen
 
     df_ind = add_all_indicators(df_raw, cfg)
     atr_value = float(df_ind["atr"].iloc[-1])

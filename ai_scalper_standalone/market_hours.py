@@ -63,7 +63,6 @@
 import json
 import logging
 import os
-import statistics
 import sys
 import threading
 import time
@@ -138,18 +137,6 @@ def note_spread(symbol: str, spread_points, now: float = None) -> None:
             if len(long_row) > BASELINE_SAMPLES:
                 del long_row[:len(long_row) - BASELINE_SAMPLES]
             _dirty = True
-
-
-def current_spread(symbol: str) -> float:
-    """Спред прямо сейчас — медиана короткого окна.
-
-    Медиана, а не последнее значение: один выброс не должен объявлять рынок
-    неликвидным, а один узкий тик — объявлять его здоровым."""
-    with _lock:
-        row = list(_spreads.get(symbol, ()))
-    if not row:
-        return 0.0
-    return float(statistics.median(row))
 
 
 def normal_spread(symbol: str) -> float:

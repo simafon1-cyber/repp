@@ -226,13 +226,6 @@ def get_rates_df(symbol: str, timeframe: str, count: int = 300):
     return df
 
 
-def get_last_close(symbol: str, timeframe: str):
-    df = get_rates_df(symbol, timeframe, count=2)
-    if df is None or len(df) == 0:
-        return None
-    return df.iloc[-1]["time"]
-
-
 def get_symbol_point(symbol: str) -> float:
     info = mt5.symbol_info(symbol)
     return info.point if info else 0.0001
