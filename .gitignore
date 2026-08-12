@@ -86,3 +86,5 @@ learning_state.json
 telegram_session
 runtime_events.json
 spread_baseline.json
+# Замеры пар у брокера: у каждого свои инструменты и спреды
+symbols_survey.json

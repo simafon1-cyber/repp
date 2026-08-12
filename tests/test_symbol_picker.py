@@ -211,9 +211,24 @@ def test_wired_into_startup() -> None:
     src = (APP / "main.py").read_text(encoding="utf-8")
     check("def auto_pick_symbols" in src, "Функция отбора есть")
     check("cfg.SYMBOLS = picked" in src, "Результат становится списком пар")
-    # Отбор обязан идти ДО создания состояний: иначе он ни на что не повлияет
-    check(src.index("auto_pick_symbols(acc.equity)") < src.index("sym_states = init_states()"),
-          "Отбор идёт ДО построения списка символов")
+    # Отбор обязан идти ДО создания состояний: иначе он ни на что не повлияет.
+    # Проверяем по СТРОЕНИЮ кода, а не по тексту вызова: текстовая проверка
+    # ломалась от добавления обычного параметра, хотя код был верным, — то есть
+    # шумела вместо того, чтобы ловить настоящие поломки.
+    tree = ast.parse(src)
+    main_fn = next(n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "main")
+    pick_at = [n.lineno for n in ast.walk(main_fn) if isinstance(n, ast.Call)
+               and ast.unparse(n.func) == "auto_pick_symbols"]
+    init_at = [n.lineno for n in ast.walk(main_fn) if isinstance(n, ast.Call)
+               and ast.unparse(n.func) == "init_states"]
+    check(len(pick_at) == 1, "Отбор при запуске вызывается ровно один раз",
+          str(pick_at))
+    check(bool(init_at), "Проверка самого теста: init_states в запуске есть")
+    if pick_at and init_at:
+        check(pick_at[0] < min(init_at),
+              "Отбор идёт ДО построения списка символов",
+              f"отбор на строке {pick_at[0]}, init_states на {min(init_at)}")
 
     body = src.split("def auto_pick_symbols", 1)[1].split("\ndef ", 1)[0]
     check("blocked_symbol_reason" in body,

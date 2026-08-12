@@ -38,6 +38,7 @@ import market_hours
 import news_calendar
 import remote_settings
 import scan_rotation
+import symbol_cache
 import symbol_picker
 import telegram_signals
 import telegram_reader
@@ -1214,7 +1215,8 @@ def contract_facts(symbol: str) -> dict:
     }
 
 
-def auto_pick_symbols(equity: float, deadline: float = None) -> list:
+def auto_pick_symbols(equity: float, deadline: float = None,
+                      acc_server=None) -> list:
     """Взять список пар у брокера и отобрать подходящие.
 
     ОТБОР ИДЁТ В ДВА ЭТАПА, И ЭТО ГЛАВНОЕ В ЭТОЙ ФУНКЦИИ.
@@ -1234,7 +1236,14 @@ def auto_pick_symbols(equity: float, deadline: float = None) -> list:
     AUTO_PICK_SURVEY_LIMIT штук и не дольше AUTO_PICK_MAX_SECONDS.
 
     Время ограничено ЖЁСТКО. Кончилось — берём то, что успели: неполный
-    список лучше запуска, который не кончается."""
+    список лучше запуска, который не кончается.
+
+    И ЗАМЕРЫ ХРАНЯТСЯ В ФАЙЛЕ. Владелец: «пусть просто один раз загружает все
+    пары и хранит у себя в файлах, чтобы не было такой долгой загрузки». Так и
+    сделано: замеренная пара попадает в symbols_survey.json, и следующий
+    запуск её не трогает. То, что не успели, дозамеряется при следующих
+    запусках — за несколько раз покрывается весь список брокера, и ни один
+    запуск не оказывается долгим."""
     if not getattr(cfg, "AUTO_PICK_SYMBOLS", False):
         return []
     if deadline is None:
@@ -1271,14 +1280,27 @@ def auto_pick_symbols(equity: float, deadline: float = None) -> list:
     stage1 = symbol_picker.prefilter(
         facts, equity,
         max_risk_percent=float(getattr(cfg, "MAX_TRADE_RISK_PERCENT_OF_EQUITY", 2.0) or 0),
+        limit=0)              # без обрезки: обрежет очередь на замер ниже
+    passed = stage1["kept"]
+
+    # ---- ЗАМЕРЫ БЕРУТСЯ ИЗ ФАЙЛА ---------------------------------------
+    # Владелец: «пусть просто один раз загружает все пары и хранит у себя в
+    # файлах, чтобы не было такой долгой загрузки». Замер стоит дорого, а
+    # меряет то, что за сутки почти не меняется, — делать его каждый запуск
+    # незачем. Подробности и оговорки — в symbol_cache.py.
+    cached = symbol_cache.load(server=str(getattr(acc_server, "server", "") or ""))
+    shortlist = symbol_cache.to_survey(
+        passed, cached,
         limit=int(getattr(cfg, "AUTO_PICK_SURVEY_LIMIT",
                           symbol_picker.DEFAULT_SURVEY_LIMIT)))
-    shortlist = stage1["kept"]
-    log.info("Отбор пар: по описанию контракта прошли %d, замеряю их...",
-             len(shortlist))
-    runtime_events.record(
-        "пары", f"отбор: из {len(available)} инструментов брокера подходят по "
-                f"размеру {len(shortlist)}, замеряю")
+    if shortlist:
+        log.info("Отбор пар: подходят по размеру %d, из них надо замерить %d "
+                 "(остальные уже есть в файле)", len(passed), len(shortlist))
+        runtime_events.record(
+            "пары", f"отбор: замеряю {len(shortlist)} пар, остальные взяты из "
+                    f"сохранённых замеров")
+    else:
+        log.info("Отбор пар: все %d пар уже замерены — беру из файла", len(passed))
 
     # ---- ЭТАП 2: настоящий замер, только для выживших -------------------
     # Сначала добавляем в «Обзор рынка» ВСЕХ выживших, и только потом
@@ -1312,8 +1334,19 @@ def auto_pick_symbols(equity: float, deadline: float = None) -> list:
     if no_data:
         log.info("Отбор пар: по %d парам брокер не дал баров — пропущены", no_data)
 
+    # Свежие замеры складываем к сохранённым и сохраняем обратно: то, что не
+    # успели в этот раз, замерится при следующем запуске, и так пока не будет
+    # покрыт весь список брокера.
+    cached = symbol_cache.merge(cached, surveyed)
+    if surveyed:
+        symbol_cache.save(cached, server=str(getattr(acc_server, "server", "") or ""))
+    line = symbol_cache.describe(cached, len(passed), len(surveyed))
+    log.info("%s", line)
+    if len(cached) < len(passed):
+        runtime_events.record("пары", line)
+
     result = symbol_picker.pick(
-        surveyed, equity,
+        symbol_cache.usable_rows(cached, available), equity,
         limit=int(getattr(cfg, "AUTO_PICK_LIMIT", symbol_picker.DEFAULT_LIMIT)),
         max_risk_percent=float(getattr(cfg, "MAX_TRADE_RISK_PERCENT_OF_EQUITY", 2.0) or 0),
         max_spread_ratio=float(getattr(cfg, "AUTO_PICK_MAX_SPREAD_RATIO", 0.25) or 0),
@@ -1493,7 +1526,7 @@ def main(stop_event=None, start_dashboard: bool = True):
     # Делается один раз при запуске: замер всех пар брокера занимает время, а
     # спред и подвижность инструмента за час не меняются настолько, чтобы
     # пересматривать список постоянно.
-    picked = auto_pick_symbols(acc.equity)
+    picked = auto_pick_symbols(acc.equity, acc_server=acc)
     if picked:
         cfg.SYMBOLS = picked
 
