@@ -434,6 +434,75 @@ def test_auto_update_is_on_by_default() -> None:
           "компьютере владельца", str(accepted))
 
 
+def test_update_checkbox_reaches_installed_copy() -> None:
+    """ОТКУДА ЭТОТ ТЕСТ. Владелец прислал снимок: в программе снята галочка
+    «Проверять обновления», внизу написано «Обновление выключено в настройках
+    (UPDATE_ENABLED = False)», и кнопка обновления отвечает отказом. То есть
+    правки, которые я делаю, до его компьютера не доезжали вовсе.
+
+    В образце настроек галочка стоит — но образец применяется только к новой
+    установке. До уже установленной программы такое доезжает лишь одноразовой
+    правкой."""
+    print("\n[Проверка обновлений доезжает до установленной программы]")
+    check(CFG.UPDATE_ENABLED is True, "В образце настроек включено",
+          str(CFG.UPDATE_ENABLED))
+
+    # Правка отдельная, а не пункт ONE_TIME, и это важно: пункты ONE_TIME
+    # выполняются ПЕРВЫМИ, до подстановки репозитория. Включи мы галочку там,
+    # новая установка перестала бы получать репозиторий автоматически —
+    # проверено, тест это поймал.
+    src = (APP / "config_migrate.py").read_text(encoding="utf-8")
+    check("def _enable_update_check" in src, "Правка есть")
+    check("MIGRATED_UPDATE_CHECK_ON" in src, "У неё своя отметка — сработает раз")
+    check('"MIGRATED_UPDATE_ENABLED"' not in src,
+          "И она НЕ в ONE_TIME — иначе сломается подстановка репозитория")
+    order = src.split("def apply_one_time", 1)[1]
+    check(order.index("_default_update_repo") < order.index("_enable_update_check"),
+          "Вызывается ПОСЛЕ подстановки репозитория, а не до")
+
+    # Удалённо переключать это по-прежнему нельзя: иначе кто угодно, у кого
+    # есть доступ к файлу настроек в GitHub, отключил бы обновления навсегда
+    accepted, rejected = rs.validate({"UPDATE_ENABLED": False})
+    check("UPDATE_ENABLED" not in accepted,
+          "Через GitHub обновления не выключить", str(accepted))
+    check(bool(rejected), "И отказ объяснён")
+
+
+def test_update_button_says_what_exactly_is_missing() -> None:
+    """Сообщение обязано называть РОВНО то, чего не хватает. Владелец получил
+    «включите галочку и впишите репозиторий» при вписанном репозитории — и
+    пошёл искать проблему там, где её не было."""
+    print("\n[Отказ кнопки обновления называет точную причину]")
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    body = ui.split("def update_everything_now", 1)[1].split("\n    def ", 1)[0]
+
+    check("Сначала включите «Проверять обновления» и впишите репозиторий" not in body,
+          "Общей фразы на оба случая больше нет")
+    check(body.count("missing.append") == 2,
+          "Каждая причина сообщается отдельно", str(body.count("missing.append")))
+
+    # Проверяем СТРОЕНИЕ: каждая причина должна быть привязана к своей
+    # проверке. Мутация «if False:» оставляла обе строки на месте и потому
+    # проходила подсчёт — но галочку уже никто не проверял.
+    func = next(n for n in ast.walk(ast.parse(ui))
+                if isinstance(n, ast.FunctionDef) and n.name == "update_everything_now")
+    tests_used = [ast.unparse(n.test) for n in ast.walk(func)
+                  if isinstance(n, ast.If)
+                  and any("missing.append" in ast.unparse(b) for b in n.body)]
+    check(any("updater.enabled()" in t for t in tests_used),
+          "Галочка проверяется по-настоящему, а не «на всякий случай»",
+          str(tests_used))
+    check(any("updater.repo()" in t for t in tests_used),
+          "И репозиторий тоже", str(tests_used))
+    check("сейчас она снята" in body,
+          "Про галочку сказано так, чтобы её нашли глазами")
+    check("simafon1-cyber/repp" in body,
+          "А про репозиторий показан пример, а не описание формата")
+    check("Сохранить все настройки" in body,
+          "И названа кнопка, которую надо нажать после — она называется "
+          "именно так, а не просто «Сохранить»")
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ: НАСТРОЙКИ ИЗ GITHUB")
@@ -456,6 +525,8 @@ def main() -> int:
     test_wired_into_trading_loop()
     test_auto_update_never_runs_with_open_trades()
     test_auto_update_is_on_by_default()
+    test_update_checkbox_reaches_installed_copy()
+    test_update_button_says_what_exactly_is_missing()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

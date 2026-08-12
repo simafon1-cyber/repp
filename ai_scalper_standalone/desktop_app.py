@@ -2870,12 +2870,24 @@ class App:
         if applied:
             self.update_status_var.set(
                 "Сохранены изменённые настройки: " + ", ".join(applied))
-        ok_repo = updater.enabled() and updater.repo() and "/" in updater.repo()
-        if not ok_repo:
+        # Называем РОВНО то, чего не хватает. Раньше здесь стояла одна фраза
+        # на оба случая: «включите галочку И впишите репозиторий». Владелец
+        # получил её при вписанном репозитории и снятой галочке — и пошёл
+        # искать несуществующую проблему с репозиторием.
+        missing = []
+        if not updater.enabled():
+            missing.append(
+                "поставьте галочку «Проверять обновления» (сейчас она снята)")
+        if not (updater.repo() and "/" in updater.repo()):
+            missing.append(
+                "впишите репозиторий в виде владелец/название, "
+                "например simafon1-cyber/repp")
+        if missing:
             messagebox.showwarning(
                 APP_TITLE,
-                "Сначала включите «Проверять обновления» и впишите репозиторий "
-                "(владелец/название), затем «Сохранить».")
+                "Обновление не запущено. Что сделать:\n\n• "
+                + "\n• ".join(missing)
+                + "\n\nЗатем нажмите «Сохранить все настройки» и повторите.")
             return
 
         busy = self._bot_is_busy()

@@ -707,6 +707,58 @@ def _block_gold(text: str, existing: dict) -> tuple:
     return text, note
 
 
+def _enable_update_check(text: str, existing: dict):
+    """Включить проверку обновлений, когда репозиторий уже верный.
+
+    ОТКУДА ЭТО. Владелец прислал снимок экрана: репозиторий вписан, ветка
+    вписана, а галочка «Проверять обновления» снята, внизу «Обновление
+    выключено в настройках». То есть правки, которые он заказывает, до его
+    компьютера не доезжали вовсе — а просил он ровно обратного: «сделай, чтобы
+    она сама ставила обновление, без моего участия».
+
+    ПОЧЕМУ ОТДЕЛЬНОЙ ПРАВКОЙ, А НЕ ПУНКТОМ В ONE_TIME. Пункты ONE_TIME
+    выполняются ПЕРВЫМИ, до _default_update_repo. Включи мы галочку там, для
+    новой установки перестало бы срабатывать условие «оба поля на заводском
+    значении» — и репозиторий больше не подставлялся бы сам. Проверено: так и
+    вышло, тест это поймал.
+
+    ПОЧЕМУ ЭТО НЕ ПРОТИВОРЕЧИТ ПРАВИЛУ «НЕ ТРОГАТЬ ОСОЗНАННЫЙ ВЫБОР».
+    _default_update_repo намеренно не включает галочку, если репозиторий уже
+    заполнен: там это считалось осознанным выбором. Здесь выбор сделан прямо и
+    словами — владелец просил обновляться самостоятельно. Поэтому правка
+    одноразовая: она сработает ОДИН раз, и если после неё галочку снять, она
+    останется снятой навсегда."""
+    marker = "MIGRATED_UPDATE_CHECK_ON"
+    if marker in existing:
+        return text, ""
+
+    def _current(name, fallback):
+        node = existing.get(name)
+        if node is None:
+            return fallback
+        value_node = node["value"]
+        if isinstance(value_node, ast.Constant):
+            return value_node.value
+        return fallback
+
+    if _current("UPDATE_ENABLED", False) is True:
+        # Уже включено — правку всё равно отмечаем сделанной, чтобы она не
+        # висела и не срабатывала однажды позже, когда галочку снимут нарочно.
+        text = text.rstrip("\n") + f"\n\n{marker} = True\n"
+        return text, ""
+
+    repo = str(_current("UPDATE_REPO", "") or "")
+    if "/" not in repo:
+        return text, ""      # репозитория нет — включать нечего, не мешаем
+
+    text = _replace_or_append(text, "UPDATE_ENABLED", repr(True))
+    text = text.rstrip("\n") + f"\n\n{marker} = True\n"
+    return text, ("проверка обновлений включена: репозиторий вписан, а галочка "
+                  "была снята — правки не доезжали до программы вовсе. "
+                  "Сработает один раз: снимете после этого сами — так и "
+                  "останется")
+
+
 def apply_one_time(config_path: str = "") -> list:
     """Применить одноразовые изменения из ONE_TIME. Возвращает пояснения к тем,
     что реально применились."""
@@ -735,6 +787,11 @@ def apply_one_time(config_path: str = "") -> list:
     text, repo_note = _default_update_repo(text, existing)
     if repo_note:
         applied.append(repo_note)
+
+    existing = _top_level_assignments(text)
+    text, check_note = _enable_update_check(text, existing)
+    if check_note:
+        applied.append(check_note)
 
     existing = _top_level_assignments(text)
     text, symbols_note = _fix_broker_specific_symbols(text, existing)

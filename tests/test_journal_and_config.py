@@ -254,18 +254,67 @@ def test_config_migrate_defaults_update_repo() -> None:
         check(after.UPDATE_REPO == "кто-то/чужой-форк",
               "Чужой репозиторий не переписан", after.UPDATE_REPO)
 
-    # Репозиторий уже стоит правильный — галочку включённости не трогаем,
-    # даже если она сейчас False (явный сознательный выбор пользователя)
+    # ПРАВИЛО ИЗМЕНИЛОСЬ, И НАМЕРЕННО. Раньше здесь проверялось обратное:
+    # «репозиторий верный, галочка снята — не трогаем, это осознанный выбор».
+    # Владелец прислал снимок ровно такого состояния: репозиторий вписан,
+    # галочка снята, «Обновление выключено в настройках» — то есть заказанные
+    # им правки не доезжали до программы вовсе, при том что просил он
+    # «чтобы она сама ставила обновление, без моего участия».
+    #
+    # Теперь галочка включается ОДИН раз. Снятая после этого — остаётся снятой
+    # навсегда: именно это и делает выбор осознанным, а не угаданным.
     with tempfile.TemporaryDirectory() as d:
         config_path = os.path.join(d, "config.py")
         Path(config_path).write_text(
             'UPDATE_ENABLED = False\nUPDATE_REPO = "simafon1-cyber/repp"\n',
             encoding="utf-8")
-        cm.apply_one_time(config_path)
+        applied = cm.apply_one_time(config_path)
         after = types.ModuleType("after3")
         exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        check(after.UPDATE_ENABLED is True,
+              "Галочка включается: без неё правки не доезжают до программы")
+        check(any("не доезжали" in a for a in applied),
+              "И человеку сказано, почему её тронули", str(applied)[:120])
+
+        # Второй раз — уже не лезем: человек снял сам, значит так и надо
+        Path(config_path).write_text(
+            Path(config_path).read_text(encoding="utf-8")
+            .replace("UPDATE_ENABLED = True", "UPDATE_ENABLED = False"),
+            encoding="utf-8")
+        cm.apply_one_time(config_path)
+        after = types.ModuleType("after3b")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
         check(after.UPDATE_ENABLED is False,
-              "Осознанно выключенную проверку миграция не включает обратно")
+              "СНЯТУЮ ПОСЛЕ ЭТОГО — не включаем обратно никогда")
+
+    # Уже включено — не рапортуем о том, чего не делали. Строка «проверка
+    # обновлений включена» в списке изменений означает, что программа что-то
+    # поменяла; если она появляется на пустом месте, человек перестаёт верить
+    # всему списку.
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text(
+            'UPDATE_ENABLED = True\nUPDATE_REPO = "simafon1-cyber/repp"\n',
+            encoding="utf-8")
+        applied = cm.apply_one_time(config_path)
+        check(not any("проверка обновлений включена" in a for a in applied),
+              "Про уже включённую галочку не сообщается как об изменении",
+              str([a for a in applied if "обновлен" in a])[:120])
+        after = types.ModuleType("after3d")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        check(after.UPDATE_ENABLED is True, "И она осталась включённой")
+
+    # Репозитория нет вовсе — включать нечего, не мешаем
+    with tempfile.TemporaryDirectory() as d:
+        config_path = os.path.join(d, "config.py")
+        Path(config_path).write_text(
+            'UPDATE_ENABLED = False\nUPDATE_REPO = "мусор-без-косой-черты"\n',
+            encoding="utf-8")
+        cm.apply_one_time(config_path)
+        after = types.ModuleType("after3c")
+        exec(Path(config_path).read_text(encoding="utf-8"), after.__dict__)
+        check(after.UPDATE_ENABLED is False,
+              "Без пригодного репозитория галочку не включаем — толку нет")
 
     # Отсутствие настроек вовсе (совсем старый файл) не роняет миграцию
     with tempfile.TemporaryDirectory() as d:
