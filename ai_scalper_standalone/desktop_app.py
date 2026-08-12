@@ -78,6 +78,7 @@ import dashboard_state as ds
 import news_calendar
 import news_providers
 import trading_schedule as tsched
+import mt5_connector as mt5c
 import mt5_install
 import param_help
 import config_migrate
@@ -2243,6 +2244,23 @@ class App:
         ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=(0, 10))
 
     # ---- вкладка "Система" -----------------------------------------------------------
+    def show_mt5_terminal(self):
+        """Вернуть окно терминала на экран.
+
+        Нужна обязательно: спрятанное окно исчезает и с панели задач, мышью
+        его не достать. Без этой кнопки человек остался бы без MetaTrader
+        совсем и решил бы, что программа его сломала."""
+        count = mt5c.show_terminal()
+        self.terminal_window_var.set(
+            "Окно терминала показано." if count
+            else "Терминал не найден — он запущен?")
+
+    def hide_mt5_terminal(self):
+        count = mt5c.hide_terminal()
+        self.terminal_window_var.set(
+            "Окно терминала скрыто, торговля продолжается." if count
+            else "Терминал не найден — он запущен?")
+
     def _build_tab_system(self, parent):
         """Проверка компьютера, мост для советников и обновление — в одном
         месте. Всё, что отвечает на вопрос «почему не работает» и «как
@@ -2256,6 +2274,27 @@ class App:
 
         ttk.Label(parent, text="Состояние системы",
                   font=("Segoe UI", 12, "bold")).pack(anchor="w", **pad)
+
+        # ---------- Окно терминала ----------
+        term = ttk.LabelFrame(parent, text=" Терминал MetaTrader ")
+        term.pack(fill="x", padx=12, pady=(6, 4))
+        ttk.Label(term, foreground=self.colors["muted"], wraplength=780,
+                  justify="left", text=
+                  "Программа сама запускает терминал и сама входит в счёт — "
+                  "вводить что-либо в MetaTrader не нужно. Его окно спрятано, "
+                  "чтобы не мешало; терминал при этом работает полностью.\n"
+                  "Совсем без терминала работать нельзя: именно он держит связь "
+                  "с брокером и исполняет приказы, а его протокол закрытый."
+                  ).pack(anchor="w", padx=8, pady=(4, 2))
+        row = ttk.Frame(term)
+        row.pack(anchor="w", padx=8, pady=(0, 6))
+        ttk.Button(row, text="Показать терминал",
+                   command=self.show_mt5_terminal).pack(side="left")
+        ttk.Button(row, text="Спрятать терминал",
+                   command=self.hide_mt5_terminal).pack(side="left", padx=6)
+        self.terminal_window_var = tk.StringVar(value="")
+        ttk.Label(row, textvariable=self.terminal_window_var,
+                  foreground=self.colors["muted"]).pack(side="left", padx=8)
 
         # ---------- Мост для советников ----------
         br = ttk.LabelFrame(parent, text=" Мост для советников MetaTrader ")
@@ -4656,6 +4695,14 @@ class App:
             # NameError, который молча съедал except ниже, и чтение Telegram
             # на выходе не останавливалось вообще.
             tgr.stop()
+        except Exception:
+            pass
+        try:
+            # Окно терминала возвращаем на экран ОБЯЗАТЕЛЬНО. Спрятанное окно
+            # исчезает и с панели задач: если оставить его так, человек не
+            # сможет открыть MetaTrader вообще — ни мышью, ни из меню — и
+            # решит, что программа сломала ему терминал.
+            mt5c.show_terminal()
         except Exception:
             pass
         try:

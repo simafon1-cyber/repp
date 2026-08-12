@@ -58,6 +58,87 @@ def auto_login_account():
     return ready[0] if ready else None
 
 
+# =====================================================================
+# ОКНО ТЕРМИНАЛА: УБРАТЬ С ГЛАЗ
+# =====================================================================
+# Владелец: «можно сделать, чтобы не открывался сам терминал MetaTrader,
+# чтобы оно подключалось к учётной записи и работало... чтобы я мог просто
+# ввести учётные данные и работать в этой же программе».
+#
+# ЧТО ТУТ ВОЗМОЖНО, А ЧТО НЕТ — честно.
+#
+# Убрать терминал СОВСЕМ нельзя, и это не вопрос усилий. Терминал и есть
+# соединение с брокером: он держит защищённый канал, знает протокол обмена и
+# отвечает за исполнение приказов. Наша программа с брокером не разговаривает
+# вовсе — она отдаёт команды терминалу, а тот уже идёт к брокеру. Протокол
+# этого канала закрытый, MetaQuotes его не публикует, и написать «свой
+# терминал» нельзя ни за день, ни за год.
+#
+# А вот сделать его НЕВИДИМЫМ можно, и это ровно то, что человеку и нужно.
+# Программа и так запускает терминал сама и сама входит в счёт (см. connect()
+# ниже: логин, пароль и сервер передаются прямо в mt5.initialize). Остаётся
+# только убрать окно. Терминал при этом продолжает работать полностью: он
+# просто не показывается.
+#
+# ЧЕГО ЗДЕСЬ ОСТЕРЕГАЕМСЯ. Спрятанное окно исчезает и с панели задач — вернуть
+# его мышью человек уже не сможет. Поэтому: есть обратная команда, окно
+# показывается назад при выходе из программы, и в настройке это описано.
+_MT5_WINDOW_CLASSES = (
+    "MetaQuotes::MetaTrader::5",   # основное окно терминала
+)
+_SW_HIDE = 0
+_SW_SHOWNA = 8                     # показать, но не забирать фокус
+
+
+def set_terminal_visible(visible: bool) -> int:
+    """Показать или спрятать окно терминала. Возвращает число окон, которых
+    это коснулось. 0 — окон не нашлось (или мы не на Windows).
+
+    Терминал от этого не останавливается: прячется только окно, процесс
+    работает как работал."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except (ImportError, ValueError):
+        return 0                   # не Windows — прятать нечего
+    if not hasattr(ctypes, "windll"):
+        return 0
+
+    user32 = ctypes.windll.user32
+    touched = 0
+    buffer = ctypes.create_unicode_buffer(256)
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _param):
+        nonlocal touched
+        user32.GetClassNameW(hwnd, buffer, 256)
+        if buffer.value in _MT5_WINDOW_CLASSES:
+            user32.ShowWindow(hwnd, _SW_SHOWNA if visible else _SW_HIDE)
+            touched += 1
+        return True
+
+    try:
+        user32.EnumWindows(visit, 0)
+    except Exception as e:          # noqa: BLE001
+        log.debug("Не удалось перебрать окна: %s", e)
+        return 0
+    return touched
+
+
+def hide_terminal() -> int:
+    count = set_terminal_visible(False)
+    if count:
+        log.info("Окно терминала MetaTrader скрыто (%d шт). Терминал работает.", count)
+    return count
+
+
+def show_terminal() -> int:
+    count = set_terminal_visible(True)
+    if count:
+        log.info("Окно терминала MetaTrader возвращено на экран (%d шт).", count)
+    return count
+
+
 def connect():
     kwargs = {}
     if getattr(cfg, "MT5_TERMINAL_PATH", ""):
@@ -107,6 +188,13 @@ def connect():
         "Подключено к MT5. Счёт %s (%s), баланс %.2f %s",
         acc.login, acc.server, acc.balance, acc.currency,
     )
+
+    # Окно терминала убираем ПОСЛЕ успешного входа, а не до: пока вход не
+    # состоялся, терминал может показывать окно с ошибкой или просить пароль,
+    # и спрятать его означало бы спрятать от человека саму причину, по которой
+    # ничего не работает.
+    if getattr(cfg, "MT5_HIDE_TERMINAL", False):
+        hide_terminal()
     return acc
 
 
