@@ -174,20 +174,130 @@ def test_broker_says_closed() -> None:
 # =====================================================================
 # НЕЛИКВИДНОСТЬ
 # =====================================================================
-def test_normal_spread_is_median_not_average() -> None:
-    """Медиана, а не среднее: один выброс на новостях сдвинул бы среднее
-    вверх, и широкий спред перестал бы считаться широким ровно тогда, когда
-    он опаснее всего."""
-    print("\n[Обычный спред считается медианой]")
+def _fill_baseline(symbol: str, values, start: float = 0.0):
+    """Набить долгую норму: замер раз в минуту, как в жизни."""
+    for i, v in enumerate(values):
+        mh.note_spread(symbol, v, now=start + i * mh.BASELINE_SECONDS)
+
+
+def test_normal_is_calm_market_not_average_day() -> None:
+    """Норма — это спред СПОКОЙНОГО рынка, а не средний по суткам.
+
+    Медиана суток на паре, которая полночи стоит неликвидной, сама наполовину
+    состоит из ночи. Тогда ночной спред перестаёт считаться широким — ровно
+    тогда, когда он опаснее всего. Поэтому берётся нижний квартиль."""
+    print("\n[Норма — спред спокойного рынка]")
     mh.reset()
-    for _ in range(20):
-        mh.note_spread("EURUSD", 10)
-    mh.note_spread("EURUSD", 5000)          # выброс на новостях
-    median = mh.normal_spread("EURUSD")
-    average = (20 * 10 + 5000) / 21
-    check(median == 10, "Один выброс не сдвинул медиану", str(median))
-    check(median < average / 10,
-          "А среднее он раздул бы в разы", f"медиана {median}, среднее {average:.0f}")
+    # Половина суток спокойная (10), половина неликвидная (60)
+    _fill_baseline("EURUSD", [10] * 400 + [60] * 400)
+    norm = mh.normal_spread("EURUSD")
+    check(norm == 10, "Нижний квартиль показывает спокойный спред", str(norm))
+
+    import statistics
+    middle = statistics.median([10] * 400 + [60] * 400)
+    check(norm < middle,
+          "А медиана суток была бы выше и обезоружила бы проверку",
+          f"квартиль {norm}, медиана {middle}")
+
+
+def test_sustained_wide_spread_is_caught() -> None:
+    """ТА САМАЯ ДЫРА, ради которой всё переделывалось.
+
+    Раньше норма считалась по короткому окну в 17 минут. Ночью спред широкий
+    ВСЁ ВРЕМЯ — окно за те же 17 минут целиком заполнялось ночными замерами,
+    норма становилась ночной, отношение «текущий к обычному» равнялось
+    единице, и порог 2.5 был недостижим в принципе. Защита ловила только
+    резкие скачки и была слепа к затяжной неликвидности.
+
+    Отчёт владельца за 12.08.2026 показал это в лоб: торговля шла с 00:01 до
+    05:33 и дала -12.60, а вход не был закрыт ни разу."""
+    print("\n[Затяжной широкий спред ловится, а не считается нормой]")
+    mh.reset()
+
+    # Сутки спокойной торговли: норма выучена
+    _fill_baseline("EURUSD", [10] * 600)
+    check(mh.normal_spread("EURUSD") == 10, "Норма выучена по спокойному рынку")
+
+    # Наступила ночь: спред 40 и держится ЧАСАМИ, а не скачком
+    night_start = 600 * mh.BASELINE_SECONDS
+    _fill_baseline("EURUSD", [40] * 300, start=night_start)
+
+    norm = mh.normal_spread("EURUSD")
+    check(norm <= 12,
+          "Норма НЕ уехала за ночным спредом — иначе ночь снова стала бы «нормой»",
+          str(norm))
+    reason = mh.thin_reason(40, norm, mh.spread_samples("EURUSD"), 2.5, 30)
+    check(reason != "",
+          "И затяжной ночной спред объявлен неликвидом", reason or "(пусто)")
+
+
+def test_baseline_is_throttled_to_once_a_minute() -> None:
+    """Норма должна пополняться РЕДКО — иначе она снова станет короткой.
+
+    Торговый цикл зовёт замер каждые несколько секунд. Если складывать в
+    норму каждый такой замер, то 1440 ячеек закончатся за пару часов, и
+    «сутки наблюдений» превратятся в «последние два часа» — то есть ночью
+    норма опять станет ночной. Это ровно та дыра, которую чинили."""
+    print("\n[Норма пополняется не чаще раза в минуту]")
+    mh.reset()
+    # Двести замеров за одну минуту — так и ходит торговый цикл
+    for i in range(200):
+        mh.note_spread("EURUSD", 10, now=1000.0 + i * 0.3)
+    check(mh.spread_samples("EURUSD") == 1,
+          "За минуту в норму попал ровно один замер",
+          str(mh.spread_samples("EURUSD")))
+    check(mh.short_samples("EURUSD") == 200,
+          "А короткое окно приняло все — оно про «сейчас»",
+          str(mh.short_samples("EURUSD")))
+
+    mh.note_spread("EURUSD", 10, now=1000.0 + mh.BASELINE_SECONDS)
+    check(mh.spread_samples("EURUSD") == 2,
+          "Через минуту добавился второй")
+
+    # Сколько реального времени охватывает полная норма
+    hours = mh.BASELINE_SAMPLES * mh.BASELINE_SECONDS / 3600
+    check(hours >= 24, "Полная норма охватывает не меньше суток",
+          f"{hours:.0f} ч")
+
+
+def test_no_verdict_without_enough_history() -> None:
+    print("\n[Без накопленной нормы не судим]")
+    mh.reset()
+    _fill_baseline("GBPUSD", [10] * (mh.BASELINE_MIN_SAMPLES - 1))
+    check(mh.normal_spread("GBPUSD") == 0.0,
+          "Меньше часа наблюдений — нормы нет")
+    check(mh.market_block_reason("GBPUSD", trade_mode=4, spread_points=999,
+                                 dead_seconds=0, thin_ratio=2.5,
+                                 thin_min_samples=30) == "",
+          "И вход не закрывается наугад")
+    _fill_baseline("GBPUSD", [10] * 5,
+                   start=mh.BASELINE_MIN_SAMPLES * mh.BASELINE_SECONDS)
+    check(mh.normal_spread("GBPUSD") > 0, "Набралось — норма появилась")
+
+
+def test_baseline_survives_restart() -> None:
+    """Перезапуск НОЧЬЮ не должен заставить программу учить норму заново по
+    ночным же замерам — а перезапускают её как раз тогда, когда что-то пошло
+    не так."""
+    print("\n[Норма переживает перезапуск]")
+    import tempfile, os as _os
+    mh.reset()
+    _fill_baseline("EURUSD", [10] * 300)
+    with tempfile.TemporaryDirectory() as d:
+        path = _os.path.join(d, "baseline.json")
+        check(mh.save_baseline(path) is True, "Норма сохранена в файл")
+        mh.reset()
+        check(mh.normal_spread("EURUSD") == 0.0, "После сброса нормы нет")
+        check(mh.load_baseline(path) == 1, "Норма прочитана обратно")
+        check(mh.normal_spread("EURUSD") == 10, "И это тот же спокойный спред")
+
+        # Испорченный файл не должен ронять программу
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("{это не json")
+        mh.reset()
+        check(mh.load_baseline(path) == 0, "Испорченный файл — просто нет нормы")
+        check(mh.load_baseline(_os.path.join(d, "нет-такого")) == 0,
+              "Отсутствующий файл — то же самое")
 
 
 def test_thin_market() -> None:
@@ -238,8 +348,10 @@ def test_priority_of_reasons() -> None:
     """Человеку показывается самая НАДЁЖНАЯ из сработавших причин."""
     print("\n[Порядок причин: сначала брокер, потом цена, потом наша оценка]")
     mh.reset()
-    for _ in range(50):
-        mh.note_spread("EURUSD", 10)
+    # Норму набиваем через _fill_baseline: замеры должны быть РАЗНЕСЕНЫ ПО
+    # ВРЕМЕНИ, иначе в долгую норму попадёт только один из них — она
+    # пополняется не чаще раза в минуту.
+    _fill_baseline("EURUSD", [10] * 200)
     mh.note_quote("EURUSD", 111, now=0.0)
 
     # Сработали все три сразу
@@ -482,7 +594,11 @@ def main() -> int:
     test_timezone_never_enters_the_math()
     test_frozen_reason()
     test_broker_says_closed()
-    test_normal_spread_is_median_not_average()
+    test_normal_is_calm_market_not_average_day()
+    test_sustained_wide_spread_is_caught()
+    test_baseline_is_throttled_to_once_a_minute()
+    test_no_verdict_without_enough_history()
+    test_baseline_survives_restart()
     test_thin_market()
     test_silence_when_we_do_not_know()
     test_priority_of_reasons()

@@ -1164,6 +1164,13 @@ def main(stop_event=None, start_dashboard: bool = True):
         нажатия "Старт" не пытались занять порт 5000 второй раз (Flask-сервер,
         запущенный при первом старте, не останавливается вместе с ботом).
     """
+    # Норма спреда прошлого запуска: без неё первый час после старта защита
+    # от неликвида молчит, а ночной перезапуск учил бы её заново по ночным же
+    # замерам.
+    restored = market_hours.load_baseline()
+    if restored:
+        log.info("Норма спреда восстановлена по %d парам", restored)
+
     log.info("Запуск AI Scalper Standalone | LIVE_TRADING=%s | режим=%s | профиль=%s | символы=%s",
               cfg.LIVE_TRADING, cfg.TRADING_MODE.value, cfg.RISK_PROFILE.value, cfg.SYMBOLS)
     if not cfg.LIVE_TRADING:
@@ -1239,6 +1246,10 @@ def main(stop_event=None, start_dashboard: bool = True):
                 # не через одну.
                 sync_remote_settings()
                 reload_config_if_changed(sym_states)
+                # Норму спреда сохраняем на диск, чтобы перезапуск НОЧЬЮ не
+                # заставил программу заново выучить ночной спред как
+                # нормальный (см. market_hours.save_baseline).
+                market_hours.save_baseline()
 
                 equity = acc_info.equity
                 check_new_day(acc_state, equity)

@@ -53,48 +53,91 @@
 не доказан — в отличие от самой ночной просадки, которая посчитана.
 """
 
+import json
 import logging
+import os
 import statistics
+import sys
 import threading
 import time
 
 log = logging.getLogger("market_hours")
 
-# Сколько замеров спреда держим на пару. 200 при опросе раз в 5 секунд —
-# это около 15 минут: достаточно, чтобы медиана отражала ТЕКУЩИЙ режим
-# рынка, и мало, чтобы дневная норма не тянула ночную оценку вверх.
+# Короткое окно — только чтобы знать ТЕКУЩИЙ спред. 200 замеров при опросе
+# раз в 5 секунд это около 17 минут.
 SPREAD_SAMPLES = 200
 
+# ДОЛГАЯ НОРМА — вот она и есть главное.
+#
+# ПОЧЕМУ ПРИШЛОСЬ ПЕРЕДЕЛЫВАТЬ. Сначала «обычный спред» считался медианой
+# того самого короткого окна. Это оказалось дырой, и отчёт владельца за
+# 12.08.2026 показал её в лоб: торговля шла с 00:01 до 05:33 и дала -12.60,
+# а защита от неликвида не сработала НИ РАЗУ.
+#
+# Причина арифметическая. Ночью спред широкий ВСЁ ВРЕМЯ. Короткое окно
+# длиной 17 минут за эти же 17 минут целиком заполняется ночными замерами,
+# медиана становится ночной — и отношение «текущий к обычному» равно
+# единице. Порог 2.5 недостижим в принципе. Защита ловила только РЕЗКИЕ
+# скачки и была слепа к затяжной неликвидности, то есть ровно к тому
+# случаю, ради которого писалась.
+#
+# Теперь норма считается по СУТКАМ и берётся НИЖНИМ КВАРТИЛЕМ, а не
+# медианой: нижний квартиль суточной выборки — это спред спокойного, живого
+# рынка. Ночной спред сравнивается уже с ним, и разница видна.
+#
+# Замер в долгую норму берётся раз в минуту, а не каждый проход: иначе
+# сутки не поместились бы никуда, а частота замеров ничего не уточняет.
+BASELINE_SECONDS = 60          # как часто добавлять замер в долгую норму
+BASELINE_SAMPLES = 1440        # 24 часа при замере раз в минуту
+BASELINE_MIN_SAMPLES = 60      # раньше часа не судим вовсе
+BASELINE_PERCENTILE = 25       # «спокойный» спред, а не средний по суткам
+BASELINE_FILE = "spread_baseline.json"
+
 _lock = threading.Lock()
-_spreads: dict = {}        # symbol -> list[int]
+_spreads: dict = {}        # symbol -> list[int]   короткое окно
+_baseline: dict = {}       # symbol -> list[int]   долгая норма
+_baseline_at: dict = {}    # symbol -> когда последний раз пополняли норму
 _last_quote: dict = {}     # symbol -> (отметка времени брокера, наш момент)
+_dirty = False             # норма менялась и ещё не сохранена
 
 
 # =====================================================================
 # ЗАМЕРЫ
 # =====================================================================
-def note_spread(symbol: str, spread_points) -> None:
+def note_spread(symbol: str, spread_points, now: float = None) -> None:
     """Запомнить очередной замер спреда. Мусор молча игнорируем: одна
-    кривая цифра не должна испортить медиану."""
+    кривая цифра не должна испортить норму."""
+    global _dirty
     try:
         value = int(spread_points)
     except (TypeError, ValueError):
         return
     if value <= 0:
         return
+    if now is None:
+        now = time.time()
     with _lock:
         row = _spreads.setdefault(symbol, [])
         row.append(value)
         if len(row) > SPREAD_SAMPLES:
             del row[:len(row) - SPREAD_SAMPLES]
 
+        # В долгую норму — не чаще раза в минуту.
+        last = _baseline_at.get(symbol)
+        if last is None or now - last >= BASELINE_SECONDS:
+            _baseline_at[symbol] = now
+            long_row = _baseline.setdefault(symbol, [])
+            long_row.append(value)
+            if len(long_row) > BASELINE_SAMPLES:
+                del long_row[:len(long_row) - BASELINE_SAMPLES]
+            _dirty = True
 
-def normal_spread(symbol: str) -> float:
-    """Обычный спред этой пары — МЕДИАНА замеров, а не среднее.
 
-    Именно медиана: один выброс на новостях сдвинул бы среднее вверх, и
-    тогда «широкий спред» перестал бы считаться широким ровно тогда, когда
-    он опаснее всего."""
+def current_spread(symbol: str) -> float:
+    """Спред прямо сейчас — медиана короткого окна.
+
+    Медиана, а не последнее значение: один выброс не должен объявлять рынок
+    неликвидным, а один узкий тик — объявлять его здоровым."""
     with _lock:
         row = list(_spreads.get(symbol, ()))
     if not row:
@@ -102,7 +145,31 @@ def normal_spread(symbol: str) -> float:
     return float(statistics.median(row))
 
 
+def normal_spread(symbol: str) -> float:
+    """Спред этой пары на СПОКОЙНОМ рынке — нижний квартиль суточной выборки.
+
+    Не медиана и не среднее. Медиана суток на паре, которая полночи стоит
+    неликвидной, сама наполовину состоит из ночи — и «широкий спред»
+    переставал бы считаться широким. Нижний квартиль отражает живой рынок,
+    с которым и нужно сравнивать.
+
+    0.0 означает «нормы ещё нет» — сравнивать не с чем, и судить нельзя."""
+    with _lock:
+        row = sorted(_baseline.get(symbol, ()))
+    if len(row) < BASELINE_MIN_SAMPLES:
+        return 0.0
+    index = max(0, min(len(row) - 1,
+                       int(len(row) * BASELINE_PERCENTILE / 100)))
+    return float(row[index])
+
+
 def spread_samples(symbol: str) -> int:
+    """Сколько замеров в ДОЛГОЙ норме. Именно она решает, можно ли судить."""
+    with _lock:
+        return len(_baseline.get(symbol, ()))
+
+
+def short_samples(symbol: str) -> int:
     with _lock:
         return len(_spreads.get(symbol, ()))
 
@@ -142,10 +209,71 @@ def reset(symbol: str = None) -> None:
     with _lock:
         if symbol is None:
             _spreads.clear()
+            _baseline.clear()
+            _baseline_at.clear()
             _last_quote.clear()
         else:
             _spreads.pop(symbol, None)
+            _baseline.pop(symbol, None)
+            _baseline_at.pop(symbol, None)
             _last_quote.pop(symbol, None)
+
+
+# =====================================================================
+# НОРМА ПЕРЕЖИВАЕТ ПЕРЕЗАПУСК
+# =====================================================================
+# Без сохранения на диск получалась бы та же дыра, только медленнее:
+# программу перезапустили ночью — норма собирается заново, ИЗ НОЧНЫХ
+# замеров, и через час широкий ночной спред снова считается нормальным.
+# А перезапускают её как раз тогда, когда что-то пошло не так, то есть
+# ночью в том числе.
+def _store_path() -> str:
+    if getattr(sys, "frozen", False):
+        folder = os.path.dirname(sys.executable)
+    else:
+        folder = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(folder, BASELINE_FILE)
+
+
+def save_baseline(path: str = "") -> bool:
+    """Сохранить долгую норму. Не удалось — не беда, но скажем в журнал."""
+    global _dirty
+    with _lock:
+        if not _dirty and not path:
+            return True
+        data = {name: list(row) for name, row in _baseline.items() if row}
+        _dirty = False
+    try:
+        with open(path or _store_path(), "w", encoding="utf-8") as f:
+            json.dump({"spreads": data}, f)
+        return True
+    except OSError as e:
+        log.debug("Не удалось сохранить норму спреда: %s", e)
+        return False
+
+
+def load_baseline(path: str = "") -> int:
+    """Прочитать норму прошлого запуска. Возвращает число загруженных пар."""
+    try:
+        with open(path or _store_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return 0
+    rows = data.get("spreads")
+    if not isinstance(rows, dict):
+        return 0
+    loaded = 0
+    with _lock:
+        for name, row in rows.items():
+            if not isinstance(row, list):
+                continue
+            clean = [int(v) for v in row
+                     if isinstance(v, (int, float)) and not isinstance(v, bool)
+                     and 0 < v < 1_000_000]
+            if clean:
+                _baseline[name] = clean[-BASELINE_SAMPLES:]
+                loaded += 1
+    return loaded
 
 
 # =====================================================================
