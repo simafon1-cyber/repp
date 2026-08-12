@@ -1119,13 +1119,23 @@ def survey_symbol(symbol: str) -> dict:
     span = (df["high"] - df["low"]).tail(50)
     atr_points = float(span.mean()) / point if point else 0.0
 
+    spread_points = float(getattr(info, "spread", 0) or 0)
+
+    # Стоп оцениваем ПО ТОМУ ЖЕ правилу, что и в торговле (risk_manager.
+    # min_stop_distance): пол стопа — это максимум из доли ATR, нескольких
+    # спредов и минимальной дистанции брокера. Если считать только по ATR, то
+    # на паре с широким спредом оценка стопа окажется заниженной, а вместе с
+    # ней и риск минимального лота — и слишком дорогая пара проскочит отбор.
+    atr_floor = atr_points * float(getattr(cfg, "MIN_SL_ATR_FRACTION", 1.5) or 0)
+    spread_floor = spread_points * float(getattr(cfg, "MIN_SL_SPREAD_MULTIPLE", 4.0) or 0)
+    broker_floor = float(getattr(info, "trade_stops_level", 0) or 0)
+
     return {
         "symbol": symbol,
-        "spread_points": float(getattr(info, "spread", 0) or 0),
+        "spread_points": spread_points,
         "atr_points": atr_points,
         "min_lot": float(getattr(info, "volume_min", 0) or 0),
-        # Стоп берём по тому же правилу, что и в торговле: доля ATR.
-        "stop_points": atr_points * float(getattr(cfg, "MIN_SL_ATR_FRACTION", 1.5) or 1.5),
+        "stop_points": max(atr_floor, spread_floor, broker_floor),
         "money_per_point": (point / tick_size) * tick_value,
         "trade_mode": getattr(info, "trade_mode", None),
     }

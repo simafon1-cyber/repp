@@ -227,6 +227,100 @@ def test_wired_into_startup() -> None:
           "В торговом цикле отбор не вызывается")
 
 
+def _load_survey_symbol(spread_points, atr_bar_range, stops_level=0):
+    """Взять НАСТОЯЩИЙ survey_symbol из main.py и выполнить его на подставном
+    терминале. Так проверяется сам код, а не его пересказ в тесте."""
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    func = next(n for n in tree.body
+                if isinstance(n, ast.FunctionDef) and n.name == "survey_symbol")
+
+    info = types.SimpleNamespace(
+        point=0.00001, trade_tick_value=1.0, trade_tick_size=0.00001,
+        spread=spread_points, volume_min=0.01, trade_mode=4,
+        trade_stops_level=stops_level)
+    mt5 = types.ModuleType("MetaTrader5")
+    mt5.symbol_info = lambda name: info
+    sys.modules["MetaTrader5"] = mt5
+
+    class FakeSeries(list):
+        def __sub__(self, other):
+            return FakeSeries(a - b for a, b in zip(self, other))
+
+        def tail(self, n):
+            return FakeSeries(self[-n:])
+
+        def mean(self):
+            return sum(self) / len(self)
+
+    class FakeDF:
+        def __init__(self, span):
+            # 60 баров одинакового размаха: средний размах = span
+            self.rows = [span] * 60
+
+        def __len__(self):
+            return len(self.rows)
+
+        def __getitem__(self, key):
+            if key == "high":
+                return FakeSeries(self.rows)
+            return FakeSeries([0.0] * len(self.rows))
+
+    ns = {"cfg": cfg,
+          "mt5c": types.SimpleNamespace(
+              get_rates_df=lambda *a, **k: FakeDF(atr_bar_range))}
+    exec(compile(ast.Module(body=[func], type_ignores=[]), "main.py", "exec"), ns)
+    return ns["survey_symbol"]("EURUSD")
+
+
+def test_stop_estimate_matches_real_trading() -> None:
+    """Риск минимального лота считается от стопа. Если отбор оценит стоп
+    короче, чем его реально поставит торговля, он занизит риск и пропустит
+    пару, которая депозиту не по карману. В торговле пол стопа — это МАКСИМУМ
+    из доли ATR, нескольких спредов и минимума брокера (risk_manager.
+    min_stop_distance). Здесь проверяется, что отбор считает так же."""
+    print("\n[Оценка стопа при отборе совпадает с торговой]")
+
+    atr_frac = float(CFG.MIN_SL_ATR_FRACTION)
+    spread_mult = float(CFG.MIN_SL_SPREAD_MULTIPLE)
+
+    # Узкий спред: решает ATR. Размах бара 0.0020 при точке 0.00001 = 200 пунктов
+    row = _load_survey_symbol(spread_points=10, atr_bar_range=0.0020)
+    check(abs(row["atr_points"] - 200) < 1e-6, "ATR посчитан в пунктах",
+          str(row.get("atr_points")))
+    check(abs(row["stop_points"] - 200 * atr_frac) < 1e-6,
+          f"Узкий спред — стоп по ATR ({atr_frac} x 200)",
+          str(row.get("stop_points")))
+
+    # Широкий спред: решает он. 90 пунктов x 4 = 360 > 200 x 1.5 = 300
+    wide = _load_survey_symbol(spread_points=90, atr_bar_range=0.0020)
+    check(abs(wide["stop_points"] - 90 * spread_mult) < 1e-6,
+          f"Широкий спред — стоп по спреду ({spread_mult} x 90), а не по ATR",
+          str(wide.get("stop_points")))
+    check(wide["stop_points"] > 200 * atr_frac,
+          "И это БОЛЬШЕ оценки по одному только ATR — иначе риск занижен")
+
+    # Минимум брокера тоже поднимает стоп
+    far = _load_survey_symbol(spread_points=10, atr_bar_range=0.0020,
+                              stops_level=900)
+    check(abs(far["stop_points"] - 900) < 1e-6,
+          "Минимальная дистанция брокера тоже учтена",
+          str(far.get("stop_points")))
+
+    # И это влияет на решение: та же пара при широком спреде дороже
+    equity, cap = 500.0, 2.0
+    cheap_risk = sp.min_lot_risk_percent(0.01, row["stop_points"],
+                                         row["money_per_point"], equity)
+    wide_risk = sp.min_lot_risk_percent(0.01, wide["stop_points"],
+                                        wide["money_per_point"], equity)
+    check(wide_risk > cheap_risk,
+          "Широкий спред => больше стоп => больше риск минимального лота",
+          f"{cheap_risk:.3f} -> {wide_risk:.3f}")
+    check(cap > 0, "Потолок риска задан (проверка самого теста)")
+
+    sys.modules["MetaTrader5"] = types.ModuleType("MetaTrader5")
+
+
 def test_honest_about_all_pairs() -> None:
     """Обещать «работаем на всех парах» нельзя. Причина должна быть записана
     числом, а не общими словами."""
@@ -257,6 +351,7 @@ def main() -> int:
     test_currencies_of()
     test_nothing_suitable_is_said_plainly()
     test_wired_into_startup()
+    test_stop_estimate_matches_real_trading()
     test_honest_about_all_pairs()
 
     print("\n" + "=" * 62)
