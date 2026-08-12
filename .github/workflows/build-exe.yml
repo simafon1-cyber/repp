@@ -127,6 +127,31 @@ jobs:
           if (-not (Test-Path "config.py")) { Copy-Item "config.py.example" "config.py" }
           Copy-Item "config.py" "dist\config.py" -Force
 
+      - name: Проверить, что программа ЗАПУСКАЕТСЯ
+        # Владелец трижды получал собранную программу, которая не открывалась
+        # вовсе: «Can't find a usable init.tcl», «No such file:
+        # base_library.zip», «Failed to remove temporary directory». Все три —
+        # про распаковку собранного файла, и все три видны при ПЕРВОМ запуске.
+        #
+        # Значит их надо ловить здесь, а не на компьютере человека. Программа
+        # запускается с ключом --selftest: она поднимает окно (самая хрупкая
+        # часть) и сразу выходит. Не завелась — сборка неудачная.
+        #
+        # Start-Process -Wait обязателен: программа собрана без консоли, и без
+        # ожидания PowerShell вернул бы управление, не узнав код выхода.
+        shell: pwsh
+        run: |
+          $exe = "dist\AI_Scalper_Pro.exe"
+          $out = "selftest_out.txt"
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" `
+                             -Wait -PassThru -NoNewWindow `
+                             -RedirectStandardOutput $out
+          if (Test-Path $out) { Get-Content $out }
+          if ($p.ExitCode -ne 0) {
+            throw "Program does not start (exit code $($p.ExitCode))"
+          }
+          Write-Host "Program starts correctly"
+
       - name: Проверить, что файл собрался
         shell: pwsh
         run: |

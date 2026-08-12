@@ -591,6 +591,132 @@ def test_main_page_sync() -> None:
     CFG.UPDATE_REPO = "owner/repo"
 
 
+def test_build_proves_the_program_starts() -> None:
+    """ОТКУДА ЭТОТ ТЕСТ. Владелец трижды получал собранную программу, которая
+    не открывалась вовсе: «Can't find a usable init.tcl», «No such file:
+    base_library.zip», «Failed to remove temporary directory». Все три — про
+    распаковку собранного файла, и все три видны при ПЕРВОМ запуске.
+
+    Значит их место — на сборочном сервере, а не на компьютере человека."""
+    print("\n[Сборка проверяет, что программа запускается]")
+    wf = (ROOT / ".github" / "workflows" / "build-exe.yml").read_text(encoding="utf-8")
+
+    # Смотрим на КОМАНДУ, а не на файл целиком: слово «--selftest» есть ещё и
+    # в пояснении рядом, и поиск по всему файлу проходил, даже когда запуск
+    # был сломан.
+    step = wf.split("Проверить, что программа ЗАПУСКАЕТСЯ", 1)[1]
+    step = step.split("      - name:", 1)[0]
+    # Комментарии отбрасываем: в пояснении рядом тоже написано «-Wait», и
+    # проверка находила его там, даже когда из самой команды он исчез.
+    command = [l for l in step.splitlines()
+               if not l.strip().startswith("#")
+               and ("Start-Process" in l or "-Wait" in l)]
+    check(bool(command), "Программа действительно запускается в сборке", step[:80])
+    joined = " ".join(command)
+    check("-ArgumentList \"--selftest\"" in joined,
+          "Именно с ключом проверки", joined.strip()[:120])
+    check("-Wait" in joined,
+          "И сборка ДОЖИДАЕТСЯ её: программа собрана без консоли, без ожидания "
+          "код выхода не узнать", joined.strip()[:120])
+    check("ExitCode -ne 0" in step, "Код выхода проверяется")
+    check("throw" in step, "И ненулевой код роняет сборку, а не пишется в журнал")
+
+    # Проверка обязана идти ДО выкладывания файла людям
+    check(wf.index("--selftest") < wf.index("upload-artifact"),
+          "Проверка идёт ДО того, как сборка станет доступна")
+    check(wf.index("--selftest") < wf.index("action-gh-release"),
+          "И до публикации в Releases")
+
+    # Сама проверка должна поднимать окно: именно рисование ломалось у владельца
+    # ВЫПОЛНЯЕМ настоящую проверку на подставном окне. Разбор текста здесь
+    # обманывался: замена «root = tkinter.Tk()» на «root = None» ломала
+    # проверку полностью, а слова tkinter и destroy оставались на месте.
+    src = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    func = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.FunctionDef) and n.name == "selftest")
+
+    events = []
+
+    class FakeWindow:
+        def withdraw(self):
+            events.append("скрыто")
+
+        def update_idletasks(self):
+            events.append("отрисовано")
+
+        def destroy(self):
+            events.append("закрыто")
+
+    fake_tk = types.ModuleType("tkinter")
+    fake_tk.Tk = lambda: (events.append("создано"), FakeWindow())[1]
+    saved_tk = sys.modules.get("tkinter")
+    ns = {}
+    try:
+        sys.modules["tkinter"] = fake_tk
+        exec(compile(ast.Module(body=[func], type_ignores=[]),
+                     "desktop_app.py", "exec"), ns)
+        code = ns["selftest"]()
+        check(code == 0, "На исправной системе проверка отвечает «годно»", str(code))
+        check("создано" in events, "Окно действительно создаётся", str(events))
+        check("закрыто" in events, "И закрывается за собой", str(events))
+
+        # А на сломанной — обязана сказать «негодно», иначе она бесполезна
+        events.clear()
+
+        def boom():
+            raise RuntimeError("не удалось поднять окно")
+
+        fake_tk.Tk = boom
+        code = ns["selftest"]()
+        check(code != 0, "Не поднялось окно — проверка отвечает «негодно»", str(code))
+    finally:
+        if saved_tk is not None:
+            sys.modules["tkinter"] = saved_tk
+        else:
+            sys.modules.pop("tkinter", None)
+
+    body = src.split("def selftest", 1)[1].split("\ndef ", 1)[0]
+    for forbidden in ("mt5", "accounts", "urlopen", "connect("):
+        check(forbidden not in body,
+              f"Проверка не трогает {forbidden} — она про запуск, а не про торговлю")
+
+    # Ключ обязан обрабатываться ДО всего остального: программа, у которой
+    # сломано всё прочее, должна на него ответить
+    # Сравниваем по КОДУ, а не по тексту файла: слово freeze_support стоит
+    # ещё и в комментарии выше, и поиск по строке находил комментарий, а не
+    # вызов. Тест при этом падал на верном коде — то есть шумел.
+    main_fn = next(n for n in ast.walk(ast.parse(src))
+                   if isinstance(n, ast.FunctionDef) and n.name == "main")
+    selftest_line = min(
+        (n.lineno for n in ast.walk(main_fn) if isinstance(n, ast.Constant)
+         and n.value == "--selftest"), default=0)
+    freeze_line = min(
+        (n.lineno for n in ast.walk(main_fn) if isinstance(n, ast.Call)
+         and ast.unparse(n.func).endswith("freeze_support")), default=0)
+    check(selftest_line > 0, "Ключ разбирается в самом запуске")
+    check(freeze_line > 0, "Проверка самого теста: freeze_support в запуске есть")
+    check(0 < selftest_line < freeze_line,
+          "И раньше всего остального — программа со сломанным прочим обязана "
+          "на него ответить", f"ключ на строке {selftest_line}, "
+                              f"freeze_support на {freeze_line}")
+
+
+def test_packager_version_is_bounded() -> None:
+    """Упаковщик без потолка версии — это сборка, которая может сломаться сама
+    по себе, без единой правки в коде. Проверять такое задним числом дорого."""
+    print("\n[Версия упаковщика ограничена]")
+    req = (APP / "requirements-build.txt").read_text(encoding="utf-8")
+    check("pyinstaller" in req.lower(), "Упаковщик указан")
+    line = [l for l in req.splitlines()
+            if l.strip().lower().startswith("pyinstaller")]
+    check(bool(line), "Строка найдена")
+    if line:
+        check("<" in line[0],
+              "У версии есть потолок — смена старшей версии не прилетит сама",
+              line[0])
+        check(">=" in line[0], "И нижняя граница тоже задана", line[0])
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ СИСТЕМЫ: МОСТ, ПРОВЕРКИ, ОБНОВЛЕНИЕ")
@@ -608,6 +734,8 @@ def main() -> int:
     test_updater_does_not_mix_versions()
     test_updater_never_silent()
     test_bundled_everything()
+    test_build_proves_the_program_starts()
+    test_packager_version_is_bounded()
     test_main_page_sync()
 
     print("\n" + "=" * 62)
