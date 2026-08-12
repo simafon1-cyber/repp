@@ -247,6 +247,27 @@ def test_file_is_not_committed() -> None:
           "И если он есть локально, то игнорируется")
 
 
+def test_progress_line_does_not_lie() -> None:
+    """Строка в журнале — то, по чему человек судит о происходящем. Если она
+    показывает «замерено 200 из 50», доверять ей нельзя вообще."""
+    print("\n[Строка о ходе замеров не врёт]")
+    cached = {f"S{i}": row(f"S{i}") for i in range(200)}
+
+    # Первый этап оборвался по времени: просмотрено меньше, чем уже в файле
+    line = sc.describe(cached, total=50, measured_now=0)
+    check("200 из 50" not in line, "Не пишем «200 из 50»", line)
+    check("200 из 200" in line, "Считаем по большему числу", line)
+    check("замерю при следующих" not in line,
+          "И не обещаем догнать то, что уже сделано", line)
+
+    line = sc.describe({"A": row("A")}, total=10, measured_now=1)
+    check("1 из 10" in line, "Обычный случай считается как есть", line)
+    check("добавлено 1" in line, "Сказано, сколько добавлено в этот раз", line)
+    check("9" in line, "И сколько осталось", line)
+
+    check(sc.describe({}, total=0, measured_now=0) != "", "Пусто не роняет")
+
+
 if __name__ == "__main__":
     print("=" * 62)
     print("ТЕСТЫ: ЗАМЕРЫ ПАР ХРАНЯТСЯ В ФАЙЛЕ")
@@ -260,6 +281,7 @@ if __name__ == "__main__":
     test_merge_prefers_fresh()
     test_wired_into_startup()
     test_file_is_not_committed()
+    test_progress_line_does_not_lie()
     print()
     print("=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

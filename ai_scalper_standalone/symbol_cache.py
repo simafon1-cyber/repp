@@ -197,6 +197,10 @@ def describe(cached: dict, total: int, measured_now: int) -> str:
     known = len(cached or {})
     if total <= 0:
         return "Замеров пар пока нет."
+    # В файле может быть БОЛЬШЕ пар, чем мы успели просмотреть в этот раз:
+    # если первый этап оборвался по времени, total окажется меньше known, и
+    # строка вида «замерено 200 из 50» была бы неправдой. Считаем по большему.
+    total = max(int(total), known)
     line = f"Замерено пар: {known} из {total} у брокера"
     if measured_now:
         line += f" (в этот раз добавлено {measured_now})"
