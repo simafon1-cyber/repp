@@ -309,8 +309,17 @@ def test_swap_retries_and_backs_up() -> None:
         # для программы слишком мал, — обрезанная закачка так и оставляла
         # человека без работающей программы. Поэтому подделка должна выглядеть
         # как программа, иначе тест проверял бы недостижимый случай.
-        old_body = "СТАРАЯ".encode("utf-8") + b"\0" * up.MIN_EXE_BYTES
-        new_body = "НОВАЯ".encode("utf-8") + b"\0" * up.MIN_EXE_BYTES
+        def program(mark):
+            # Подделка должна выглядеть как настоящая собранная программа:
+            # заголовок Windows в начале, метка упаковщика в конце. Иначе
+            # подмена справедливо откажется её ставить, и тест проверял бы
+            # недостижимый случай.
+            return (up.EXE_HEADER + mark.encode("utf-8")
+                    + b"\0" * up.MIN_EXE_BYTES
+                    + up.PYINSTALLER_MAGIC + b"\0" * 80)
+
+        old_body = program("СТАРАЯ")
+        new_body = program("НОВАЯ")
         Path(current).write_bytes(old_body)
         Path(current + ".new").write_bytes(new_body)
 
@@ -337,7 +346,8 @@ def test_swap_retries_and_backs_up() -> None:
     # А вот обрубок ставиться не должен ни при каких условиях
     with tempfile.TemporaryDirectory() as d:
         current = os.path.join(d, "AI_Scalper_Pro.exe")
-        working = "РАБОЧАЯ".encode("utf-8") + b"\0" * up.MIN_EXE_BYTES
+        working = (up.EXE_HEADER + "РАБОЧАЯ".encode("utf-8")
+                   + b"\0" * up.MIN_EXE_BYTES + up.PYINSTALLER_MAGIC + b"\0" * 80)
         Path(current).write_bytes(working)
         Path(current + ".new").write_bytes("обрывок".encode("utf-8"))
 
@@ -965,12 +975,67 @@ def test_truncated_download_never_replaces_working_program() -> None:
         check(why != "", "Файл в килобайт — не программа", why or "(пусто)")
         check("обрывок" in why, "И человеку сказано понятно", why)
 
-        big = os.path.join(folder, "big.exe")
-        with open(big, "wb") as f:
-            f.write(b"z" * (up.MIN_EXE_BYTES + 1))
-        check(up.looks_like_program(big) == "", "Нормальный размер проходит")
+        def fake_exe(name, head=up.EXE_HEADER, magic=up.PYINSTALLER_MAGIC):
+            path = os.path.join(folder, name)
+            with open(path, "wb") as f:
+                f.write(head)
+                f.write(b"z" * up.MIN_EXE_BYTES)
+                if magic:
+                    f.write(magic + b"\0" * 80)
+            return path
+
+        check(up.looks_like_program(fake_exe("good.exe")) == "",
+              "Целый файл проходит")
+
+        # ТРЕТЬЯ ЗАСТАВА — самая важная. Владелец получил ВТОРУЮ поломку уже
+        # после проверки размера: «No such file or directory: base_library.zip».
+        # Размер был правдоподобный, не хватало только конца файла. Метка
+        # упаковщика лежит в самых последних байтах — если её нет, файл оборван.
+        why = up.looks_like_program(fake_exe("cut.exe", magic=None))
+        check(why != "", "Файл нужного размера, но без конца — отвергнут",
+              why or "(пусто)")
+        check("base_library" in why or "оборван" in why,
+              "И названа ровно та ошибка, которую человек уже видел", why)
+
+        why = up.looks_like_program(fake_exe("page.exe", head=b"<h"))
+        check(why != "", "Вместо программы пришла страница — отвергнута", why)
+        check("страница" in why, "И сказано именно это", why)
+
         check(up.looks_like_program(os.path.join(folder, "нет")) != "",
               "Отсутствующий файл — тоже негоден")
+
+    # Размер, который GitHub сообщает о файле, — независимая мерка.
+    # Проверяем ВЫЗОВОМ: поиск текста «"size"» мутация проходила, подставляя
+    # ноль, — то есть сверять было бы не с чем и защита молча исчезала.
+    answer = json.dumps({
+        "tag_name": "build-99",
+        "assets": [{"name": "AI_Scalper_Pro.exe", "url": "http://x/a",
+                    "size": 57_123_456}],
+    }).encode("utf-8")
+
+    class FakeApi(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    saved_request = up._request
+    try:
+        up._request = lambda *a, **k: FakeApi(answer)
+        info = up.latest_release_exe()
+        check(info.get("size") == 57_123_456,
+              "Размер файла берётся из описания релиза", str(info.get("size")))
+        check(info.get("tag") == "build-99", "И номер сборки тоже")
+    finally:
+        up._request = saved_request
+
+    src = (APP / "updater.py").read_text(encoding="utf-8")
+    download = src.split("def download_new_exe", 1)[1].split("\ndef ", 1)[0]
+    check("got != expected" in download,
+          "И скачанное с ним сверяется")
+    check(download.index("got != expected") < download.index("os.replace(temporary, destination)"),
+          "Сверка идёт ДО подмены")
 
     src = (APP / "updater.py").read_text(encoding="utf-8")
 

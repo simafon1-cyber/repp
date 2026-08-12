@@ -750,12 +750,32 @@ def download_binary(url: str, destination: str, accept: str,
     return done
 
 
+# Опознавательная метка упаковщика PyInstaller. Она лежит в САМОМ КОНЦЕ
+# собранного файла — то есть появляется только если файл дошёл до последнего
+# байта. Именно этим она и ценна: обрезанную закачку видно точно, а не на глаз
+# по размеру.
+#
+# ЧЕМ РИСКУЕМ. Если однажды упаковщик сменит метку, обновление начнёт
+# отказываться ставить ИСПРАВНЫЕ файлы. Это неприятно, но несравнимо лучше
+# обратной ошибки: там человек остаётся с неработающей программой и без
+# способа её вернуть. Отказ виден сразу и чинится вручную за минуту.
+PYINSTALLER_MAGIC = b"MEI\014\013\012\013\016"
+
+# Windows-программа всегда начинается с этих двух букв.
+EXE_HEADER = b"MZ"
+
+
 def looks_like_program(path: str) -> str:
     """Похоже ли скачанное на рабочую программу. Пусто — похоже.
 
-    Вторая застава на случай, если сервер не сказал размер заранее: тогда
-    сверять не с чем, и остаётся здравый смысл — программа не может весить
-    меньше нескольких мегабайт."""
+    ЗАЧЕМ ТРИ РАЗНЫЕ ПРОВЕРКИ. Владелец дважды получал неработающую программу
+    после обновления: сперва «Can't find a usable init.tcl», потом «No such
+    file or directory: ...base_library.zip». Обе ошибки — об одном: файл
+    оборвался, и упаковщик не смог достать из него своё содержимое.
+
+    Размер ловит грубый обрыв. Заголовок ловит случай, когда вместо программы
+    прислали страницу с ошибкой. Метка в конце файла ловит самое коварное:
+    файл почти целый, размер правдоподобный, а последних байт нет."""
     try:
         size = os.path.getsize(path)
     except OSError as e:
@@ -763,6 +783,26 @@ def looks_like_program(path: str) -> str:
     if size < MIN_EXE_BYTES:
         return (f"скачано всего {size / 1024 / 1024:.1f} МБ — это обрывок, "
                 f"а не программа (рабочая версия весит десятки мегабайт)")
+
+    try:
+        with open(path, "rb") as f:
+            head = f.read(2)
+            # Метка лежит в самом конце; читаем ТОЛЬКО последний кусок.
+            # Ограничение существенно: файл весит десятки мегабайт, и читать
+            # его целиком ради восьми байт в конце — тянуть всё это в память
+            # без всякой нужды.
+            window = 8192
+            f.seek(max(0, size - window))
+            tail = f.read(window)
+    except OSError as e:
+        return f"скачанный файл не читается ({e})"
+
+    if head != EXE_HEADER:
+        return ("скачано не приложение Windows — похоже, вместо программы "
+                "пришла страница с ошибкой")
+    if PYINSTALLER_MAGIC not in tail:
+        return ("файл оборван: не хватает конца — ровно из-за этого программа "
+                "потом не запускается с ошибкой про init.tcl или base_library")
     return ""
 
 
@@ -778,7 +818,13 @@ def latest_release_exe() -> dict:
         raise
     for asset in (data.get("assets") or []):
         if str(asset.get("name", "")).lower().endswith(".exe"):
+            # size — сколько байт у файла НА САМОМ ДЕЛЕ, по данным GitHub.
+            # Это независимая мерка: Content-Length приходит вместе с самой
+            # закачкой и через посредника может прийти уже подогнанным под
+            # обрезанный ответ, а размер из описания релиза берётся отдельным
+            # запросом и такому не подвержен.
             return {"url": asset.get("url", ""), "name": asset.get("name", ""),
+                    "size": int(asset.get("size") or 0),
                     "tag": str(data.get("tag_name", ""))}
     return {}
 
@@ -887,8 +933,17 @@ def download_new_exe(progress=None) -> dict:
         release = latest_release_exe()
         if release.get("url"):
             say(f"Скачиваю версию {release.get('tag', '')}...")
-            download_binary(release["url"], temporary,
-                            accept="application/octet-stream", progress=progress)
+            got = download_binary(release["url"], temporary,
+                                  accept="application/octet-stream",
+                                  progress=progress)
+            expected = int(release.get("size") or 0)
+            if expected and got != expected:
+                result["error"] = (
+                    f"Обновление не установлено: GitHub сообщает, что файл "
+                    f"весит {expected} байт, а скачалось {got}. "
+                    f"Прежняя версия осталась на месте — попробуйте ещё раз "
+                    f"при устойчивой связи.")
+                return result
             broken = looks_like_program(temporary)
             if broken:
                 result["error"] = ("Обновление не установлено: " + broken +
