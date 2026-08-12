@@ -66,6 +66,7 @@ class _FakeMT5(types.ModuleType):
 
 sys.modules["MetaTrader5"] = _FakeMT5("MetaTrader5")
 
+import config_migrate as cm      # noqa: E402
 import remote_settings as rs      # noqa: E402
 
 
@@ -370,6 +371,69 @@ def test_wired_into_trading_loop() -> None:
           "Следующая проверка ставится заранее — сбой не обрывает цепочку")
 
 
+def test_auto_update_never_runs_with_open_trades() -> None:
+    """Владелец: «сделай, чтобы она сама ставила обновление, без моего
+    участия». Включили — и сразу появилась опасность, которой раньше не было.
+
+    Автоустановка задумывалась ТОЛЬКО для момента запуска: торговля ещё не
+    началась, открытых позиций нет, подменять файлы безопасно. Периодическую
+    проверку (чтобы сборки доезжали на сервер, где программа не
+    перезапускается неделями) я добавил позже и этого условия не перенёс. С
+    включённой автоустановкой она подменяла бы программу посреди ведения
+    сделок — а сделку ведут трейлинг и безубыток."""
+    print("\n[Обновление не ставится, пока открыты сделки]")
+    ui = (APP / "desktop_app.py").read_text(encoding="utf-8")
+
+    body = ui.split("def _periodic_update_check", 1)[1].split("\n    def ", 1)[0]
+    check("open_positions_count()" in body,
+          "Перед установкой считаются открытые сделки")
+
+    tree = ast.parse(ui)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_periodic_update_check")
+
+    # Условие должно быть ЖИВЫМ сравнением и должно выходить из функции.
+    guard = None
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                and "open_now" in {n.id for n in ast.walk(node.test)
+                                   if isinstance(n, ast.Name)}):
+            guard = node
+    check(guard is not None, "Есть живая проверка на открытые сделки")
+    if guard is not None:
+        dumped = ast.dump(ast.Module(body=guard.body, type_ignores=[]))
+        check("Return" in dumped,
+              "И при открытых сделках установка не начинается")
+        check("_auto_apply_update" not in dumped,
+              "Внутри этой ветки установка точно не вызывается")
+
+    # Ошибаться нужно в сторону «не трогать программу»
+    counter = ui.split("def open_positions_count", 1)[1].split("\n    def ", 1)[0]
+    check("return 1" in counter,
+          "Не смогли выяснить число сделок — считаем, что они ЕСТЬ")
+    check("ds.get_snapshot" in counter,
+          "Число берётся из снимка торгового цикла, а не запросом в терминал "
+          "(окно не должно ходить в MetaTrader и подвисать вместе с ним)")
+
+
+def test_auto_update_is_on_by_default() -> None:
+    print("\n[Автоустановка включена]")
+    check(CFG.UPDATE_AUTO_APPLY is True,
+          "UPDATE_AUTO_APPLY включён", str(CFG.UPDATE_AUTO_APPLY))
+    entry = [e for e in cm.ONE_TIME if e[0] == "MIGRATED_AUTO_UPDATE"]
+    check(bool(entry), "И доезжает до уже установленной программы")
+    if entry:
+        check(entry[0][1].get("UPDATE_AUTO_APPLY") is True, "Именно включением")
+        check("открытых сделок" in entry[0][2],
+              "В пояснении сказано про сделки", entry[0][2][:80])
+
+    # Менять это удалённо нельзя: UPDATE_* запрещены целиком
+    accepted, rejected = rs.validate({"UPDATE_AUTO_APPLY": False})
+    check("UPDATE_AUTO_APPLY" not in accepted,
+          "Через GitHub автоустановку не переключить — это ручка на "
+          "компьютере владельца", str(accepted))
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ: НАСТРОЙКИ ИЗ GITHUB")
@@ -390,6 +454,8 @@ def main() -> int:
     test_settings_url()
     test_file_in_repo_is_valid()
     test_wired_into_trading_loop()
+    test_auto_update_never_runs_with_open_trades()
+    test_auto_update_is_on_by_default()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

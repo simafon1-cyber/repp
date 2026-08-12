@@ -2702,16 +2702,50 @@ class App:
             return
         self.root.after(int(minutes * 60_000), self._periodic_update_check)
 
+    def open_positions_count(self) -> int:
+        """Сколько сделок сейчас открыто, по данным торгового цикла.
+
+        Не спрашиваем MetaTrader напрямую: окно вообще никогда не ходит в
+        терминал, иначе оно подвисало бы вместе с ним. Берём последний
+        снимок, который выкладывает торговый цикл."""
+        try:
+            snap = ds.get_snapshot() or {}
+            rows = snap.get("positions") or []
+            return len(rows)
+        except Exception:           # noqa: BLE001
+            # Не смогли выяснить — считаем, что сделки ЕСТЬ. Ошибаться нужно
+            # в сторону «не трогать программу», а не наоборот.
+            return 1
+
     def _periodic_update_check(self):
         self._schedule_update_check()
         if getattr(self, "_auto_update_busy", False):
             return
         try:
-            if getattr(cfg, "UPDATE_AUTO_APPLY", False):
-                self._auto_update_busy = True
-                self._auto_apply_update()
-            else:
+            if not getattr(cfg, "UPDATE_AUTO_APPLY", False):
                 self.check_updates(silent=True)
+                return
+
+            # ПОДМЕНЯТЬ ПРОГРАММУ, ПОКА ОТКРЫТЫ СДЕЛКИ, НЕЛЬЗЯ.
+            #
+            # Автоустановка задумывалась только для момента запуска — там
+            # торговля ещё не началась, и открытых позиций у бота нет (см.
+            # комментарий в _build_ui). Периодическую проверку я добавил
+            # позже и этого условия не перенёс: с включённой автоустановкой
+            # она подменила бы файлы посреди ведения сделок — а сделку ведут
+            # трейлинг и безубыток, и остаться без них с открытой позицией
+            # хуже, чем обновиться на несколько часов позже.
+            #
+            # Поэтому: есть открытые сделки — просто ждём следующей проверки.
+            # Она всё равно повторится, и рано или поздно застанет момент,
+            # когда сделок нет.
+            open_now = self.open_positions_count()
+            if open_now > 0:
+                log.info("Обновление отложено: открыто сделок %d", open_now)
+                return
+
+            self._auto_update_busy = True
+            self._auto_apply_update()
         except Exception as e:      # noqa: BLE001
             log.warning("Проверка обновлений не удалась: %s", e)
 
