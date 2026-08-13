@@ -531,7 +531,12 @@ def test_bundled_everything() -> None:
           "fastapi/uvicorn не нужны основной программе — мост на встроенном сервере")
 
     gui = (APP / "desktop_app.py").read_text(encoding="utf-8")
-    check('"Система": tab_system' in gui, "Вкладка «Система» зарегистрирована")
+    # Раскладка окна задаётся данными в ui_layout.py — спрашиваем её.
+    import ui_layout
+    check(ui_layout.group_of("Система") == "Система",
+          "Вкладка «Система» есть в раскладке окна",
+          ui_layout.group_of("Система"))
+    check('self.tab_frames["Система"]' in gui, "И окно её действительно строит")
     check("_start_bridge_if_enabled" in gui, "Мост поднимается сам при запуске")
 
 

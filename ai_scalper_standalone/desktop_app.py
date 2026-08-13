@@ -88,6 +88,7 @@ import single_instance
 import runtime_events
 import settings_backup
 import ui_theme
+import ui_layout
 import version as app_version
 import cloud_journal
 import bridge_host
@@ -772,55 +773,79 @@ class App:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
 
-        tab_overview = ttk.Frame(self.notebook)
-        tab_broker = ttk.Frame(self.notebook)
-        tab_symbols = ttk.Frame(self.notebook)
-        tab_accounts = ttk.Frame(self.notebook)
+        # ВЕРХНИХ ВКЛАДОК СЕМЬ, А НЕ ЧЕТЫРНАДЦАТЬ.
+        #
+        # Владелец: «вкладки, кнопки выходят за границы, приходится
+        # увеличивать окно». Четырнадцать вкладок в строку просто не влезали:
+        # их полоса шире минимальной ширины окна, поэтому названия обрезались.
+        # Ни одна страница при этом не потерялась — они разложены по группам,
+        # и внутри группы переключаются вторым, более узким рядом вкладок.
+        # Раскладка описана данными в ui_layout.py, и на неё есть тест,
+        # который считает ширину в пикселях, а не смотрит на скриншот.
+        self.tab_frames = {}     # имя страницы -> её рамка
+        self.tab_books = {}      # имя страницы -> блокнот, в котором она лежит
+        for группа in ui_layout.group_names():
+            страницы = ui_layout.pages(группа)
+            if ui_layout.is_single(группа):
+                # Одна страница — второго ряда вкладок не нужно.
+                рамка = ttk.Frame(self.notebook)
+                self.notebook.add(рамка, text=группа)
+                self.tab_frames[страницы[0]] = рамка
+                self.tab_books[страницы[0]] = self.notebook
+                continue
+            обёртка = ttk.Frame(self.notebook)
+            self.notebook.add(обёртка, text=группа)
+            внутри = ttk.Notebook(обёртка)
+            внутри.pack(fill="both", expand=True)
+            for имя in страницы:
+                рамка = ttk.Frame(внутри)
+                внутри.add(рамка, text=имя)
+                self.tab_frames[имя] = рамка
+                self.tab_books[имя] = внутри
+
         # Вкладка «Сделки» убрана по просьбе владельца: открытые позиции
         # видны на вкладке «Счета», там же их и закрывают. Рамка остаётся
         # (в неё по-прежнему строится таблица позиций), но в окно не
         # добавляется — код сборки таблицы используется экспортом в Excel.
         tab_positions = ttk.Frame(self.notebook)
-        tab_log = ttk.Frame(self.notebook)
-        tab_equity = ttk.Frame(self.notebook)
-        tab_config = ttk.Frame(self.notebook)
-        tab_news = ttk.Frame(self.notebook)
-        tab_schedule = ttk.Frame(self.notebook)
-        tab_tg = ttk.Frame(self.notebook)
-        tab_sources = ttk.Frame(self.notebook)
-        tab_system = ttk.Frame(self.notebook)
-        tab_chat = ttk.Frame(self.notebook)
-        tab_help = ttk.Frame(self.notebook)
 
-        self.tab_frames = {
-            "Обзор": tab_overview, "Брокер": tab_broker, "Символы": tab_symbols,
-            "Счета": tab_accounts, "Лог": tab_log, "Equity": tab_equity,
-            "Настройка": tab_config,
-            "Календарь": tab_schedule, "Новости": tab_news,
-            "Источники": tab_sources, "Система": tab_system,
-            "Сигналы": tab_tg, "Чат": tab_chat,
-            "Помощь": tab_help,
-        }
-        for name, frame in self.tab_frames.items():
-            self.notebook.add(frame, text=name)
-
-        self._build_tab_overview(tab_overview)
-        self._build_tab_broker(tab_broker)
-        self._build_tab_symbols(tab_symbols)
+        self._build_tab_overview(self.tab_frames["Обзор"])
+        self._build_tab_broker(self.tab_frames["Брокер"])
+        self._build_tab_symbols(self.tab_frames["Символы"])
         self._build_tab_positions(tab_positions)
-        self._build_tab_log(tab_log)
-        self._build_tab_equity(tab_equity)
-        self._build_tab_config(tab_config)
-        self._build_tab_schedule(tab_schedule)
-        self._build_tab_sources(tab_sources)
-        self._build_tab_system(tab_system)
-        self._build_tab_telegram(tab_tg)
-        self._build_tab_news(tab_news)
-        self._build_tab_chat(tab_chat)
-        self._build_tab_help(tab_help)
-        self._build_tab_accounts(tab_accounts)
+        self._build_tab_log(self.tab_frames["Лог"])
+        self._build_tab_equity(self.tab_frames["Equity"])
+        self._build_tab_config(self.tab_frames["Настройка"])
+        self._build_tab_schedule(self.tab_frames["Календарь"])
+        self._build_tab_sources(self.tab_frames["Источники"])
+        self._build_tab_system(self.tab_frames["Система"])
+        self._build_tab_telegram(self.tab_frames["Сигналы"])
+        self._build_tab_news(self.tab_frames["Новости"])
+        self._build_tab_chat(self.tab_frames["Чат"])
+        self._build_tab_help(self.tab_frames["Помощь"])
+        self._build_tab_accounts(self.tab_frames["Счета"])
 
+        self._check_tab_strip()
         self._apply_ui_mode(initial=True)
+
+    def _check_tab_strip(self):
+        """Перемерить полосу вкладок настоящим шрифтом уже открытого окна.
+
+        Оценка в ui_layout.py приблизительная: настоящая ширина знака зависит
+        от шрифта системы и масштаба экрана. Здесь она сверяется с
+        действительностью. Не помещается — пишем в журнал, а не ломаем окно:
+        программа обязана открыться и на нестандартном шрифте."""
+        try:
+            имена = ui_layout.group_names()
+            нужно = ui_layout.measure_strip(имена)
+            # Окно ещё не показано, и winfo_width() отдаёт 1. Меряем от
+            # минимальной ширины: уже неё окно всё равно не станет.
+            есть = max(self.root.winfo_width(), ui_layout.МИН_ШИРИНА_ОКНА)
+            if нужно and нужно > есть:
+                log.warning("Полоса вкладок шире окна: нужно %s px, есть %s px",
+                            нужно, есть)
+        except Exception:  # noqa: BLE001
+            log.debug("Не удалось перемерить полосу вкладок", exc_info=True)
 
     # ---- Вкладка "Счета": несколько торговых счетов MT5 ---------------------
     def _build_tab_accounts(self, parent):
@@ -845,13 +870,16 @@ class App:
         is_advanced = (self.ui_mode_var.get() == "Продвинутый")
         for name in ADVANCED_TAB_NAMES:
             frame = self.tab_frames.get(name)
-            if frame is None:
+            # Страница может лежать во втором ряду вкладок, внутри группы,
+            # поэтому прятать её надо в ЕЁ блокноте, а не в главном.
+            book = self.tab_books.get(name)
+            if frame is None or book is None:
                 continue
-            shown = str(frame) in self.notebook.tabs()
+            shown = str(frame) in book.tabs()
             if is_advanced and not shown:
-                self.notebook.add(frame, text=name)
+                book.add(frame, text=name)
             elif not is_advanced and shown:
-                self.notebook.hide(frame)
+                book.hide(frame)
         if not initial:
             try:
                 _write_config_value("UI_MODE", repr("advanced" if is_advanced else "simple"))

@@ -368,7 +368,14 @@ def test_gui_wiring() -> None:
 
     check("_build_tab_schedule" in funcs, "Вкладка собирается")
     check("_apply_schedule" in funcs, "Есть заполнение расписания")
-    check('"Календарь": tab_schedule' in src, "Вкладка зарегистрирована в списке")
+    # Регистрация вкладки: раскладка окна задаётся данными в ui_layout.py,
+    # поэтому спрашиваем её, а не ищем строку в тексте окна.
+    sys.path.insert(0, str(APP))
+    import ui_layout
+    check(ui_layout.group_of("Календарь") == "Новости",
+          "Вкладка «Календарь» лежит в группе «Новости»",
+          ui_layout.group_of("Календарь"))
+    check('self.tab_frames["Календарь"]' in src, "И окно её действительно строит")
     check("import trading_schedule as tsched" in src, "Модуль расписания подключён")
 
     # Расписание должно получать события ВКЛЮЧАЯ только что прошедшие, иначе
