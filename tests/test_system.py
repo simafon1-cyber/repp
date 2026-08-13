@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import sys
 import types
 import urllib.error
@@ -615,16 +616,38 @@ def test_build_proves_the_program_starts() -> None:
     # проверка находила его там, даже когда из самой команды он исчез.
     command = [l for l in step.splitlines()
                if not l.strip().startswith("#")
-               and ("Start-Process" in l or "-Wait" in l)]
+               and ("Start-Process" in l or "WaitForExit" in l)]
     check(bool(command), "Программа действительно запускается в сборке", step[:80])
     joined = " ".join(command)
     check("-ArgumentList \"--selftest\"" in joined,
           "Именно с ключом проверки", joined.strip()[:120])
-    check("-Wait" in joined,
-          "И сборка ДОЖИДАЕТСЯ её: программа собрана без консоли, без ожидания "
-          "код выхода не узнать", joined.strip()[:120])
+
+    # ЖДАТЬ СО СРОКОМ, А НЕ ВЕЧНО. Здесь стояло Start-Process -Wait, то есть
+    # «ждать сколько угодно», и сборка 49 провисела на этом шаге ШЕСТЬ ЧАСОВ,
+    # пока GitHub не убил её по общему потолку. Релиз не вышел, а владелец
+    # видел только «нет обновления» — без единого объяснения. Программа
+    # собрана без консоли: споткнувшись, она показывает окно с ошибкой,
+    # нажать «ОК» в котором на сборочной машине некому.
+    check("WaitForExit(" in joined,
+          "Ожидание запуска ОГРАНИЧЕНО сроком, а не бесконечно",
+          joined.strip()[:160])
+    check("-Wait " not in joined and not joined.rstrip().endswith("-Wait"),
+          "Прежнего бесконечного -Wait в команде больше нет",
+          joined.strip()[:160])
+    check(".Kill()" in step, "Зависшая программа снимается, а не ждётся дальше")
+    check("hangs on startup" in step,
+          "И зависание валит сборку с понятной причиной")
     check("ExitCode -ne 0" in step, "Код выхода проверяется")
     check("throw" in step, "И ненулевой код роняет сборку, а не пишется в журнал")
+
+    # Предохранитель на всю сборку: даже если зависнет что-то другое, шесть
+    # часов тишины повториться не должны.
+    limit = re.search(r"timeout-minutes:\s*(\d+)", wf)
+    check(limit is not None, "У сборки есть предельное время")
+    if limit:
+        check(0 < int(limit.group(1)) <= 60,
+              f"И оно разумное: {limit.group(1)} мин, а не шесть часов",
+              limit.group(1))
 
     # Проверка обязана идти ДО выкладывания файла людям
     check(wf.index("--selftest") < wf.index("upload-artifact"),

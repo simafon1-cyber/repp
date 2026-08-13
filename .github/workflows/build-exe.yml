@@ -33,6 +33,13 @@ jobs:
     # переезжает на новый образ.
     runs-on: windows-2022
 
+    # ПРЕДОХРАНИТЕЛЬ ПО ВРЕМЕНИ. Сборка 49 провисела ШЕСТЬ ЧАСОВ на проверке
+    # запуска и была убита GitHub по общему потолку — а владелец всё это
+    # время ждал обновления, которого не могло быть. Сборка целиком
+    # укладывается в 8-10 минут; сорок минут — это уже «что-то зависло»,
+    # и лучше узнать об этом сразу и с понятной причиной.
+    timeout-minutes: 40
+
     # Право записи нужно, чтобы выложить готовый .exe в Releases.
     # Без Releases единственным местом сборки остаются артефакты Actions,
     # а их GitHub отдаёт ТОЛЬКО по токену — даже для открытого
@@ -186,23 +193,52 @@ jobs:
         # запускается с ключом --selftest: она поднимает окно (самая хрупкая
         # часть) и сразу выходит. Не завелась — сборка неудачная.
         #
-        # Start-Process -Wait обязателен: программа собрана без консоли, и без
-        # ожидания PowerShell вернул бы управление, не узнав код выхода.
+        # ЖДАТЬ НАДО СО СРОКОМ, А НЕ ВЕЧНО. Здесь стояло Start-Process -Wait,
+        # то есть «ждать сколько угодно». Сборка 49 на этом и застряла: шесть
+        # часов на одном шаге, потом GitHub убил её по общему потолку, релиз
+        # не вышел, и у владельца просто «нет обновления» без единого
+        # объяснения.
+        #
+        # Причина зависания в том, что программа собрана БЕЗ КОНСОЛИ. Если
+        # такая программа спотыкается, Windows показывает окно с ошибкой — а
+        # нажать в нём «ОК» на сборочной машине некому, и процесс стоит
+        # насмерть. Ровно это ожидание вечности и превращает понятную ошибку
+        # в шесть часов тишины.
+        #
+        # Теперь: ждём три минуты (запуск пустого окна занимает секунды),
+        # не дождались — снимаем процесс и пробуем ещё раз, потому что
+        # разовые заминки на сборочных машинах случаются. Не помогло —
+        # честно валим сборку с внятной причиной.
         shell: pwsh
         run: |
+          $ОЖИДАНИЕ_МС = 180000
           $targets = @("dist\AI_Scalper_Pro\AI_Scalper_Pro.exe",
                        "dist_onefile\AI_Scalper_Pro.exe")
           $i = 0
           foreach ($exe in $targets) {
             $i++
             if (-not (Test-Path $exe)) { throw "Build did not produce $exe" }
-            $out = "selftest_$i.txt"
-            $p = Start-Process -FilePath $exe -ArgumentList "--selftest" `
-                               -Wait -PassThru -NoNewWindow `
-                               -RedirectStandardOutput $out
-            if (Test-Path $out) { Get-Content $out }
-            if ($p.ExitCode -ne 0) {
-              throw "Program does not start: $exe (exit code $($p.ExitCode))"
+            $ok = $false
+            foreach ($попытка in 1..2) {
+              $out = "selftest_${i}_$попытка.txt"
+              $p = Start-Process -FilePath $exe -ArgumentList "--selftest" `
+                                 -PassThru -NoNewWindow `
+                                 -RedirectStandardOutput $out
+              if (-not $p.WaitForExit($ОЖИДАНИЕ_МС)) {
+                Write-Host "Attempt ${попытка}: no exit in $($ОЖИДАНИЕ_МС / 1000)s, killing"
+                try { $p.Kill() } catch { }
+                Start-Sleep -Seconds 2
+                continue
+              }
+              if (Test-Path $out) { Get-Content $out }
+              if ($p.ExitCode -ne 0) {
+                throw "Program does not start: $exe (exit code $($p.ExitCode))"
+              }
+              $ok = $true
+              break
+            }
+            if (-not $ok) {
+              throw "Program hangs on startup and never exits: $exe"
             }
             Write-Host "Starts correctly: $exe"
           }
