@@ -913,6 +913,7 @@ def main() -> int:
     test_version_is_visible()
     test_update_everything_covers_both()
     test_truncated_download_never_replaces_working_program()
+    test_folder_install_is_not_patched_by_one_file()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
@@ -1063,6 +1064,102 @@ def test_truncated_download_never_replaces_working_program() -> None:
     for piece in download.split("looks_like_program")[1:]:
         check("os.replace(temporary, destination)" not in piece.split("if broken")[0],
               "Подмена не делается раньше проверки")
+
+
+
+
+def test_folder_install_is_not_patched_by_one_file() -> None:
+    """ПОЧЕМУ ЭТОТ ТЕСТ ПОЯВИЛСЯ. Владелец прислал снимок: вместо программы
+    окно «Failed to start embedded python interpreter!».
+
+    Программа существует в двух видах, и внутри они устроены по-разному:
+
+      * ОДНИМ ФАЙЛОМ — Python спрятан внутрь .exe и распаковывается во
+        временную папку при каждом запуске;
+      * ПАПКОЙ — Python лежит рядом, в подпапке _internal, и не
+        распаковывается вовсе. Так ставит установщик.
+
+    Самообновление умело ровно одно: скачать .exe и подменить им работающий.
+    Для установки ПАПКОЙ это неверно — рядом остаётся _internal от ПРЕЖНЕЙ
+    версии, и в одной папке оказывается смесь двух разных сборок. Ошибка
+    «Failed to start embedded python interpreter» — про это.
+
+    Правило: два вида установки не смешиваются. Папку обновляет установщик."""
+    print("\n[Установку папкой не чинят подменой одного файла]")
+
+    saved_frozen = getattr(sys, "frozen", None)
+    saved_exe = sys.executable
+    saved_mei = getattr(sys, "_MEIPASS", None)
+
+    def обстановка(folder, вид):
+        """Притвориться собранной программой того или иного вида."""
+        sys.frozen = True
+        sys.executable = os.path.join(folder, "AI_Scalper_Pro.exe")
+        if вид == "папкой":
+            внутри = os.path.join(folder, up.ВНУТРЕННЯЯ_ПАПКА)
+            os.makedirs(внутри, exist_ok=True)
+            sys._MEIPASS = внутри
+        else:
+            sys._MEIPASS = tempfile.gettempdir()
+
+    try:
+        # Не собранная программа — вопрос не стоит вовсе.
+        if hasattr(sys, "frozen"):
+            del sys.frozen
+        check(up.installed_as_folder() is False,
+              "Запуск из исходников папкой не считается")
+
+        with tempfile.TemporaryDirectory() as folder:
+            обстановка(folder, "папкой")
+            check(up.installed_as_folder() is True,
+                  "Установка папкой распознана")
+
+            # Файл обновления, скачанный ПРЕЖНЕЙ версией программы (где этой
+            # заставы ещё не было), обязан быть убран, а не подменять .exe.
+            new_path = up.pending_swap_path()
+            with open(new_path, "wb") as f:
+                f.write(b"MZ" + b"x" * 1000)
+            with open(sys.executable, "wb") as f:
+                f.write("рабочая программа".encode("utf-8"))
+
+            ответ = up.apply_pending_swap(attempts=1)
+            check("установщик" in ответ.lower() or "Setup" in ответ,
+                  "Подмена отменена, человеку сказано про установщик", ответ)
+            check(not os.path.exists(new_path),
+                  "И залежавшийся файл обновления убран")
+            with open(sys.executable, "rb") as f:
+                check(f.read() == "рабочая программа".encode("utf-8"),
+                      "РАБОЧАЯ ПРОГРАММА НЕ ТРОНУТА")
+
+            # И скачивать 60 МБ, чтобы потом отказаться, тоже незачем.
+            итог = up.download_new_exe()
+            check(итог["ok"] is False, "Скачивание не начинается")
+            check(up.INSTALLER_NAME in итог["error"],
+                  "И названо, что именно скачать", итог["error"][:120])
+            check("http" in итог["error"], "Со ссылкой, а не «поищите сами»",
+                  итог["error"][:160])
+
+        with tempfile.TemporaryDirectory() as folder:
+            обстановка(folder, "одним файлом")
+            check(up.installed_as_folder() is False,
+                  "Установка одним файлом остаётся как была")
+            # Для неё подмена по-прежнему разрешена: файла обновления нет,
+            # значит и ответа нет — но и отказа тоже.
+            check(up.apply_pending_swap(attempts=1) == "",
+                  "Одному файлу подмена не запрещается")
+    finally:
+        sys.executable = saved_exe
+        if saved_frozen is None:
+            if hasattr(sys, "frozen"):
+                del sys.frozen
+        else:
+            sys.frozen = saved_frozen
+        if saved_mei is None:
+            if hasattr(sys, "_MEIPASS"):
+                del sys._MEIPASS
+        else:
+            sys._MEIPASS = saved_mei
+
 
 
 if __name__ == "__main__":
