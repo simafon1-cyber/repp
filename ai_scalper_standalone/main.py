@@ -1212,6 +1212,10 @@ def contract_facts(symbol: str) -> dict:
         "min_lot": float(getattr(info, "volume_min", 0) or 0),
         "money_per_point": (point / tick_size) * tick_value,
         "trade_mode": getattr(info, "trade_mode", None),
+        # Раздел, в котором инструмент лежит у брокера: "Forex\\Majors\\EURUSD",
+        # "Stocks\\US\\AAPL" и т.п. По нему отличаются валютные пары от акций —
+        # см. symbol_picker.prefilter и AUTO_PICK_GROUPS.
+        "path": str(getattr(info, "path", "") or ""),
     }
 
 
@@ -1280,7 +1284,8 @@ def auto_pick_symbols(equity: float, deadline: float = None,
     stage1 = symbol_picker.prefilter(
         facts, equity,
         max_risk_percent=float(getattr(cfg, "MAX_TRADE_RISK_PERCENT_OF_EQUITY", 2.0) or 0),
-        limit=0)              # без обрезки: обрежет очередь на замер ниже
+        limit=0,              # без обрезки: обрежет очередь на замер ниже
+        groups=tuple(getattr(cfg, "AUTO_PICK_GROUPS", symbol_picker.DEFAULT_GROUPS) or ()))
     passed = stage1["kept"]
 
     # ---- ЗАМЕРЫ БЕРУТСЯ ИЗ ФАЙЛА ---------------------------------------
@@ -1342,6 +1347,8 @@ def auto_pick_symbols(equity: float, deadline: float = None,
     cached = symbol_cache.merge(cached, surveyed)
     line = symbol_cache.describe(cached, len(passed), len(surveyed))
     log.info("%s", line)
+    # В окно — только пока замеры ещё идут: когда всё замерено, сообщать не о
+    # чем, а лишняя строка в «Внимание» отвлекает от настоящих предупреждений.
     if len(cached) < len(passed):
         runtime_events.record("пары", line)
 
@@ -1383,8 +1390,12 @@ def auto_pick_symbols(equity: float, deadline: float = None,
                       added=sorted(added_all))
 
     if chosen:
+        # В ЖУРНАЛ — полный список: там его и надо искать, когда разбираешься.
         log.info("%s", symbol_picker.describe(result, len(available)))
-        runtime_events.record("пары", symbol_picker.describe(result, len(available)))
+        # В ОКНО — только сколько. Полный список из сотен имён однажды занял
+        # в рамке «Внимание» пол-экрана и вытеснил настоящие предупреждения.
+        runtime_events.record(
+            "пары", symbol_picker.describe(result, len(available), names=False))
     else:
         log.warning("Отбор пар ничего не выбрал — работаю по списку из настроек")
     for reason in (stage1["rejected"] + result["rejected"])[:10]:

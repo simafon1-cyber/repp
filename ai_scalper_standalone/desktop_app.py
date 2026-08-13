@@ -54,6 +54,7 @@ import base64
 import csv
 import importlib
 import logging
+import atexit
 import multiprocessing
 import re
 import threading
@@ -83,6 +84,7 @@ import mt5_install
 import param_help
 import config_migrate
 import news_autostart
+import single_instance
 import runtime_events
 import settings_backup
 import ui_theme
@@ -911,10 +913,30 @@ class App:
         self.trade_warning_slot.pack(fill="x")
         self.trade_warning_frame = ttk.LabelFrame(self.trade_warning_slot,
                                                   text=" Внимание ")
-        self.trade_warning_label = ttk.Label(
-            self.trade_warning_frame, textvariable=self.trade_warning_var,
-            foreground=self.colors["loss"], wraplength=900, justify="left")
-        self.trade_warning_label.pack(anchor="w", padx=8, pady=6)
+        # НЕБОЛЬШОЕ ОКНО С ПОЛЗУНКОМ, А НЕ РАСТУЩАЯ НАДПИСЬ. Владелец прислал
+        # снимок: рамка «Внимание» заняла ПОЛ-ЭКРАНА и была целиком красной —
+        # потому что в неё попал список из 497 отобранных пар. Из-за этого
+        # настоящие предупреждения терялись, а красный цвет перестал что-либо
+        # значить: красным было всё подряд.
+        #
+        # Высота фиксирована, длинное уезжает под ползунок. Красным теперь
+        # выделяется ТОЛЬКО важное — см. _warning_severity().
+        box = ttk.Frame(self.trade_warning_frame)
+        box.pack(fill="x", padx=8, pady=6)
+        self.trade_warning_text = tk.Text(
+            box, height=6, wrap="word", relief="flat", borderwidth=0,
+            background=self.colors["bg"], foreground=self.colors["fg"],
+            highlightthickness=0)
+        scroll = ttk.Scrollbar(box, orient="vertical",
+                               command=self.trade_warning_text.yview)
+        self.trade_warning_text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.trade_warning_text.pack(side="left", fill="both", expand=True)
+        self.trade_warning_text.tag_configure("важно",
+                                              foreground=self.colors["loss"])
+        self.trade_warning_text.tag_configure("обычное",
+                                              foreground=self.colors["fg"])
+        self.trade_warning_text.configure(state="disabled")
 
         # ---------- Действия ----------
         actions = ttk.LabelFrame(parent, text=" Действия ")
@@ -965,6 +987,21 @@ class App:
                                   state="readonly", width=15)
         mode_combo.grid(row=0, column=1, padx=(6, 20))
         mode_combo.bind("<<ComboboxSelected>>", lambda e: self._apply_ui_mode())
+
+        # ВЫБОР ТЕМЫ. Раньше тема менялась только правкой UI_THEME в файле
+        # настроек — то есть для владельца её не существовало.
+        ttk.Label(view_row, text="Тема:").grid(row=0, column=2)
+        self._theme_titles = {key: title for key, title in ui_theme.choices()}
+        self._theme_keys = {title: key for key, title in ui_theme.choices()}
+        current_theme = str(getattr(cfg, "UI_THEME", ui_theme.DEFAULT) or "").lower()
+        self.theme_var = tk.StringVar(
+            value=self._theme_titles.get(current_theme,
+                                         self._theme_titles[ui_theme.DEFAULT]))
+        theme_combo = ttk.Combobox(view_row, textvariable=self.theme_var,
+                                   values=[t for _, t in ui_theme.choices()],
+                                   state="readonly", width=16)
+        theme_combo.grid(row=0, column=3, padx=(6, 20))
+        theme_combo.bind("<<ComboboxSelected>>", lambda e: self._save_theme_choice())
 
         self.autostart_var = tk.BooleanVar(value=_is_autostart_enabled())
         ttk.Checkbutton(view_row, text="Запускать вместе с Windows",
@@ -1211,9 +1248,13 @@ class App:
         if available != getattr(self, "_available_symbols_cache", None) or symbols:
             self._available_symbols_cache = available
             if symbols and available:
+                # Владелец: «записывай там, на каких парах мы работаем».
+                # Полный список — строками таблицы ниже, а здесь их перечень
+                # одной строкой: его удобно прочитать целиком и скопировать.
                 self.available_symbols_var.set(
                     f"В работе {len(symbols)} пар — отобраны программой из "
-                    f"{len(available)} доступных у брокера.")
+                    f"{len(available)} доступных у брокера:\n"
+                    + ", ".join(sorted(symbols)))
             elif symbols:
                 self.available_symbols_var.set(f"В работе {len(symbols)} пар.")
             else:
@@ -4407,6 +4448,38 @@ class App:
         self.stop_btn.config(state="disabled")
 
     # ---- периодическое обновление всех вкладок --------------------------------
+    # Слова, по которым строка считается ВАЖНОЙ и красится красным.
+    # Всё остальное — обычные сообщения о ходе работы, и красить их красным
+    # значит обесценить сам красный цвет: у владельца на снимке красным было
+    # ВСЁ, включая список отобранных пар.
+    CRITICAL_WORDS = (
+        "ошибк", "сбой", "не удалось", "потеряна связь", "остановлен",
+        "запрещ", "отменена", "аварийн", "не запуст", "повреж", "нет доступа",
+        "недостаточно средств", "риск", "просадк", "лимит",
+    )
+
+    @staticmethod
+    def _warning_severity(line: str) -> str:
+        """«важно» или «обычное». Решает только цвет, не содержание."""
+        text = str(line or "").lower()
+        return "важно" if any(w in text for w in App.CRITICAL_WORDS) else "обычное"
+
+    def _show_warnings(self, problems) -> None:
+        """Заполнить рамку «Внимание». Длинные строки подрезаются.
+
+        ПОЧЕМУ ПОДРЕЗАЮТСЯ. В рамку однажды попал список из 497 отобранных
+        пар одной строкой — и занял пол-экрана, вытеснив всё остальное.
+        Место сообщения — рамка, место списка пар — вкладка «Символы»."""
+        self.trade_warning_text.configure(state="normal")
+        self.trade_warning_text.delete("1.0", "end")
+        for line in problems or ():
+            text = str(line)
+            if len(text) > 300:
+                text = text[:300] + "… (полностью — на вкладке «Символы» и в логе)"
+            self.trade_warning_text.insert("end", "• " + text + "\n",
+                                           self._warning_severity(text))
+        self.trade_warning_text.configure(state="disabled")
+
     def _refresh_loop(self):
         try:
             snap = ds.get_snapshot()
@@ -4446,13 +4519,13 @@ class App:
             if events:
                 problems.append("Недавние события:\n  " + events.replace("\n", "\n  "))
             if problems:
-                self.trade_warning_var.set("• " + "\n• ".join(problems))
+                self._show_warnings(problems)
                 # Рамка появляется, ТОЛЬКО когда есть что сказать: пустая
                 # рамка «Внимание» на пол-экрана пугает без причины.
                 if not self.trade_warning_frame.winfo_ismapped():
                     self.trade_warning_frame.pack(fill="x", padx=12, pady=6)
             else:
-                self.trade_warning_var.set("")
+                self._show_warnings([])
                 if self.trade_warning_frame.winfo_ismapped():
                     self.trade_warning_frame.pack_forget()
 
@@ -4607,9 +4680,41 @@ class App:
         except Exception:
             messagebox.showinfo("Настройки", f"Файл настроек: {config_path}")
 
+    def _save_theme_choice(self):
+        """Записать выбранную тему и сказать, что нужен перезапуск.
+
+        Перекрашивать уже построенное окно на ходу — отдельная большая работа:
+        цвета розданы десяткам виджетов при создании. Обещать мгновенную смену
+        и не сделать её хуже, чем честно попросить перезапуск."""
+        key = self._theme_keys.get(self.theme_var.get(), ui_theme.DEFAULT)
+        try:
+            _write_config_value("UI_THEME", repr(key))
+            _reload_cfg()
+        except Exception as e:  # noqa: BLE001
+            messagebox.showwarning(APP_TITLE, f"Не удалось сохранить тему: {e}")
+            return
+        messagebox.showinfo(
+            APP_TITLE,
+            f"Тема «{self.theme_var.get()}» сохранена.\n\n"
+            "Она применится при следующем запуске программы: цвета "
+            "раздаются окну при его построении.")
+
     def _toggle_autostart(self):
+        # Раньше неудача уходила в журнал, а человек видел поставленную
+        # галочку и был уверен, что всё получилось. Теперь галочка снимается
+        # обратно, и сказано, что именно не вышло.
         if self.autostart_var.get():
-            _enable_autostart()
+            error = _enable_autostart()
+            if error:
+                self.autostart_var.set(False)
+                messagebox.showwarning(APP_TITLE, error)
+            else:
+                messagebox.showinfo(
+                    APP_TITLE,
+                    "Программа будет запускаться вместе с Windows.\n\n"
+                    f"Запускаться будет этот файл:\n{_exe_path()}\n\n"
+                    "Если перенести программу в другое место, путь "
+                    "исправится сам при следующем запуске.")
         else:
             _disable_autostart()
 
@@ -4723,15 +4828,74 @@ def _is_autostart_enabled() -> bool:
         return False
 
 
-def _enable_autostart():
+def _autostart_command() -> str:
+    """Что именно записано в автозапуск. Пусто — записи нет."""
     if sys.platform != "win32":
-        return
+        return ""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, _APP_REG_NAME)
+            return str(value or "")
+    except Exception:      # noqa: BLE001
+        return ""
+
+
+def autostart_needs_repair(recorded: str, current_exe: str) -> str:
+    """Указывает ли автозапуск НЕ ТУДА. Пусто — всё в порядке.
+
+    ЗАЧЕМ. Владелец: «не работает автозапуск программы с Windows». Галочка
+    стоит, запись в реестре есть — а программа не стартует. Причина почти
+    всегда одна: запись сделана, когда программа лежала в другом месте
+    (запускали из «Загрузок», потом поставили установщиком, потом перенесли).
+    Windows честно пытается запустить файл по старому пути, его там нет, и
+    ничего не происходит — молча, без единого сообщения.
+
+    Само по себе это не чинится: Windows не сообщает о неудаче, а человек
+    видит только «галочка стоит, а не работает»."""
+    have = str(recorded or "").strip().strip('"')
+    want = str(current_exe or "").strip().strip('"')
+    if not have:
+        return ""                       # записи нет — это другой случай
+    if not want:
+        return ""
+    if os.path.normcase(os.path.abspath(have)) == os.path.normcase(os.path.abspath(want)):
+        return ""
+    return (f"автозапуск указывал на «{have}», а программа сейчас лежит в "
+            f"«{want}» — путь исправлен")
+
+
+def _enable_autostart() -> str:
+    """Включить автозапуск. Возвращает текст ошибки; пусто — получилось."""
+    if sys.platform != "win32":
+        return "Автозапуск с Windows доступен только на Windows."
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, _APP_REG_NAME, 0, winreg.REG_SZ, f'"{_exe_path()}"')
     except Exception as e:
         log.warning("Не удалось включить автозапуск: %s", e)
+        return f"Не удалось включить автозапуск: {e}"
+    return ""
+
+
+def repair_autostart() -> str:
+    """Проверить и починить путь в автозапуске. Вызывается ПРИ КАЖДОМ ЗАПУСКЕ.
+
+    Дёшево (одно чтение реестра) и снимает целый класс жалоб «галочка стоит, а
+    не запускается»."""
+    if sys.platform != "win32":
+        return ""
+    recorded = _autostart_command()
+    if not recorded:
+        return ""                       # автозапуск выключен — не навязываемся
+    note = autostart_needs_repair(recorded, _exe_path())
+    if not note:
+        return ""
+    if _enable_autostart():
+        return ""
+    log.info("Автозапуск: %s", note)
+    return note
 
 
 def _disable_autostart():
@@ -4904,6 +5068,24 @@ def main():
     # Вызывать нужно ПЕРВЫМ делом, до любой другой работы.
     multiprocessing.freeze_support()
 
+    # ВТОРАЯ КОПИЯ НЕ НУЖНА. Владелец: «при запуске программы включается две».
+    # Две копии подключаются к одному терминалу, ведут одни и те же позиции и
+    # обе двигают стоп-лосс, каждая считая, что она одна. Стоит ПОСЛЕ
+    # freeze_support: дочерние процессы счетов до этого места не доходят, и
+    # замок их не касается.
+    if not single_instance.acquire():
+        try:
+            import tkinter.messagebox as mb
+            mb.showinfo(APP_TITLE,
+                        "Программа уже запущена.\n\n"
+                        "Вторая копия не нужна: обе подключались бы к одному "
+                        "терминалу и вели одни и те же сделки. "
+                        "Найдите окно программы или значок в трее.")
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    atexit.register(single_instance.release)
+
     # САМОЕ ПЕРВОЕ ДЕЛО: если рядом лежит скачанная новая версия — ставим её.
     # Работающий .exe заменить нельзя, Windows его держит, поэтому подмена
     # возможна только здесь, пока программа ещё не «развернулась».
@@ -4922,6 +5104,16 @@ def main():
             log.warning("%s", swapped)
     except Exception as e:  # noqa: BLE001
         log.warning("Не удалось применить скачанное обновление: %s", e)
+
+    # Автозапуск мог указывать на прежнее место программы: её переносили,
+    # ставили заново, обновляли. Windows про такую неудачу не сообщает вовсе —
+    # человек видит только «галочка стоит, а не запускается».
+    try:
+        fixed = repair_autostart()
+        if fixed:
+            log.info("Автозапуск починен: %s", fixed)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось проверить автозапуск: %s", e)
 
     # ДО всякой работы с настройками: если рядом с программой config.py нет
     # (запустили свежескачанный .exe из «Загрузок», перенесли на другой

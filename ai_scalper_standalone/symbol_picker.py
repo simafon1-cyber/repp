@@ -169,9 +169,41 @@ STAGE1_STOP_POINTS = 200
 DEFAULT_SURVEY_LIMIT = 60
 
 
+# Разделы брокера, из которых берём инструменты. По умолчанию только валюта.
+#
+# ПОЧЕМУ ЭТО ВАЖНО. У брокера в списке лежат не только валютные пары, но и
+# тысячи АКЦИЙ. Владелец прислал снимок «Обзора рынка»: A, AA, AAA, AAAA... —
+# и у AAA покупка 9.99 при продаже 38.95. Акции живут по другим правилам:
+# торгуются только в часы своей биржи (несколько часов в сутки), между
+# сессиями стоят намертво, спред у неликвидных бумаг шире самой цены, а
+# открытие с разрывом делает стоп-лосс приблизительным.
+#
+# Вся торговая логика здесь считалась и проверялась на валюте: пятиминутный
+# бар, ATR, спред, сделка на семь минут, рынок круглосуточно пять дней в
+# неделю. Переносить её на акции без переделки — не смелость, а ошибка.
+#
+# Пустой список означает «брать всё подряд». Оставлять его пустым не советую.
+DEFAULT_GROUPS = ("Forex",)
+
+
+def in_allowed_group(path: str, groups) -> bool:
+    """Лежит ли инструмент в разрешённом разделе брокера.
+
+    Раздел приходит строкой вида "Forex\\Majors\\EURUSD". Сравниваем по началу
+    и без учёта регистра: у разных брокеров это "Forex", "forex", "FX" —
+    точное совпадение отсекало бы половину брокеров молча."""
+    if not groups:
+        return True                     # ограничения нет
+    text = str(path or "").replace("\\", "/").lower()
+    if not text:
+        return False                    # раздел неизвестен — не рискуем
+    return any(text.startswith(str(g).lower()) for g in groups if str(g).strip())
+
+
 def prefilter(candidates: list, equity: float, max_risk_percent: float,
               assumed_stop_points: float = STAGE1_STOP_POINTS,
-              limit: int = DEFAULT_SURVEY_LIMIT) -> dict:
+              limit: int = DEFAULT_SURVEY_LIMIT,
+              groups=DEFAULT_GROUPS) -> dict:
     """ПЕРВЫЙ, ДЕШЁВЫЙ ЭТАП: отсев по постоянным данным контракта.
 
     ЗАЧЕМ ОН ПОЯВИЛСЯ. Сначала отбор сразу шёл за барами по каждой паре
@@ -194,6 +226,12 @@ def prefilter(candidates: list, equity: float, max_risk_percent: float,
 
         if item.get("trade_mode") == 0:
             rejected.append(f"{name}: брокер закрыл торговлю")
+            continue
+
+        if not in_allowed_group(item.get("path"), groups):
+            rejected.append(
+                f"{name}: не из разрешённого раздела ({item.get('path') or 'раздел неизвестен'}) — "
+                f"вся торговая логика считалась на валютных парах")
             continue
 
         risk = min_lot_risk_percent(item.get("min_lot"), assumed_stop_points,
@@ -267,12 +305,19 @@ def pick(candidates: list, equity: float, limit: int = DEFAULT_LIMIT,
     return {"chosen": chosen, "rejected": rejected}
 
 
-def describe(result: dict, total: int = 0) -> str:
-    """Одна строка для окна и журнала."""
+def describe(result: dict, total: int = 0, names: bool = True) -> str:
+    """Строка о результате отбора.
+
+    names=False — БЕЗ перечисления пар. Это не мелочь: у владельца полный
+    список из 497 имён попал в рамку «Внимание» на главной странице и занял
+    пол-экрана, вытеснив настоящие предупреждения. Список пар — это не
+    предупреждение, его место на вкладке «Символы» и в журнале."""
     chosen = result.get("chosen") or []
     if not chosen:
         return "Подходящих пар не нашлось — проверьте связь с терминалом."
     head = f"Выбрано {len(chosen)} пар"
     if total:
         head += f" из {total} у брокера"
+    if not names:
+        return head + " — список на вкладке «Символы»."
     return head + ": " + ", ".join(chosen)

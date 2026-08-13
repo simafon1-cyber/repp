@@ -300,7 +300,14 @@ def test_every_tab_is_reachable() -> None:
         body = UI.split(f"def {name}", 1)[1].split("\n    def ", 1)[0]
         scrolls = "_scrollable(parent)" in body
         own_scroll = "Scrollbar(" in body
-        if scrolls and own_scroll:
+        # ВАЖНАЯ ОГОВОРКА. Правило про две полосы — про полосы СТРАНИЦЫ.
+        # Небольшое окошко фиксированной высоты со своим ползунком внутри
+        # прокручиваемой страницы — это другое: страница прокручивается
+        # целиком, а окошко только внутри себя. Именно так сделана рамка
+        # «Внимание»: у владельца она разрослась на пол-экрана, и высоту
+        # пришлось ограничить, а длинное убрать под ползунок.
+        bounded_widget = "height=" in body and "tk.Text(" in body
+        if scrolls and own_scroll and not bounded_widget:
             doubled.append(name)
         # Длинная вкладка-форма без всякой прокрутки — то, из-за чего окно
         # приходилось растягивать

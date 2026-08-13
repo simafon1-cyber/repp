@@ -424,6 +424,7 @@ def main() -> int:
     test_pair_must_be_added_to_market_watch_first()
     test_honest_about_all_pairs()
     test_startup_cannot_hang()
+    test_stocks_are_not_traded_like_currency()
     test_window_says_it_is_busy()
 
     print("\n" + "=" * 62)
@@ -449,7 +450,10 @@ def test_startup_cannot_hang() -> None:
     # именно ЛИМИТ, а не отсев по риску. С крупным шагом (1.0 + i) отсеивалось
     # бы 195 пар по риску, и тест проверял бы совсем другое.
     facts = [{"symbol": f"AA{i:02d}BB", "min_lot": 0.01,
-              "money_per_point": 1.0 + i * 0.001, "trade_mode": 4}
+              "money_per_point": 1.0 + i * 0.001, "trade_mode": 4,
+              # Раздел обязателен: инструмент без него отбор не берёт вовсе —
+              # неизвестно, валюта это или акция (см. AUTO_PICK_GROUPS).
+              "path": f"Forex\\Majors\\AA{i:02d}BB"}
              for i in range(200)]
     stage1 = sp.prefilter(facts, equity=500, max_risk_percent=2.0, limit=60)
     check(len(stage1["kept"]) == 60,
@@ -462,11 +466,11 @@ def test_startup_cannot_hang() -> None:
     # успеют именно те, на которых счёт может торговать. Вход НАРОЧНО подан
     # в обратном порядке: иначе проверка проходила бы и без сортировки.
     shuffled = [{"symbol": "DEAR", "min_lot": 0.01, "money_per_point": 9.0,
-                 "trade_mode": 4},
+                 "trade_mode": 4, "path": "Forex\\DEAR"},
                 {"symbol": "MIDDLE", "min_lot": 0.01, "money_per_point": 4.0,
-                 "trade_mode": 4},
+                 "trade_mode": 4, "path": "Forex\\MIDDLE"},
                 {"symbol": "CHEAP", "min_lot": 0.01, "money_per_point": 1.0,
-                 "trade_mode": 4}]
+                 "trade_mode": 4, "path": "Forex\\CHEAP"}]
     order = sp.prefilter(shuffled, equity=5000, max_risk_percent=2.0)["kept"]
     check(order == ["CHEAP", "MIDDLE", "DEAR"],
           "Первыми идут самые дешёвые для счёта, а не как пришли", str(order))
@@ -477,11 +481,11 @@ def test_startup_cannot_hang() -> None:
 
     # Неподъёмное отсекается ещё до баров
     heavy = [{"symbol": "BTCUSD", "min_lot": 0.01, "money_per_point": 1000.0,
-              "trade_mode": 4},
+              "trade_mode": 4, "path": "Forex\\BTCUSD"},
              {"symbol": "EURUSD", "min_lot": 0.01, "money_per_point": 1.0,
-              "trade_mode": 4},
+              "trade_mode": 4, "path": "Forex\\Majors\\EURUSD"},
              {"symbol": "CLOSED", "min_lot": 0.01, "money_per_point": 1.0,
-              "trade_mode": 0}]
+              "trade_mode": 0, "path": "Forex\\CLOSED"}]
     stage1 = sp.prefilter(heavy, equity=500, max_risk_percent=2.0)
     check(stage1["kept"] == ["EURUSD"],
           "Неподъёмное и закрытое отсеяно ДО обращения за барами",
@@ -556,6 +560,89 @@ def test_window_says_it_is_busy() -> None:
     check(indent == 12,
           "Показ событий НЕ вложен внутрь «если есть снимок» — иначе во время "
           "подготовки окно молчит", f"отступ {indent}: {line.strip()}")
+
+
+def test_stocks_are_not_traded_like_currency() -> None:
+    """ОТКУДА ЭТОТ ТЕСТ. Владелец: «нету сделок». На его снимке «Обзора рынка»
+    видно, чем он заполнен: A, AA, AAA, AAAA, AAAC... — американские акции, и
+    у AAA покупка 9.99 при продаже 38.95, то есть спред шире самой цены.
+
+    Отбор брал ВЕСЬ список брокера, а там не только валюта. Акции торгуются
+    лишь несколько часов в сутки, между сессиями стоят намертво и открываются
+    с разрывом. Вся логика здесь считалась на валюте: пятиминутный бар, ATR,
+    спред, сделка на семь минут, рынок круглосуточно пять дней в неделю.
+    Перенести её на акции без переделки — ошибка, а не смелость."""
+    print("\n[Акции не берутся в работу вместе с валютой]")
+
+    check(sp.in_allowed_group("Forex\\Majors\\EURUSD", ("Forex",)),
+          "Валютная пара проходит")
+    check(sp.in_allowed_group("forex\\minors\\EURNOK", ("Forex",)),
+          "Регистр не важен — у брокеров он разный")
+    check(sp.in_allowed_group("Forex/Majors/EURUSD", ("Forex",)),
+          "Разделитель пути не важен")
+    check(not sp.in_allowed_group("Stocks\\US\\AAA", ("Forex",)),
+          "Акция не проходит")
+    check(not sp.in_allowed_group("", ("Forex",)),
+          "Раздел неизвестен — не рискуем, а не пропускаем")
+    check(not sp.in_allowed_group(None, ("Forex",)), "None тоже")
+    check(sp.in_allowed_group("Stocks\\US\\AAA", ()),
+          "Пустой список разделов = ограничения нет")
+    check(sp.in_allowed_group("Stocks\\US\\AAA", ("Forex", "Stocks")),
+          "Разделы можно перечислить — тогда акции разрешены сознательно")
+    # Сравнение именно ПО НАЧАЛУ пути. Поиск «где угодно» пропустил бы акцию,
+    # у которой слово Forex попало в название компании или в подпапку.
+    check(not sp.in_allowed_group("Stocks\\US\\ForexBank", ("Forex",)),
+          "Слово в середине пути не делает акцию валютой")
+    check(not sp.in_allowed_group("CFD\\Forex-like\\XYZ", ("Forex",)),
+          "И в начале подпапки — тоже не делает")
+
+    # И это работает в самом отборе, а не только само по себе
+    mixed = [
+        {"symbol": "EURUSD", "min_lot": 0.01, "money_per_point": 1.0,
+         "trade_mode": 4, "path": "Forex\\Majors\\EURUSD"},
+        {"symbol": "AAA", "min_lot": 1.0, "money_per_point": 0.01,
+         "trade_mode": 4, "path": "Stocks\\US\\AAA"},
+    ]
+    result = sp.prefilter(mixed, equity=500, max_risk_percent=2.0)
+    check(result["kept"] == ["EURUSD"], "В работу идёт только валюта",
+          str(result["kept"]))
+    check(any("AAA" in r and "раздел" in r for r in result["rejected"]),
+          "И про акцию сказано, почему она не взята",
+          str(result["rejected"])[:120])
+
+    # Владелец должен иметь возможность разрешить их сознательно
+    result = sp.prefilter(mixed, equity=500, max_risk_percent=2.0, groups=())
+    check(set(result["kept"]) == {"EURUSD", "AAA"},
+          "Сняли ограничение — берутся все", str(result["kept"]))
+
+    # Раздел обязан доезжать из терминала до отбора: без него фильтр молчит
+    # Раздел обязан РЕАЛЬНО приходить из терминала. Проверка по тексту здесь
+    # обманывалась: подстановка пустой строки оставляла слово "path" на месте,
+    # а фильтр слеп и снова брал всё подряд.
+    src = (APP / "main.py").read_text(encoding="utf-8")
+    func = next(n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.FunctionDef) and n.name == "contract_facts")
+    fake = types.ModuleType("MetaTrader5")
+    fake.symbol_info = lambda name: types.SimpleNamespace(
+        point=0.00001, trade_tick_value=1.0, trade_tick_size=0.00001,
+        volume_min=0.01, trade_mode=4, path="Forex\\Majors\\EURUSD")
+    saved = sys.modules.get("MetaTrader5")
+    try:
+        sys.modules["MetaTrader5"] = fake
+        ns = {}
+        exec(compile(ast.Module(body=[func], type_ignores=[]), "main.py", "exec"), ns)
+        got = ns["contract_facts"]("EURUSD")
+        check(got.get("path") == "Forex\\Majors\\EURUSD",
+              "Раздел инструмента считывается у брокера", str(got.get("path")))
+        check(sp.in_allowed_group(got.get("path"), ("Forex",)),
+              "И его достаточно, чтобы отбор узнал валютную пару")
+    finally:
+        if saved is not None:
+            sys.modules["MetaTrader5"] = saved
+    body = src.split("def auto_pick_symbols", 1)[1].split("\ndef ", 1)[0]
+    check("AUTO_PICK_GROUPS" in body, "И передаётся в отбор из настроек")
+    check(list(CFG.AUTO_PICK_GROUPS) == ["Forex"],
+          "По умолчанию — только валюта", str(CFG.AUTO_PICK_GROUPS))
 
 
 if __name__ == "__main__":
