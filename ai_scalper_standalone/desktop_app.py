@@ -5183,6 +5183,20 @@ def selftest() -> int:
     except Exception as e:       # noqa: BLE001
         print(f"SELFTEST FAILED: {type(e).__name__}: {e}")
         return 1
+
+    # ПРОВЕРКА ЗАПУЩЕННОЙ КОПИИ. Она выполняется РАНЬШЕ окна, и сломаться в
+    # ней — значит не открыться вовсе. Именно это и случилось у владельца:
+    # os.kill(pid, 0) на Windows дал «[WinError 6] The handle is invalid», и
+    # программа упала системным окном с трассировкой. Окно тогда собиралось
+    # прекрасно, поэтому проверка «поднимается ли окно» ничего не заметила.
+    # Спрашиваем про заведомо чужой номер процесса: ответ неважен, важно, что
+    # ответ вообще есть.
+    try:
+        single_instance.process_alive(0x7FFFFFFF)
+    except Exception as e:       # noqa: BLE001
+        print(f"SELFTEST FAILED: проверка копии: {type(e).__name__}: {e}")
+        return 1
+
     print("SELFTEST OK")
     return 0
 

@@ -44,6 +44,45 @@ def lock_path(folder: str = "") -> str:
     return os.path.join(base, LOCK_FILE)
 
 
+# Windows: числа из его же документации, чтобы не разбрасывать «магию» по коду.
+_ЕЩЁ_РАБОТАЕТ = 259          # STILL_ACTIVE — процесс не завершился
+_СПРОСИТЬ_НЕМНОГО = 0x1000   # PROCESS_QUERY_LIMITED_INFORMATION
+
+
+def _alive_windows(number: int) -> bool:
+    """Жив ли процесс — по-виндовому, БЕЗ os.kill.
+
+    ПОЧЕМУ ОТДЕЛЬНО ДЛЯ WINDOWS. Здесь стояла проверка os.kill(pid, 0) —
+    приём, правильный на Linux и опасный на Windows. Windows не знает
+    «сигнала 0»: Python выполняет os.kill через TerminateProcess, то есть
+    проверка «жив ли он» УБИВАЛА БЫ найденный процесс. А когда номер
+    оказывался чужим или устаревшим, вылезала ошибка [WinError 6] The handle
+    is invalid, которая к тому же приходила как SystemError и мимо
+    `except OSError` — программа падала на запуске, не показав окна.
+    Владелец видел это как «Unhandled exception in script».
+
+    Здесь вместо этого просто СПРАШИВАЕТСЯ состояние процесса: открываем его
+    с минимальными правами (только чтение сведений) и смотрим код выхода."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(_СПРОСИТЬ_НЕМНОГО, False, number)
+    if not handle:
+        # Не открылся: либо такого процесса нет, либо он чужой. В обоих
+        # случаях отвечаем «свободно». Своя же копия, запущенная тем же
+        # человеком, всегда открывается — а вот чужой процесс со случайно
+        # совпавшим номером иначе запер бы владельца снаружи от его
+        # собственной программы. Из двух бед вторая хуже.
+        return False
+    try:
+        код = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(код)):
+            return False
+        return код.value == _ЕЩЁ_РАБОТАЕТ
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def process_alive(pid: int) -> bool:
     """Работает ли процесс с таким номером.
 
@@ -58,15 +97,25 @@ def process_alive(pid: int) -> bool:
         return False
     if number == os.getpid():
         return True
+
     try:
+        if os.name == "nt":
+            return _alive_windows(number)
         os.kill(number, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Процесс есть, но он чужой. Для нас это «занято» — и это правильнее,
-        # чем занять замок и работать вдвоём.
+        # POSIX: процесс есть, но он чужой. Для нас это «занято» — и это
+        # правильнее, чем занять замок и работать вдвоём.
         return True
-    except OSError:
+    except Exception as e:  # noqa: BLE001
+        # ЛОВИМ ВСЁ. Эта проверка выполняется до появления окна, и любая
+        # неожиданность здесь означает не «программа занята», а «программа
+        # не запустилась вовсе» — молча, одним системным окном с трассировкой.
+        # Ровно так и случилось на Windows. Не поняли — считаем свободно:
+        # человеку нужна торговля, а не наша аккуратность.
+        log.warning("Не удалось проверить процесс %s (%s) — считаю свободным",
+                    number, e)
         return False
     return True
 
@@ -89,10 +138,19 @@ def acquire(path: str = "", alive=None) -> bool:
     check = alive or process_alive
 
     owner = read_owner(target)
-    if owner and owner != os.getpid() and check(owner):
-        log.warning("Программа уже запущена (процесс %s) — вторая копия не нужна",
-                    owner)
-        return False
+    if owner and owner != os.getpid():
+        try:
+            занято = check(owner)
+        except Exception as e:  # noqa: BLE001
+            # Ни одна поломка ЗДЕСЬ не имеет права помешать запуску. Это
+            # первое, что выполняется при старте, и падение тут выглядит как
+            # «программа не открывается вовсе» — без окна, без объяснения.
+            log.warning("Проверка запущенной копии сорвалась (%s) — запускаюсь", e)
+            занято = False
+        if занято:
+            log.warning("Программа уже запущена (процесс %s) — вторая копия не нужна",
+                        owner)
+            return False
 
     try:
         with open(target, "w", encoding="utf-8") as f:

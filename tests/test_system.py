@@ -772,7 +772,14 @@ def test_build_proves_the_program_starts() -> None:
     fake_tk = types.ModuleType("tkinter")
     fake_tk.Tk = lambda: (events.append("создано"), FakeWindow())[1]
     saved_tk = sys.modules.get("tkinter")
-    ns = {}
+
+    # Проверка запуска трогает не только окно: она ещё спрашивает, не
+    # запущена ли вторая копия. Именно на этом вопросе программа у владельца
+    # и падала («[WinError 6] The handle is invalid») — окно при этом
+    # собиралось прекрасно, поэтому одной проверки окна оказалось мало.
+    класс_копии = types.ModuleType("single_instance")
+    класс_копии.process_alive = lambda pid: (events.append("копия"), False)[1]
+    ns = {"single_instance": класс_копии}
     try:
         sys.modules["tkinter"] = fake_tk
         exec(compile(ast.Module(body=[func], type_ignores=[]),
@@ -781,6 +788,19 @@ def test_build_proves_the_program_starts() -> None:
         check(code == 0, "На исправной системе проверка отвечает «годно»", str(code))
         check("создано" in events, "Окно действительно создаётся", str(events))
         check("закрыто" in events, "И закрывается за собой", str(events))
+        check("копия" in events,
+              "И проверка запущенной копии тоже выполняется", str(events))
+
+        # Сломанная проверка копии обязана валить сборку. Раньше она валила
+        # ЗАПУСК У ВЛАДЕЛЬЦА, потому что до сборки не доходила вовсе.
+        def взрыв(pid):
+            raise OSError(6, "The handle is invalid")
+
+        класс_копии.process_alive = взрыв
+        check(ns["selftest"]() != 0,
+              "Падение проверки копии — сборка «негодна»")
+        класс_копии.process_alive = lambda pid: False
+        events.clear()
 
         # А на сломанной — обязана сказать «негодно», иначе она бесполезна
         events.clear()

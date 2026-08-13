@@ -108,6 +108,87 @@ def test_lock_never_blocks_the_program() -> None:
     check(si.process_alive(os.getpid()) is True, "Свой процесс — живой")
 
 
+def test_check_never_blocks_startup() -> None:
+    """ПОЧЕМУ ЭТОТ ТЕСТ ПОЯВИЛСЯ. Владелец увидел при запуске окно
+    «Unhandled exception in script» с трассировкой, ведущей ровно сюда:
+
+        File "single_instance.py", line 62, in process_alive
+        OSError: [WinError 6] The handle is invalid
+
+    Причина — os.kill(pid, 0). На Linux это правильная проверка «жив ли
+    процесс». На Windows «сигнала 0» не существует: Python выполняет os.kill
+    через TerminateProcess, то есть проверка УБИВАЛА БЫ найденный процесс, а
+    на чужом или устаревшем номере падала — да ещё и мимо `except OSError`,
+    потому что ошибка приходила как SystemError.
+
+    Итог для человека: программа не открывалась вовсе. Поэтому здесь
+    закреплено ГЛАВНОЕ правило этого модуля: что бы ни случилось в проверке,
+    запуску это помешать не может."""
+    print("\n[Проверка копии не может помешать запуску]")
+
+    # На Windows проверка обязана идти В ОБХОД os.kill.
+    src = (APP / "single_instance.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "process_alive"), None)
+    check(fn is not None, "Проверка процесса на месте")
+    if fn is not None:
+        # Смотрим НА КОД, а не на текст: слова «os.kill» есть и в пояснении
+        # рядом, и поиск по тексту находил бы их там же.
+        ветка = [n.lineno for n in ast.walk(fn)
+                 if isinstance(n, ast.Compare)
+                 and ast.unparse(n).replace("'", '"') == 'os.name == "nt"']
+        убийство = [n.lineno for n in ast.walk(fn)
+                    if isinstance(n, ast.Call)
+                    and ast.unparse(n.func) == "os.kill"]
+        check(bool(ветка), "Windows разбирается отдельно")
+        check(bool(убийство), "На остальных системах остаётся os.kill")
+        check(ветка and убийство and min(ветка) < min(убийство),
+              "И os.kill до Windows-ветки не доходит — иначе он убьёт процесс",
+              f"windows={ветка}, kill={убийство}")
+        # Любая неожиданность обязана перехватываться: до этого места окна
+        # ещё нет, и исключение здесь = «программа не открылась вовсе».
+        широкий = [h for n in ast.walk(fn) if isinstance(n, ast.Try)
+                   for h in n.handlers
+                   if h.type is not None and ast.unparse(h.type) == "Exception"]
+        check(bool(широкий), "Ловится ЛЮБАЯ ошибка, а не только OSError")
+
+    # Любая поломка проверки = «свободно», а не падение.
+    def взрывается(pid):
+        raise SystemError("<class 'OSError'> returned a result with an exception set")
+
+    with tempfile.TemporaryDirectory() as folder:
+        lock = os.path.join(folder, "l")
+        with open(lock, "w", encoding="utf-8") as f:
+            f.write("424242")
+        check(si.acquire(lock, alive=взрывается) is True,
+              "Сорвавшаяся проверка НЕ мешает запуску")
+        check(si.read_owner(lock) == os.getpid(),
+              "И замок при этом переходит к нам")
+
+    # Именно та ошибка, что видел владелец, — тоже не роняет.
+    def виндовая(pid):
+        raise OSError(6, "The handle is invalid")
+
+    with tempfile.TemporaryDirectory() as folder:
+        lock = os.path.join(folder, "l")
+        with open(lock, "w", encoding="utf-8") as f:
+            f.write("424242")
+        check(si.acquire(lock, alive=виндовая) is True,
+              "[WinError 6] тоже не мешает запуску")
+
+    # И проверка «живости» сама по себе не бросает ничего наружу.
+    for номер in (424242, 999999999, 2 ** 31 - 1):
+        try:
+            si.process_alive(номер)
+            ok = True
+        except Exception as e:  # noqa: BLE001
+            ok = False
+            детали = f"{type(e).__name__}: {e}"
+        check(ok, f"Номер {номер} проверяется без исключения",
+              детали if not ok else "")
+
+
 def test_guard_is_wired_into_startup() -> None:
     print("\n[Защита подключена к запуску]")
     src = (APP / "desktop_app.py").read_text(encoding="utf-8")
@@ -262,6 +343,7 @@ if __name__ == "__main__":
     print("=" * 62)
     test_second_copy_does_not_start()
     test_lock_never_blocks_the_program()
+    test_check_never_blocks_startup()
     test_guard_is_wired_into_startup()
     test_autostart_repairs_its_own_path()
     test_warning_box_is_small_and_not_all_red()
