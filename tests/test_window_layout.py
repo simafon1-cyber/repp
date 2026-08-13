@@ -85,8 +85,15 @@ def test_pause_is_not_stop() -> None:
     check("runtime_events.record" in body, "Пауза попадает в ленту событий")
 
     restart = UI.split("def restart_bot", 1)[1].split("\n    def ", 1)[0]
-    check("stop_event" in restart and "start_bot" in restart,
-          "Перезапуск гасит старый цикл и заводит новый")
+    check("stop_event" in restart, "Перезапуск гасит старый цикл")
+    # Новый цикл заводится НЕ здесь, а после того, как старый действительно
+    # остановился: соединение с терминалом одно на всю программу, и старый
+    # цикл, завершаясь, его закрывает. Запусти мы новый раньше — он остался бы
+    # без связи. Подробности и проверка решения — в test_bot_alive.py.
+    check("_restart_when_stopped" in restart,
+          "И ЖДЁТ его остановки, а не запускает новый вслепую")
+    check("after(600" not in restart,
+          "Прежней глухой паузы в 600 мс больше нет")
     check("set_paused(False)" in restart,
           "И снимает паузу — иначе перезапуск не вернул бы торговлю")
 

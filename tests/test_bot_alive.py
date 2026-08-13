@@ -324,11 +324,70 @@ def main_run() -> int:
     test_watchdog_wired_into_program()
     test_runtime_events()
     test_bot_tickets_set()
+    test_restart_waits_for_the_old_loop()
 
     print("\n" + "=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
     print("=" * 62)
     return 1 if failed else 0
+
+
+def test_restart_waits_for_the_old_loop() -> None:
+    """ОТКУДА ЭТО. Владелец: «кнопка перезапуск не работает».
+
+    Раньше кнопка ставила глухую паузу в 600 мс и запускала цикл заново,
+    не проверяя, остановился ли старый. Соединение с терминалом ОДНО на всю
+    программу, и старый цикл, завершаясь, закрывает его. Успей он сделать это
+    после того, как новый уже подключился — новый остаётся без связи, пишет
+    «потеряно соединение с MT5» и не торгует. Пауза превращала это в
+    подбрасывание монетки."""
+    print("\n[Перезапуск ждёт остановки старого цикла]")
+    src = (APP / "desktop_app.py").read_text(encoding="utf-8")
+
+    cls = next(n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.ClassDef) and n.name == "App")
+    func = next(n for n in cls.body
+                if isinstance(n, ast.FunctionDef) and n.name == "restart_decision")
+    func.decorator_list = []
+    ns = {}
+    exec(compile(ast.Module(body=[func], type_ignores=[]), "x", "exec"), ns)
+    решение = ns["restart_decision"]
+
+    check(решение(True, 10) == "ждать",
+          "Старый цикл ещё работает — ЖДЁМ, а не запускаем второй")
+    check(решение(False, 10) == "запускать",
+          "Остановился — запускаем новый")
+    check(решение(False, 0) == "запускать",
+          "Остановился на последней проверке — всё равно запускаем")
+    check(решение(True, 0) == "сдаться",
+          "Не дождались — НЕ запускаем второй поверх работающего")
+    check(решение(True, -5) == "сдаться", "Отрицательный счётчик тоже конец")
+
+    # Глухой паузы «через 600 мс запускаем что бы ни было» больше нет
+    body = src.split("def restart_bot", 1)[1].split("\n    def ", 1)[0]
+    check("after(600, self.start_bot)" not in body,
+          "Прежней глухой паузы больше нет")
+    check("_restart_when_stopped" in body, "Вместо неё — ожидание остановки")
+    check("self.bot_thread = None" not in body,
+          "И ссылка на старый поток НЕ теряется: иначе проверить, жив ли он, "
+          "было бы нечем")
+
+    ждать = src.split("def _restart_when_stopped", 1)[1].split("\n    def ", 1)[0]
+    check("is_alive()" in ждать, "Живость потока проверяется по-настоящему")
+    check("start_bot()" in ждать, "И новый цикл запускается здесь")
+    check(ждать.index("restart_decision") < ждать.index("start_bot()"),
+          "Только ПОСЛЕ решения, а не до него")
+    check("showwarning" in ждать,
+          "Не дождались — человеку сказано, а не тихо ничего не произошло")
+
+    # Десять секунд ожидания: меньше — не хватит на завершение прохода,
+    # больше — человек решит, что кнопка не работает
+    consts = {ast.unparse(n.targets[0]): ast.literal_eval(n.value)
+              for n in cls.body if isinstance(n, ast.Assign)
+              and isinstance(n.value, ast.Constant)}
+    всего_мс = consts.get("RESTART_CHECKS", 0) * consts.get("RESTART_STEP_MS", 0)
+    check(5000 <= всего_мс <= 20000,
+          "Ждём порядка десяти секунд", f"{всего_мс} мс")
 
 
 if __name__ == "__main__":
