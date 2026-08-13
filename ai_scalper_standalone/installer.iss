@@ -34,8 +34,11 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Files]
-; Сама программа (собранная build_exe.bat)
-Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; Программа собрана ПАПКОЙ, а не одним файлом. Один файл при каждом запуске
+; распаковывал во временную папку около 55 МБ — отсюда ошибки про _MEI
+; (init.tcl, base_library.zip, "Failed to remove temporary directory") и
+; подозрения антивируса. Папка не распаковывается вовсе: файлы уже на месте.
+Source: "dist\AI_Scalper_Pro\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; config.py -- ставится ТОЛЬКО если у пользователя его ещё нет (чтобы при
 ; переустановке/обновлении не затереть его настройки -- ключи AI, пары, профиль).

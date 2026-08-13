@@ -80,8 +80,20 @@ jobs:
           python stamp_version.py "${{ github.run_number }}" "${{ github.sha }}" (Get-Date -Format "yyyy-MM-dd")
           python -c "import version; print(version.full())"
 
-      - name: Собрать .exe
-        # Команда повторяет build_exe.bat. --exclude-module config: config.py
+      - name: Собрать программу ПАПКОЙ (основной способ установки)
+        # ПОЧЕМУ ПАПКОЙ, А НЕ ОДНИМ ФАЙЛОМ. Один файл при КАЖДОМ запуске
+        # распаковывает во временную папку около 55 МБ. Отсюда три разные
+        # ошибки, которые владелец получал подряд: «Can't find a usable
+        # init.tcl», «No such file: base_library.zip», «Failed to remove
+        # temporary directory» — все три про эту самую распаковку. И она же
+        # заставляет антивирус нервничать: распаковать себя во временную
+        # папку и запуститься оттуда — обычное поведение вредоносных программ,
+        # отличить их снаружи трудно.
+        #
+        # Папка не распаковывается вовсе: файлы уже лежат рядом. Запуск
+        # мгновенный, целого класса ошибок больше нет.
+        #
+        # --exclude-module config: config.py
         # остаётся обычным файлом рядом с программой, чтобы настройки можно
         # было менять без пересборки.
         #
@@ -89,7 +101,44 @@ jobs:
         # Программа сама копирует их в MetaTrader и вызывает компилятор при
         # первом запуске — отдельные установщики запускать не нужно.
         run: >
+          python -m PyInstaller --noconfirm --onedir --windowed
+          --name "AI_Scalper_Pro"
+          --exclude-module config
+          --hidden-import accounts_tab
+          --hidden-import accounts
+          --hidden-import account_supervisor
+          --hidden-import telegram_signals
+          --hidden-import telegram_reader
+          --hidden-import trading_schedule
+          --hidden-import mt5_install
+          --hidden-import bridge_host
+          --hidden-import diagnostics
+          --hidden-import updater
+          --hidden-import config_migrate
+          --hidden-import cloud_journal
+          --hidden-import accounts_backup
+          --hidden-import param_help
+          --hidden-import version
+          --add-data "config.py.example;."
+          --add-data "../mql5;mql5"
+          --add-data "../ai_scalper_pro;ai_scalper_pro"
+          --collect-all telethon
+          --collect-all MetaTrader5
+          --collect-all anthropic
+          --collect-all openai
+          --collect-all pystray
+          --collect-all certifi
+          --collect-all cryptography
+          desktop_app.py
+
+      - name: Собрать ОДИН ФАЙЛ (для прежнего самообновления)
+        # Уже установленные копии обновляются подменой одного .exe. Убери мы
+        # его — самообновление сломалось бы у всех разом, и человеку пришлось
+        # бы ставить руками. Поэтому собираем обе версии: папку для установки
+        # и один файл для обновления.
+        run: >
           python -m PyInstaller --noconfirm --onefile --windowed
+          --distpath dist_onefile
           --name "AI_Scalper_Pro"
           --exclude-module config
           --hidden-import accounts_tab
@@ -141,25 +190,36 @@ jobs:
         # ожидания PowerShell вернул бы управление, не узнав код выхода.
         shell: pwsh
         run: |
-          $exe = "dist\AI_Scalper_Pro.exe"
-          $out = "selftest_out.txt"
-          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" `
-                             -Wait -PassThru -NoNewWindow `
-                             -RedirectStandardOutput $out
-          if (Test-Path $out) { Get-Content $out }
-          if ($p.ExitCode -ne 0) {
-            throw "Program does not start (exit code $($p.ExitCode))"
+          $targets = @("dist\AI_Scalper_Pro\AI_Scalper_Pro.exe",
+                       "dist_onefile\AI_Scalper_Pro.exe")
+          $i = 0
+          foreach ($exe in $targets) {
+            $i++
+            if (-not (Test-Path $exe)) { throw "Build did not produce $exe" }
+            $out = "selftest_$i.txt"
+            $p = Start-Process -FilePath $exe -ArgumentList "--selftest" `
+                               -Wait -PassThru -NoNewWindow `
+                               -RedirectStandardOutput $out
+            if (Test-Path $out) { Get-Content $out }
+            if ($p.ExitCode -ne 0) {
+              throw "Program does not start: $exe (exit code $($p.ExitCode))"
+            }
+            Write-Host "Starts correctly: $exe"
           }
-          Write-Host "Program starts correctly"
 
       - name: Проверить, что файл собрался
         shell: pwsh
         run: |
-          $exe = "dist\AI_Scalper_Pro.exe"
-          if (-not (Test-Path $exe)) { throw "Сборка не создала $exe" }
-          $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
-          Write-Host "Размер AI_Scalper_Pro.exe: $mb МБ"
-          if ($mb -lt 5) { throw "Файл подозрительно маленький ($mb МБ) — сборка неполная" }
+          $single = "dist_onefile\AI_Scalper_Pro.exe"
+          if (-not (Test-Path $single)) { throw "Build did not produce $single" }
+          $mb = [math]::Round((Get-Item $single).Length / 1MB, 1)
+          Write-Host "One-file build: $mb MB"
+          if ($mb -lt 5) { throw "One-file build too small ($mb MB)" }
+          $folder = "dist\AI_Scalper_Pro"
+          $total = [math]::Round((Get-ChildItem $folder -Recurse |
+                    Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+          Write-Host "Folder build: $total MB"
+          if ($total -lt 5) { throw "Folder build too small ($total MB)" }
 
       - name: Собрать установщик AI_Scalper_Setup.exe
         # Inno Setup предустановлен на образах windows-latest.
@@ -183,9 +243,9 @@ jobs:
         with:
           name: AI_Scalper_Pro-windows
           path: |
-            ai_scalper_standalone/dist/AI_Scalper_Pro.exe
-            ai_scalper_standalone/dist/config.py
             ai_scalper_standalone/installer_output/AI_Scalper_Setup.exe
+            ai_scalper_standalone/dist_onefile/AI_Scalper_Pro.exe
+            ai_scalper_standalone/dist/config.py
           retention-days: 90
           if-no-files-found: warn
 
@@ -206,16 +266,21 @@ jobs:
             ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name
                 || format('Сборка {0}', github.run_number) }}
           files: |
-            ai_scalper_standalone/dist/AI_Scalper_Pro.exe
-            ai_scalper_standalone/dist/config.py
             ai_scalper_standalone/installer_output/AI_Scalper_Setup.exe
+            ai_scalper_standalone/dist_onefile/AI_Scalper_Pro.exe
+            ai_scalper_standalone/dist/config.py
           body: |
             Сборка программы AI Scalper Pro для Windows.
 
-            **AI_Scalper_Setup.exe** — установщик: запустите, программа
-            встанет с ярлыками в меню «Пуск» и на рабочем столе.
+            **AI_Scalper_Setup.exe — берите этот.** Установщик: программа
+            встанет папкой, с ярлыками в меню «Пуск» и на рабочем столе.
+            Запускается мгновенно и не тревожит антивирус.
 
-            **AI_Scalper_Pro.exe** — то же самое без установки. Скачайте
-            и положите рядом `config.py`.
+            **AI_Scalper_Pro.exe** — та же программа одним файлом, без
+            установки. Через него работает самообновление уже установленных
+            копий. Одному файлу приходится при каждом запуске распаковывать
+            себя во временную папку: это медленнее, и именно на этом
+            возникали ошибки вида «Can't find a usable init.tcl» и
+            «No such file: base_library.zip».
 
             Python на компьютере не нужен ни в том, ни в другом случае.

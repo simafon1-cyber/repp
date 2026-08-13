@@ -1007,9 +1007,14 @@ def test_truncated_download_never_replaces_working_program() -> None:
     # Размер, который GitHub сообщает о файле, — независимая мерка.
     # Проверяем ВЫЗОВОМ: поиск текста «"size"» мутация проходила, подставляя
     # ноль, — то есть сверять было бы не с чем и защита молча исчезала.
+    # В релизе ДВА исполняемых файла, и установщик идёт ПЕРВЫМ. Прежнее
+    # правило «берём первый .exe» подменило бы работающую программу
+    # установщиком, и она перестала бы запускаться вовсе.
     answer = json.dumps({
         "tag_name": "build-99",
-        "assets": [{"name": "AI_Scalper_Pro.exe", "url": "http://x/a",
+        "assets": [{"name": "AI_Scalper_Setup.exe", "url": "http://x/setup",
+                    "size": 999},
+                   {"name": "AI_Scalper_Pro.exe", "url": "http://x/a",
                     "size": 57_123_456}],
     }).encode("utf-8")
 
@@ -1024,6 +1029,10 @@ def test_truncated_download_never_replaces_working_program() -> None:
     try:
         up._request = lambda *a, **k: FakeApi(answer)
         info = up.latest_release_exe()
+        check(info.get("name") == "AI_Scalper_Pro.exe",
+              "Берётся САМА ПРОГРАММА, а не установщик рядом с ней",
+              str(info.get("name")))
+        check(info.get("url") == "http://x/a", "И ссылка её же")
         check(info.get("size") == 57_123_456,
               "Размер файла берётся из описания релиза", str(info.get("size")))
         check(info.get("tag") == "build-99", "И номер сборки тоже")

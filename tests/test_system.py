@@ -717,6 +717,58 @@ def test_packager_version_is_bounded() -> None:
         check(">=" in line[0], "И нижняя граница тоже задана", line[0])
 
 
+def test_build_ships_folder_version() -> None:
+    """ОТКУДА ЭТО. Владелец подряд получил три разные ошибки, и все три —
+    про распаковку одного файла во временную папку: «Can't find a usable
+    init.tcl», «No such file: base_library.zip», «Failed to remove temporary
+    directory». Плюс такое поведение — распаковать себя во временную папку и
+    запуститься оттуда — обычная повадка вредоносных программ, и антивирус
+    относится к нему подозрительно.
+
+    Папка не распаковывается вовсе. Это убирает целый класс ошибок и делает
+    запуск мгновенным."""
+    print("\n[Программа собирается папкой, а не только одним файлом]")
+    wf = (ROOT / ".github" / "workflows" / "build-exe.yml").read_text(encoding="utf-8")
+
+    check("--onedir" in wf, "Папочная сборка есть")
+    check("--onefile" in wf,
+          "И однофайловая тоже: через неё обновляются УЖЕ установленные копии, "
+          "убери её — самообновление сломается у всех разом")
+    check("--distpath dist_onefile" in wf,
+          "Собираются в разные папки, а не поверх друг друга")
+
+    # Обе версии обязаны пройти проверку запуска
+    step = wf.split("Проверить, что программа ЗАПУСКАЕТСЯ", 1)[1]
+    step = step.split("      - name:", 1)[0]
+    check("dist\\AI_Scalper_Pro\\AI_Scalper_Pro.exe" in step,
+          "Проверяется папочная версия")
+    check("dist_onefile\\AI_Scalper_Pro.exe" in step,
+          "И однофайловая тоже")
+
+    # Установщик обязан класть ВСЮ папку
+    iss = (APP / "installer.iss").read_text(encoding="utf-8")
+    check("recursesubdirs" in iss,
+          "Установщик кладёт всю папку, а не один файл из неё")
+    check("dist\\AI_Scalper_Pro\\*" in iss, "Источник — папка сборки")
+
+    # В релиз идут обе
+    check("installer_output/AI_Scalper_Setup.exe" in wf, "Установщик публикуется")
+    check("dist_onefile/AI_Scalper_Pro.exe" in wf, "И один файл тоже")
+
+
+def test_updater_picks_the_program_not_the_installer() -> None:
+    """В релизе теперь ДВА исполняемых файла. Правило «берём первый .exe»
+    подменило бы работающую программу установщиком — и она перестала бы
+    запускаться вовсе. Ошибка была бы моей и очень дорогой."""
+    print("\n[Обновление берёт программу, а не установщик]")
+    src = (APP / "updater.py").read_text(encoding="utf-8")
+    body = src.split("def latest_release_exe", 1)[1].split("\ndef ", 1)[0]
+    check('.endswith(".exe")' not in body,
+          "Правила «любой .exe» больше нет")
+    check("== EXE_NAME.lower()" in body,
+          "Файл ищется по точному имени", body[:120])
+
+
 def main() -> int:
     print("=" * 62)
     print("ТЕСТЫ СИСТЕМЫ: МОСТ, ПРОВЕРКИ, ОБНОВЛЕНИЕ")
@@ -736,6 +788,8 @@ def main() -> int:
     test_bundled_everything()
     test_build_proves_the_program_starts()
     test_packager_version_is_bounded()
+    test_build_ships_folder_version()
+    test_updater_picks_the_program_not_the_installer()
     test_main_page_sync()
 
     print("\n" + "=" * 62)
