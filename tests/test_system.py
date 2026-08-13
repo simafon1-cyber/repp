@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import sys
+import tempfile
 import types
 import urllib.error
 from pathlib import Path
@@ -597,6 +599,98 @@ def test_main_page_sync() -> None:
     CFG.UPDATE_REPO = "owner/repo"
 
 
+def test_settings_live_next_to_the_program() -> None:
+    """ПОЧЕМУ ЭТОТ ТЕСТ ПОЯВИЛСЯ. Сборка 55 упала с «No module named 'config'»:
+    программу собрали ПАПКОЙ (dist\\AI_Scalper_Pro\\), а config.py положили
+    этажом выше, в dist\\. Программа ищет настройки рядом с собой и не нашла.
+
+    Дальше начиналось самое неприятное: программа собрана БЕЗ КОНСОЛИ, поэтому
+    падение показывало системное окно с ошибкой, которого можно не заметить, и
+    процесс висел, пока в нём не нажмут «ОК». Снаружи — ровно «нет отклика от
+    программы, виснет»."""
+    print("\n[Настройки лежат рядом с программой]")
+    wf = (ROOT / ".github" / "workflows" / "build-exe.yml").read_text(encoding="utf-8")
+    step = wf.split("Подготовить config.py", 1)[1].split("      - name:", 1)[0]
+    строки = [l for l in step.splitlines() if not l.strip().startswith("#")]
+    команды = " ".join(строки)
+    check("dist\\AI_Scalper_Pro\\config.py" in команды,
+          "config.py кладётся В ПАПКУ ПРОГРАММЫ, а не этажом выше",
+          команды.strip()[:160])
+    check("dist_onefile\\config.py" in команды,
+          "И рядом с однофайловой сборкой тоже")
+
+    # Установщик НЕ должен затирать личный config.py владельца. Раз config.py
+    # теперь лежит в папке сборки, а вся папка копируется с ignoreversion —
+    # без явного исключения обновление стирало бы ключи и пароли.
+    iss = (APP / "installer.iss").read_text(encoding="utf-8")
+    оптом = [l for l in iss.splitlines()
+             if l.startswith("Source:") and "dist\\AI_Scalper_Pro" in l]
+    check(len(оптом) == 1, "Папка программы копируется одной строкой",
+          str(len(оптом)))
+    if оптом:
+        check('Excludes: "config.py"' in оптом[0],
+              "И личный config.py из неё ИСКЛЮЧЁН — обновление его не затрёт",
+              оптом[0])
+    личный = [l for l in iss.splitlines()
+              if l.startswith('Source: "config.py"')]
+    check(личный and "onlyifdoesntexist" in личный[0],
+          "Настройки ставятся только если их ещё нет",
+          личный[0] if личный else "строки нет")
+
+    # А теперь — САМА ПРОГРАММА. Даже если настройки всё-таки пропали, она
+    # обязана починиться или внятно сказать, а не зависнуть невидимым окном.
+    src = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "_ensure_config"),
+              None)
+    check(fn is not None, "У программы есть восстановление настроек")
+    if fn is None:
+        return
+
+    ns = {"os": os}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "<ensure>", "exec"), ns)
+    ensure = ns["_ensure_config"]
+
+    with tempfile.TemporaryDirectory() as d:
+        # 1. Настроек нет, эталон есть -> создаются из эталона.
+        эталон = os.path.join(d, "config.py.example")
+        with open(эталон, "w", encoding="utf-8") as f:
+            f.write("SYMBOLS = ['EURUSD']\n")
+        note = ensure(d)
+        готово = os.path.join(d, "config.py")
+        check(os.path.exists(готово), "Пропавший config.py создаётся из эталона", note)
+        with open(готово, encoding="utf-8") as f:
+            check(f.read() == "SYMBOLS = ['EURUSD']\n", "И содержимое взято из эталона")
+        check("config.py" in note, "О починке сказано словами", note)
+
+        # 2. ЛИЧНЫЕ НАСТРОЙКИ НЕ ТРОГАЮТСЯ. Там ключи и пароли владельца:
+        #    молча заменить их эталоном — потерять их.
+        with open(готово, "w", encoding="utf-8") as f:
+            f.write("SECRET = 'мои ключи'\n")
+        check(ensure(d) == "", "Существующий config.py не трогается")
+        with open(готово, encoding="utf-8") as f:
+            check(f.read() == "SECRET = 'мои ключи'\n", "Личные настройки целы")
+
+    with tempfile.TemporaryDirectory() as d:
+        # 3. Нет ни настроек, ни эталона -> честный ответ, а не падение.
+        note = ensure(d)
+        check(bool(note) and "config.py" in note,
+              "Без эталона программа объясняет, чего не хватает", note)
+        check(not os.path.exists(os.path.join(d, "config.py")),
+              "И ничего не выдумывает")
+
+    # Падение на импорте настроек обязано быть ГРОМКИМ и с выходом, а не
+    # зависанием: собранная без консоли программа висит на невидимом окне.
+    голова = src.split("LOG_FILE =", 1)[0]
+    check("try:\n    import config as cfg" in голова,
+          "Импорт настроек защищён, а не падает как есть")
+    check("sys.exit(2)" in голова,
+          "И при неудаче программа ВЫХОДИТ с кодом, а не виснет")
+    check("НАСТРОЙКИ НЕ ЗАГРУЖЕНЫ" in голова,
+          "Причина печатается словами, её видно в журнале сборки")
+
+
 def test_build_proves_the_program_starts() -> None:
     """ОТКУДА ЭТОТ ТЕСТ. Владелец трижды получал собранную программу, которая
     не открывалась вовсе: «Can't find a usable init.tcl», «No such file:
@@ -814,6 +908,7 @@ def main() -> int:
     test_updater_does_not_mix_versions()
     test_updater_never_silent()
     test_bundled_everything()
+    test_settings_live_next_to_the_program()
     test_build_proves_the_program_starts()
     test_packager_version_is_bounded()
     test_build_ships_folder_version()

@@ -64,7 +64,53 @@ from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import messagebox, simpledialog, filedialog, ttk
 
-import config as cfg
+def _ensure_config(app_dir: str) -> str:
+    """Настройки рядом с программой обязаны существовать. Возвращает, что сделано.
+
+    ПОЧЕМУ ЭТО ЗДЕСЬ. config.py намеренно НЕ встраивается внутрь .exe — он
+    остаётся отдельным редактируемым файлом рядом с программой. И его может
+    не оказаться: первая установка, ручное удаление, неудачное обновление,
+    распаковка не в ту папку.
+
+    Раньше в этом случае программа падала прямо на строке `import config` —
+    ещё до того, как появлялось хоть одно окно. А собранная БЕЗ КОНСОЛИ
+    программа при падении показывает системное окно с ошибкой, которого на
+    рабочем столе можно и не заметить, и висит, пока в нём не нажмут «ОК».
+    Снаружи это выглядит ровно как «нет отклика от программы, виснет».
+
+    Теперь недостающие настройки создаются из эталона — как и должно быть
+    при первом запуске. Молча заменять СУЩЕСТВУЮЩИЙ config.py нельзя: там
+    личные ключи и пароли владельца."""
+    настройки = os.path.join(app_dir, "config.py")
+    if os.path.exists(настройки):
+        return ""
+    эталон = os.path.join(app_dir, "config.py.example")
+    if not os.path.exists(эталон):
+        return "нет ни config.py, ни config.py.example"
+    try:
+        with open(эталон, "r", encoding="utf-8") as f:
+            текст = f.read()
+        with open(настройки, "w", encoding="utf-8") as f:
+            f.write(текст)
+        return "создан config.py из config.py.example"
+    except OSError as e:
+        return f"не удалось создать config.py: {e}"
+
+
+_config_note = _ensure_config(_app_dir)
+
+try:
+    import config as cfg
+except Exception as e:  # noqa: BLE001
+    # Падать здесь — значит зависнуть невидимым окном ошибки (см. выше).
+    # Лучше сказать это словами и уйти с ненулевым кодом: так причину видно
+    # и человеку, и проверке при сборке.
+    print(f"НАСТРОЙКИ НЕ ЗАГРУЖЕНЫ: {type(e).__name__}: {e}")
+    print(f"Папка программы: {_app_dir}")
+    if _config_note:
+        print(f"Попытка починить: {_config_note}")
+    print("Положите файл config.py рядом с программой и запустите ещё раз.")
+    sys.exit(2)
 
 LOG_FILE = os.path.join(_app_dir, "scalper.log")
 logging.basicConfig(

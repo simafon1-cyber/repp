@@ -38,7 +38,14 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 ; распаковывал во временную папку около 55 МБ — отсюда ошибки про _MEI
 ; (init.tcl, base_library.zip, "Failed to remove temporary directory") и
 ; подозрения антивируса. Папка не распаковывается вовсе: файлы уже на месте.
-Source: "dist\AI_Scalper_Pro\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+;
+; ВАЖНО: config.py из этой папки ИСКЛЮЧЁН. При сборке он кладётся рядом с
+; программой, чтобы проверить, что она вообще запускается. Но здесь у строки
+; стоит ignoreversion, то есть «перезаписывать всегда» — и без исключения
+; установщик затирал бы личный config.py владельца при каждом обновлении:
+; ключи, пароли, пары, профиль. Настройки ставятся отдельной строкой ниже,
+; с флагом onlyifdoesntexist.
+Source: "dist\AI_Scalper_Pro\*"; DestDir: "{app}"; Excludes: "config.py"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; config.py -- ставится ТОЛЬКО если у пользователя его ещё нет (чтобы при
 ; переустановке/обновлении не затереть его настройки -- ключи AI, пары, профиль).

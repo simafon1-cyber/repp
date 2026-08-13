@@ -179,9 +179,20 @@ jobs:
         # В репозитории лежит только config.py.example (настоящий содержит
         # ключи и в git не хранится) — установщику нужен обычный config.py
         shell: pwsh
+        #
+        # РЯДОМ С САМОЙ ПРОГРАММОЙ, а не только в dist. config.py намеренно не
+        # встраивается внутрь .exe и ищется в папке программы. При сборке
+        # ПАПКОЙ программа лежит в dist\AI_Scalper_Pro\, и config.py в dist\
+        # оказывался этажом выше — то есть не там, где программа его ищет.
+        # Проверка запуска это и поймала: «No module named 'config'».
         run: |
           if (-not (Test-Path "config.py")) { Copy-Item "config.py.example" "config.py" }
           Copy-Item "config.py" "dist\config.py" -Force
+          Copy-Item "config.py" "dist\AI_Scalper_Pro\config.py" -Force
+          Copy-Item "config.py" "dist_onefile\config.py" -Force
+          # Эталон кладём рядом же: если config.py когда-нибудь пропадёт,
+          # программа восстановит его сама вместо падения на импорте.
+          Copy-Item "config.py.example" "dist\AI_Scalper_Pro\config.py.example" -Force
 
       - name: Проверить, что программа ЗАПУСКАЕТСЯ
         # Владелец трижды получал собранную программу, которая не открывалась
