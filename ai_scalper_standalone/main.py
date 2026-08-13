@@ -37,6 +37,7 @@ import multi_indicator as mi
 import market_hours
 import news_calendar
 import remote_settings
+import risk_state
 import scan_rotation
 import symbol_cache
 import symbol_picker
@@ -712,10 +713,15 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         sym_state.last_reject_reason = "Спред съедает слишком большую часть TP"
         return
 
-    info = mt5.symbol_info(symbol)
+    # Риск новой сделки считается ТЕМ ЖЕ способом, что и риск уже открытых
+    # (rm.get_open_risk_percent) — иначе общий потолок max_total_risk_pct
+    # сравнивал бы числа, посчитанные по-разному. Внутри — точный расчёт от
+    # терминала с приближением по цене тика в запасе (rm.money_risk_per_lot).
     new_trade_risk_pct = 0.0
-    if equity > 0 and info and info.trade_tick_value > 0 and info.trade_tick_size > 0:
-        new_trade_risk_pct = (sl_dist / info.trade_tick_size) * info.trade_tick_value * lot / equity * 100.0
+    if equity > 0:
+        per_lot = rm.money_risk_per_lot(symbol, sl_dist)
+        if per_lot > 0:
+            new_trade_risk_pct = per_lot * lot / equity * 100.0
 
     # Используем уже полученный в начале ЭТОЙ итерации acc_info вместо
     # повторного запроса к MT5 (fallback на свежий запрос, если функцию
@@ -727,6 +733,16 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     if open_risk_pct + new_trade_risk_pct * len(directions_to_open) > profile["max_total_risk_pct"]:
         sym_state.last_reject_reason = "Превышен общий риск по открытым позициям"
         return
+
+    # СВОБОДНЫЕ СРЕДСТВА. Проверяется по каждой ноге: у хеджа их две, и
+    # средств должно хватить на обе. Это не торговый фильтр — отсекаются
+    # ровно те ордера, которые брокер и так отклонил бы, просто причина
+    # называется словами заранее (см. rm.margin_block_reason).
+    for d in directions_to_open:
+        no_margin = rm.margin_block_reason(symbol, d, lot, account=acc_info)
+        if no_margin:
+            sym_state.last_reject_reason = no_margin
+            return
 
     opened_count = 0
     for d in directions_to_open:
@@ -1561,6 +1577,16 @@ def main(stop_event=None, start_dashboard: bool = True):
     acc = mt5c.connect()
     acc_state = AccountState(day_start_equity=acc.equity, peak_equity=acc.equity, last_trade_day=datetime.now())
 
+    # ЗАЩИТА СЧЁТА ПЕРЕЖИВАЕТ ПЕРЕЗАПУСК. Лимит просадки считается от ПИКА
+    # счёта, а пик жил только в памяти процесса: перезапуск обнулял его до
+    # текущего эквити, просадка становилась нулевой, и запрет снимался сам
+    # собой. То же с дневным лимитом убытка, который считается от эквити на
+    # начало дня. Ни один порог здесь не меняется — восстанавливаются только
+    # числа, от которых они отсчитываются (см. risk_state.py).
+    restored = risk_state.load(acc_state, getattr(acc, "login", 0))
+    if restored:
+        log.info("Восстановлено состояние защиты счёта: %s", restored)
+
     # Отбор пар — ДО init_states: он и решает, с каким списком работать.
     # Делается один раз при запуске: замер всех пар брокера занимает время, а
     # спред и подвижность инструмента за час не меняются настолько, чтобы
@@ -1648,6 +1674,11 @@ def main(stop_event=None, start_dashboard: bool = True):
                 equity = acc_info.equity
                 check_new_day(acc_state, equity)
                 process_closed_deals(acc_state, sym_states)
+
+                # Пик счёта и начало дня — на диск, но ТОЛЬКО когда они
+                # изменились: цикл крутится каждые несколько секунд, а пик
+                # обновляется редко (см. risk_state.save_if_changed).
+                risk_state.save_if_changed(acc_state, getattr(acc_info, "login", 0))
 
                 # Ускорение цикла: ОДИН запрос всех открытых позиций на всю
                 # итерацию вместо отдельного запроса на каждый символ (было:

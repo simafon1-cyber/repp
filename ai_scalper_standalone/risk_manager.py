@@ -164,6 +164,120 @@ def spread_cost_ok(symbol: str, lot: float, tp_dist: float, ignore_soft_filters:
     return (spread_money / tp_money * 100.0) <= cfg.MAX_SPREAD_COST_PERCENT_OF_TP
 
 
+# =====================================================================
+# ТОЧНЫЙ РАСЧЁТ ДЕНЕГ — СПРАШИВАЕМ У ТЕРМИНАЛА
+# =====================================================================
+# Здесь считалось приближением: (расстояние / размер тика) * цена тика.
+# Для EURUSD оно верно. Для золота, кроссов и индексов — валюта прибыли не
+# совпадает с валютой счёта, и у части брокеров цена тика либо неточна, либо
+# обновляется с задержкой. То есть риск считался неверно РОВНО НА ТЕХ
+# инструментах, где ошибка стоит дороже всего: основной убыток владельца был
+# на золоте.
+#
+# Советник на MQL5 давно делает правильно (RiskManager.mqh, MoneyPerDistance):
+# спрашивает точную сумму у самого терминала через OrderCalcProfit, а
+# приближение оставляет запасным путём. В Python-версии тот же вызов есть
+# (mt5.order_calc_profit) и просто не использовался.
+#
+# Здесь повторено ОДИН В ОДИН поведение MQL5, включая направление и знак:
+# берётся цена BUY, целевая цена выше на расстояние стопа, результат по
+# модулю.
+
+def money_per_distance(symbol: str, direction: int, dist: float, lot: float) -> float:
+    """Сколько денег даёт (или отнимает) движение на dist при объёме lot.
+
+    Возвращает 0.0, если посчитать не удалось — вызывающий код ОБЯЗАН это
+    проверить и уйти на запасной путь. Молча вернуть неверное число здесь
+    хуже, чем не вернуть ничего: на этом числе считается объём сделки."""
+    if dist <= 0 or lot <= 0:
+        return 0.0
+    try:
+        tick = mt5c.get_tick(symbol)
+        price = float(getattr(tick, "ask" if direction > 0 else "bid", 0) or 0)
+        if price <= 0:
+            return 0.0
+        close_price = price + dist if direction > 0 else price - dist
+        if close_price <= 0:
+            return 0.0
+        order_type = (mt5c.mt5.ORDER_TYPE_BUY if direction > 0
+                      else mt5c.mt5.ORDER_TYPE_SELL)
+        profit = mt5c.mt5.order_calc_profit(order_type, symbol, lot, price, close_price)
+        if profit is None:
+            return 0.0
+        return abs(float(profit))
+    except Exception as e:  # noqa: BLE001
+        # Терминал может не отвечать, символ может быть не выбран, а в
+        # проверках вместо MetaTrader стоит заглушка. Ни один из этих случаев
+        # не повод уронить расчёт объёма — уходим на запасной путь.
+        log.debug("order_calc_profit недоступен для %s (%s) — запасной путь", symbol, e)
+        return 0.0
+
+
+def money_risk_per_lot(symbol: str, sl_dist: float, info=None) -> float:
+    """Сколько денег теряет ОДИН лот на стопе шириной sl_dist.
+
+    Сначала точный ответ терминала, затем прежнее приближение по цене тика."""
+    money = money_per_distance(symbol, 1, sl_dist, 1.0)
+    if money > 0:
+        return money
+    if info is None:
+        info = _symbol_info(symbol)
+    if info is None:
+        return 0.0
+    tick_value = float(getattr(info, "trade_tick_value", 0) or 0)
+    tick_size = float(getattr(info, "trade_tick_size", 0) or 0)
+    if tick_value <= 0 or tick_size <= 0 or sl_dist <= 0:
+        return 0.0
+    return (sl_dist / tick_size) * tick_value
+
+
+def margin_block_reason(symbol: str, direction: int, lot: float,
+                        account=None) -> str:
+    """Хватит ли свободных средств под этот объём. Пустая строка — хватит.
+
+    ЗАЧЕМ. Ни в Python-версии, ни в советнике маржа не проверялась вовсе.
+    Брокер в такой ситуации просто отказывает ордеру («No money»), и снаружи
+    это выглядит одинаково с любой другой неудачей: сделки нет, причины нет.
+    Здесь причина называется словами до отправки ордера.
+
+    ЭТО НЕ ТОРГОВЫЙ ФИЛЬТР. Он не решает, стоит ли входить: он отсекает
+    ровно те сделки, которые брокер и так не примет. Ни одна сделка, которую
+    брокер принял бы, здесь не блокируется.
+
+    ПРИ ЛЮБОМ СОМНЕНИИ — ПРОПУСКАЕМ. Не удалось спросить терминал, нет
+    данных счёта, вместо MetaTrader стоит заглушка — возвращаем пустую
+    строку. Запретить торговлю из-за неудачного вспомогательного запроса
+    хуже, чем не проверить."""
+    if lot <= 0:
+        return ""
+    try:
+        tick = mt5c.get_tick(symbol)
+        price = float(getattr(tick, "ask" if direction > 0 else "bid", 0) or 0)
+        if price <= 0:
+            return ""
+        order_type = (mt5c.mt5.ORDER_TYPE_BUY if direction > 0
+                      else mt5c.mt5.ORDER_TYPE_SELL)
+        need = mt5c.mt5.order_calc_margin(order_type, symbol, lot, price)
+        if need is None:
+            return ""
+        need = float(need)
+        if need <= 0:
+            return ""
+        if account is None:
+            account = mt5c.get_account_info()
+        free = float(getattr(account, "margin_free", 0) or 0)
+        if free <= 0:
+            return ""
+        if need <= free:
+            return ""
+        return (f"Не хватает свободных средств: под {lot:.2f} лота нужно "
+                f"{need:.2f}, свободно {free:.2f}. Брокер такой ордер не "
+                f"примет. Уменьшите объём или пополните счёт.")
+    except Exception as e:  # noqa: BLE001
+        log.debug("Проверка маржи для %s недоступна (%s) — пропускаю", symbol, e)
+        return ""
+
+
 def _symbol_info(symbol: str):
     import MetaTrader5 as mt5
     return mt5.symbol_info(symbol)
@@ -188,11 +302,15 @@ def get_open_risk_percent(account, positions=None) -> float:
     for p in positions:
         if p.sl <= 0:
             continue
-        info = _symbol_info(p.symbol)
-        if info is None or info.trade_tick_value <= 0 or info.trade_tick_size <= 0:
-            continue
         dist = abs(p.price_open - p.sl)
-        total_risk_money += (dist / info.trade_tick_size) * info.trade_tick_value * p.volume
+        # Тот же точный расчёт, что и при открытии сделки (money_risk_per_lot),
+        # и тот же, что в MQL5-советнике. Считать риск открытых позиций иначе,
+        # чем риск новой, — значит сравнивать несравнимое: общий потолок
+        # max_total_risk_pct проверяется по сумме того и другого.
+        per_lot = money_risk_per_lot(p.symbol, dist)
+        if per_lot <= 0:
+            continue
+        total_risk_money += per_lot * p.volume
     return total_risk_money / equity * 100.0
 
 
@@ -344,9 +462,12 @@ def calc_lot(symbol: str, sl_dist: float, equity: float, sym_state: SymbolState)
     mult = loss_streak_risk_multiplier(sym_state)
 
     risk_money = equity * profile["risk_percent"] / 100.0 * mult
-    if info.trade_tick_value <= 0 or info.trade_tick_size <= 0 or sl_dist <= 0:
+    if sl_dist <= 0:
         return min_lot
-    loss_per_lot = (sl_dist / info.trade_tick_size) * info.trade_tick_value
+    # Точная сумма от терминала, приближение по цене тика — запасным путём.
+    # См. money_risk_per_lot: раньше здесь было только приближение, и на
+    # золоте оно расходилось с действительностью.
+    loss_per_lot = money_risk_per_lot(symbol, sl_dist, info)
     if loss_per_lot <= 0:
         return min_lot
     lot = risk_money / loss_per_lot

@@ -85,6 +85,9 @@ PROTECTED = {
     "trades_log.csv",
     "trades_log.csv.sha256",
     "learning_state.json",
+    # Пик счёта и начало дня: от них считаются лимит просадки и дневной
+    # лимит убытка. Перезаписать их обновлением — снять защиту (risk_state.py).
+    "risk_state.json",
     ".login_remember",
     "scalper.log",
     "config.py.sha256",
