@@ -12,6 +12,8 @@ mt5_connector.py — тонкая обёртка над пакетом MetaTrade
 """
 
 import logging
+import os
+
 import MetaTrader5 as mt5
 
 import config as cfg
@@ -86,8 +88,37 @@ def auto_login_account():
 _MT5_WINDOW_CLASSES = (
     "MetaQuotes::MetaTrader::5",   # основное окно терминала
 )
+# Имена самого файла терминала. Ищем окно ЕЩЁ И ПО НИМ, а не только по классу
+# окна: у владельца терминал был открыт и виден в диспетчере задач, а поиск по
+# классу окна его не находил — «Терминал не найден». Класс окна зависит от
+# сборки MetaTrader и может отличаться; имя файла — нет.
+_MT5_PROCESS_NAMES = ("terminal64.exe", "terminal.exe")
 _SW_HIDE = 0
 _SW_SHOWNA = 8                     # показать, но не забирать фокус
+_СПРОСИТЬ_НЕМНОГО = 0x1000         # PROCESS_QUERY_LIMITED_INFORMATION
+
+
+def _process_name_of(pid: int) -> str:
+    """Имя файла процесса по его номеру. Пустая строка — узнать не удалось."""
+    if not pid:
+        return ""
+    try:
+        import ctypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(_СПРОСИТЬ_НЕМНОГО, False, int(pid))
+        if not handle:
+            return ""
+        try:
+            размер = ctypes.c_ulong(1024)
+            буфер = ctypes.create_unicode_buffer(размер.value)
+            if not kernel32.QueryFullProcessImageNameW(
+                    handle, 0, буфер, ctypes.byref(размер)):
+                return ""
+            return os.path.basename(буфер.value).lower()
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def set_terminal_visible(visible: bool) -> int:
@@ -95,7 +126,13 @@ def set_terminal_visible(visible: bool) -> int:
     это коснулось. 0 — окон не нашлось (или мы не на Windows).
 
     Терминал от этого не останавливается: прячется только окно, процесс
-    работает как работал."""
+    работает как работал.
+
+    ОКНО ИЩЕТСЯ ДВУМЯ СПОСОБАМИ. По классу окна (быстро) И по имени файла
+    процесса, которому окно принадлежит. Одного класса оказалось мало:
+    владелец прислал снимок, где MetaTrader открыт и виден в диспетчере
+    задач, а кнопка отвечала «Терминал не найден». Класс главного окна
+    зависит от сборки терминала, имя файла terminal64.exe — нет."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -107,12 +144,25 @@ def set_terminal_visible(visible: bool) -> int:
     user32 = ctypes.windll.user32
     touched = 0
     buffer = ctypes.create_unicode_buffer(256)
+    # Имя файла процесса спрашиваем один раз на процесс: окон у терминала
+    # много, а вызов не бесплатный.
+    известные = {}
 
     @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
     def visit(hwnd, _param):
         nonlocal touched
+        свой = False
         user32.GetClassNameW(hwnd, buffer, 256)
         if buffer.value in _MT5_WINDOW_CLASSES:
+            свой = True
+        else:
+            pid = wintypes.DWORD(0)
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            номер = pid.value
+            if номер not in известные:
+                известные[номер] = _process_name_of(номер)
+            свой = известные[номер] in _MT5_PROCESS_NAMES
+        if свой:
             user32.ShowWindow(hwnd, _SW_SHOWNA if visible else _SW_HIDE)
             touched += 1
         return True

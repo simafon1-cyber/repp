@@ -531,6 +531,81 @@ def test_symbols_are_never_mixed() -> None:
           "Каждая сделка помечена своим инструментом")
 
 
+def test_export_does_not_give_up_on_first_try() -> None:
+    """ПОЧЕМУ ЭТОТ ТЕСТ ПОЯВИЛСЯ. Владелец нажал «Выгрузить историю» при
+    открытом терминале и работающей торговле и получил «Терминал не отдал
+    историю по EURUSD».
+
+    MetaTrader не хранит историю у себя целиком: он подкачивает её с сервера
+    ПО ЗАПРОСУ и на первый запрос почти всегда отвечает пустотой — это «ещё
+    не готово», а не «данных нет». Программа спрашивала ОДИН раз и сдавалась."""
+    print("\n[Выгрузка переспрашивает терминал, а не сдаётся сразу]")
+    import history_export
+
+    вызовы = {"n": 0}
+
+    def сначала_пусто(symbol, tf, start, count):
+        вызовы["n"] += 1
+        if вызовы["n"] < 3:
+            return None            # терминал ещё качает
+        return [{"time": 1700000000 + i * 300, "open": 1.0, "high": 1.1,
+                 "low": 0.9, "close": 1.05, "tick_volume": 10, "spread": 8,
+                 "real_volume": 0} for i in range(50)]
+
+    fake_mt5.copy_rates_from_pos = сначала_пусто
+    fake_mt5.last_error = lambda: (1, "загрузка")
+    saved_pause = history_export.ПАУЗА_СЕКУНД
+    history_export.ПАУЗА_СЕКУНД = 0.0
+    try:
+        свечи_, ответ = history_export._подкачать("EURUSD", 5, 100)
+        check(свечи_ is not None, "Дождались истории, а не сдались на первом «пусто»")
+        check(вызовы["n"] == 3, "Переспросили ровно столько, сколько понадобилось",
+              str(вызовы["n"]))
+
+        # Совсем нет данных — честный отказ с ответом терминала.
+        вызовы["n"] = 0
+        fake_mt5.copy_rates_from_pos = lambda *a: None
+        свечи_, ответ = history_export._подкачать("EURUSD", 5, 100)
+        check(свечи_ is None, "Если данных нет вовсе — отказ")
+        check("загрузка" in ответ, "И в отказе видно, что ответил терминал", ответ)
+    finally:
+        history_export.ПАУЗА_СЕКУНД = saved_pause
+
+    # Начало с позиции 1 при этом никуда не делось.
+    src = (APP / "history_export.py").read_text(encoding="utf-8")
+    строка = [l for l in src.splitlines()
+              if "copy_rates_from_pos" in l and not l.strip().startswith("#")]
+    check(строка and ", 1, " in строка[0],
+          "И по-прежнему берём с позиции 1 (0 — незакрытая свеча)",
+          строка[0].strip() if строка else "нет")
+
+
+def test_export_finds_symbol_with_broker_suffix() -> None:
+    """У многих брокеров имена с припиской: EURUSD.m, EURUSDm, XAUUSD.raw."""
+    print("\n[Имя инструмента у брокера находится само]")
+    import history_export
+
+    class Сим:
+        def __init__(self, name):
+            self.name = name
+
+    fake_mt5.symbol_info = lambda s: object() if s == "EURUSD.m" else None
+    fake_mt5.symbols_get = lambda: [Сим("EURUSD.m"), Сим("EURUSD.micro"),
+                                    Сим("XAUUSD.m"), Сим("GBPUSD.m")]
+    check(history_export.resolve_symbol("EURUSD.m") == "EURUSD.m",
+          "Точное имя берётся как есть")
+    check(history_export.resolve_symbol("EURUSD") == "EURUSD.m",
+          "По «EURUSD» находится «EURUSD.m» — самое короткое из похожих",
+          history_export.resolve_symbol("EURUSD"))
+    check(history_export.resolve_symbol("НЕТТАКОГО") == "",
+          "Несуществующее не выдумывается")
+
+    fake_mt5.symbol_info = lambda s: None
+    fake_mt5.symbols_get = lambda: []
+    check(history_export.resolve_symbol("EURUSD") == "",
+          "Пустой список инструментов не роняет поиск")
+
+
 if __name__ == "__main__":
     print("=" * 62)
     print("ТЕСТЫ: BASELINE, ДАННЫЕ, ЗАГЛЯДЫВАНИЕ ВПЕРЁД")
@@ -549,6 +624,8 @@ if __name__ == "__main__":
     test_engine_is_repeatable_and_honest()
     test_not_reproducible_is_declared()
     test_symbols_are_never_mixed()
+    test_export_does_not_give_up_on_first_try()
+    test_export_finds_symbol_with_broker_suffix()
     print()
     print("=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

@@ -47,6 +47,7 @@
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 import MetaTrader5 as mt5
@@ -173,9 +174,72 @@ def collect_meta(symbol: str, timeframe: str, bars: list, account=None) -> dict:
     }
 
 
+# Сколько раз переспросить терминал и сколько ждать между попытками.
+#
+# ЗАЧЕМ ЭТО. MetaTrader не хранит всю историю у себя: он подкачивает её с
+# сервера брокера ПО ЗАПРОСУ и на первый запрос почти всегда отвечает
+# пустотой — не «нет данных», а «ещё не готово». Владелец получил из-за этого
+# «Терминал не отдал историю по EURUSD» при открытом терминале и работающей
+# торговле: программа спросила один раз и сдалась.
+ПОПЫТОК = 8
+ПАУЗА_СЕКУНД = 2.0
+# После этой попытки просим меньше свечей. Двухсот тысяч баров у брокера может
+# просто не быть, и терминал в таком случае отвечает пустотой вместо «вот
+# сколько есть».
+УМЕНЬШИТЬ_ПОСЛЕ = 3
+МИНИМУМ_БАРОВ = 5000
+
+
+def resolve_symbol(name: str) -> str:
+    """Как ЭТОТ инструмент называется у ЭТОГО брокера. Пусто — не нашёлся.
+
+    У многих брокеров к именам добавлена приписка: EURUSD.m, EURUSDm,
+    EURUSD_i, XAUUSD.raw. Требовать от человека вписывать точное имя — значит
+    переложить на него работу, которую программа делает за секунду.
+
+    Сначала точное совпадение, потом имя, НАЧИНАЮЩЕЕСЯ с нужного. Из
+    нескольких похожих берём самое короткое: у него меньше всего лишнего."""
+    if mt5.symbol_info(name) is not None:
+        return name
+    try:
+        все = mt5.symbols_get() or ()
+    except Exception:  # noqa: BLE001
+        return ""
+    похожие = [s.name for s in все
+               if str(getattr(s, "name", "")).upper().startswith(name.upper())]
+    return min(похожие, key=len) if похожие else ""
+
+
+def _подкачать(symbol: str, tf, bars: int, progress=None):
+    """Спросить свечи, переспрашивая, пока терминал их подкачивает.
+
+    Возвращает (свечи, пояснение). Свечи None — не дождались, и в пояснении
+    сказано, что именно ответил терминал."""
+    сколько = max(int(bars), МИНИМУМ_БАРОВ)
+    последняя = ""
+    for попытка in range(ПОПЫТОК):
+        rates = mt5.copy_rates_from_pos(symbol, tf, 1, сколько)
+        if rates is not None and len(rates) > 0:
+            return rates, ""
+        try:
+            последняя = str(mt5.last_error())
+        except Exception:  # noqa: BLE001
+            последняя = ""
+        if progress:
+            try:
+                progress(f"{symbol}: терминал подкачивает историю, "
+                         f"попытка {попытка + 1} из {ПОПЫТОК}...")
+            except Exception:  # noqa: BLE001
+                pass
+        time.sleep(ПАУЗА_СЕКУНД)
+        if попытка == УМЕНЬШИТЬ_ПОСЛЕ and сколько > МИНИМУМ_БАРОВ:
+            сколько = max(МИНИМУМ_БАРОВ, сколько // 4)
+    return None, последняя
+
+
 def export_symbol(symbol: str, timeframe: str = DEFAULT_TIMEFRAME,
                   bars: int = DEFAULT_BARS, folder: str = "",
-                  account=None) -> dict:
+                  account=None, progress=None) -> dict:
     """Выгрузить один инструмент. Возвращает отчёт о том, что получилось."""
     итог = {"symbol": symbol, "timeframe": timeframe, "bars": 0,
             "csv": "", "meta": "", "error": ""}
@@ -184,12 +248,27 @@ def export_symbol(symbol: str, timeframe: str = DEFAULT_TIMEFRAME,
         итог["error"] = f"Неизвестный таймфрейм {timeframe}"
         return итог
 
+    настоящее = resolve_symbol(symbol)
+    if not настоящее:
+        итог["error"] = (f"У брокера нет инструмента с именем {symbol} и ничего "
+                         f"похожего тоже нет. Посмотрите точное имя в «Обзоре "
+                         f"рынка» MetaTrader.")
+        return итог
+    if настоящее != symbol:
+        log.info("У этого брокера %s называется %s", symbol, настоящее)
+        итог["resolved"] = настоящее
+        symbol = настоящее
+
     # ПОЗИЦИЯ 1, А НЕ 0. Ноль — текущая, ещё не закрытая свеча.
-    rates = mt5.copy_rates_from_pos(symbol, tf, 1, int(bars))
+    rates, ответ_терминала = _подкачать(symbol, tf, bars, progress=progress)
     if rates is None or len(rates) == 0:
-        итог["error"] = (f"Терминал не отдал историю по {symbol}. Откройте график "
-                         f"{symbol} {timeframe} и прокрутите его влево, чтобы "
-                         f"MetaTrader подкачал свечи, затем повторите.")
+        итог["error"] = (
+            f"Терминал так и не отдал историю по {symbol} за "
+            f"{ПОПЫТОК} попыток"
+            + (f" (ответ терминала: {ответ_терминала})" if ответ_терминала else "")
+            + f". Откройте в MetaTrader график {symbol} {timeframe}, нажмите "
+              f"Home и дождитесь, пока внизу перестанет мигать загрузка, "
+              f"затем повторите.")
         return итог
 
     строки = [dict(zip(r.dtype.names, r.tolist())) if hasattr(r, "dtype") else dict(r)
@@ -228,11 +307,19 @@ def export_all(symbols=DEFAULT_SYMBOLS, timeframe: str = DEFAULT_TIMEFRAME,
             except Exception:  # noqa: BLE001
                 pass
         # Инструмент должен быть в «Обзоре рынка», иначе истории не будет.
+        # И ему нужно время: сразу после добавления терминал ещё не получил с
+        # сервера ни котировку, ни свечи. У владельца EURUSD в «Обзоре рынка»
+        # не было вовсе — там висели PLNJPY и SEKJPY.
         try:
-            mt5c.select_symbol(symbol)
+            что = mt5c.select_symbol(symbol)
+            if что == "добавлена":
+                if progress:
+                    progress(f"{symbol}: добавлен в «Обзор рынка», жду котировку...")
+                time.sleep(ПАУЗА_СЕКУНД)
         except Exception:  # noqa: BLE001
             pass
-        отчёты.append(export_symbol(symbol, timeframe, bars, folder, account=account))
+        отчёты.append(export_symbol(symbol, timeframe, bars, folder,
+                                     account=account, progress=progress))
     return отчёты
 
 
