@@ -1,0 +1,248 @@
+"""history_export.py — выгрузка настоящей истории вашего брокера в файлы.
+
+=====================================================================
+ЗАЧЕМ
+=====================================================================
+Проверить стратегию можно только на данных. Своих данных у программы нет:
+она смотрит на рынок в реальном времени и ничего не запоминает. Значит
+историю надо один раз выгрузить из MetaTrader и положить рядом.
+
+ЧЬИ ИМЕННО ДАННЫЕ. Только вашего брокера и только из вашего терминала.
+Чужие котировки не годятся: спред, время сервера и даже сами свечи у разных
+брокеров отличаются, и проверка на чужих данных проверяет чужую систему.
+
+=====================================================================
+ЧТО СОХРАНЯЕТСЯ
+=====================================================================
+Рядом с программой появляется папка history/raw, и в ней на каждый
+инструмент два файла:
+
+  EURUSD_M5.csv        — сами свечи
+  EURUSD_M5.meta.json  — паспорт данных
+
+Паспорт нужен не меньше самих свечей. В нём записано: брокер, сервер, номер
+счёта, смещение времени сервера относительно UTC, размер пункта, минимальный
+и максимальный лот, шаг лота, цена тика и — главное — СКОЛЬКО ДЕНЕГ СТОИТ
+ОДИН ПУНКТ ОДНОГО ЛОТА по расчёту самого терминала. Без этого числа объём
+сделки в проверке пришлось бы считать приближением, а именно на приближении
+и расходились деньги по золоту.
+
+=====================================================================
+ПОСЛЕДНЯЯ СВЕЧА ВСЕГДА ЗАКРЫТА
+=====================================================================
+Выгрузка начинается с позиции 1, а не 0. Позиция 0 в MetaTrader — текущая,
+ещё не закрытая свеча. Попади она в файл — проверка на истории увидела бы
+кусок будущего в последней свече каждого прогона. Это та же самая ошибка,
+которая была найдена в живой торговле (см. mt5_connector.get_rates_df), и
+повторять её в данных нельзя тем более.
+
+=====================================================================
+ЧЕГО ЗДЕСЬ НЕТ
+=====================================================================
+Ничего не придумывается и не достраивается. Пропуски в истории остаются
+пропусками и честно считаются при проверке качества (history_data.py).
+Синтетических, случайных и «дорисованных» свечей в файлах не бывает.
+"""
+
+import json
+import logging
+import os
+from datetime import datetime, timezone
+
+import MetaTrader5 as mt5
+
+import mt5_connector as mt5c
+
+log = logging.getLogger("history_export")
+
+# Инструменты, ради которых всё затевается. XAUUSD идёт ОТДЕЛЬНО и никогда не
+# смешивается с EURUSD: это разные рынки с разной ценой пункта и разным
+# поведением, и общая статистика по ним не значит ничего.
+DEFAULT_SYMBOLS = ("EURUSD", "XAUUSD")
+DEFAULT_TIMEFRAME = "M5"
+
+# Сколько свечей просить. 200 000 баров M5 — это примерно два года торговли.
+# Больше терминал обычно и не отдаёт, а меньше не хватит на разделение
+# истории на обучение, проверку и чистую проверку (walk-forward).
+DEFAULT_BARS = 200000
+
+RAW_FOLDER = os.path.join("history", "raw")
+
+# Колонки файла. Порядок фиксирован: файл читается программой, и молчаливая
+# перестановка колонок сломала бы чтение старых выгрузок.
+COLUMNS = ["time", "open", "high", "low", "close", "tick_volume", "spread", "real_volume"]
+
+
+def base_dir() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def raw_path(symbol: str, timeframe: str = DEFAULT_TIMEFRAME, folder: str = "") -> str:
+    root = folder or os.path.join(base_dir(), RAW_FOLDER)
+    return os.path.join(root, f"{symbol}_{timeframe}.csv")
+
+
+def meta_path(symbol: str, timeframe: str = DEFAULT_TIMEFRAME, folder: str = "") -> str:
+    return raw_path(symbol, timeframe, folder).replace(".csv", ".meta.json")
+
+
+def server_utc_offset_hours(symbol: str) -> float:
+    """На сколько часов время сервера брокера отличается от всемирного (UTC).
+
+    Свечи MetaTrader размечены ВРЕМЕНЕМ СЕРВЕРА, а не вашим и не всемирным.
+    У разных брокеров оно разное — обычно UTC+2 или UTC+3, и меняется при
+    переходе на летнее время. Без этого числа нельзя ни определить торговую
+    сессию, ни сопоставить свечу с новостью. Возвращает None, если спросить
+    не удалось: выдумывать смещение нельзя, лучше честно не знать."""
+    try:
+        tick = mt5c.get_tick(symbol)
+        server = getattr(tick, "time", 0)
+        if not server:
+            return None
+        сейчас = datetime.now(timezone.utc).timestamp()
+        # Округляем до получаса: брокеры используют целые и получасовые пояса,
+        # а разница в секундах — это задержка котировки, а не часовой пояс.
+        return round((server - сейчас) / 1800.0) * 0.5
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось определить смещение времени сервера: %s", e)
+        return None
+
+
+def money_per_point_per_lot(symbol: str, point: float) -> float:
+    """Сколько денег даёт ОДИН пункт на ОДНОМ лоте — по расчёту терминала.
+
+    Это то самое число, ради которого в PHASE 1 появился order_calc_profit.
+    Считаем его один раз при выгрузке и кладём в паспорт: во время проверки
+    на истории терминала под рукой уже не будет, а приближение по цене тика
+    расходится с действительностью ровно на золоте и кроссах."""
+    if point <= 0:
+        return 0.0
+    try:
+        tick = mt5c.get_tick(symbol)
+        цена = float(getattr(tick, "ask", 0) or 0)
+        if цена <= 0:
+            return 0.0
+        # Берём расстояние в 1000 пунктов и делим: на одном пункте терминал
+        # может округлить ответ до нуля.
+        шаг = point * 1000.0
+        profit = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, symbol, 1.0, цена, цена + шаг)
+        if profit is None:
+            return 0.0
+        return abs(float(profit)) / 1000.0
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось спросить у терминала цену пункта для %s: %s", symbol, e)
+        return 0.0
+
+
+def collect_meta(symbol: str, timeframe: str, bars: list, account=None) -> dict:
+    """Паспорт данных: всё, что понадобится, когда терминала рядом не будет."""
+    info = mt5.symbol_info(symbol)
+    point = float(getattr(info, "point", 0) or 0)
+    первая = bars[0]["time"] if bars else 0
+    последняя = bars[-1]["time"] if bars else 0
+    return {
+        "version": 1,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "broker": str(getattr(account, "company", "") or ""),
+        "server": str(getattr(account, "server", "") or ""),
+        "account": int(getattr(account, "login", 0) or 0),
+        "account_currency": str(getattr(account, "currency", "") or ""),
+        # Время свечей — ВРЕМЯ СЕРВЕРА БРОКЕРА, а не местное и не UTC.
+        "bar_time_zone": "server",
+        "server_utc_offset_hours": server_utc_offset_hours(symbol),
+        "exported_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "bars": len(bars),
+        "first_bar_server": int(первая),
+        "last_bar_server": int(последняя),
+        # Свойства инструмента — из терминала, а не из головы.
+        "point": point,
+        "digits": int(getattr(info, "digits", 0) or 0),
+        "volume_min": float(getattr(info, "volume_min", 0) or 0),
+        "volume_max": float(getattr(info, "volume_max", 0) or 0),
+        "volume_step": float(getattr(info, "volume_step", 0) or 0),
+        "trade_tick_value": float(getattr(info, "trade_tick_value", 0) or 0),
+        "trade_tick_size": float(getattr(info, "trade_tick_size", 0) or 0),
+        "trade_contract_size": float(getattr(info, "trade_contract_size", 0) or 0),
+        "stops_level": int(getattr(info, "trade_stops_level", 0) or 0),
+        "path": str(getattr(info, "path", "") or ""),
+        # Главное число: цена пункта одного лота по расчёту САМОГО терминала.
+        "money_per_point_per_lot": money_per_point_per_lot(symbol, point),
+        # Последняя свеча заведомо закрыта: выгрузка идёт с позиции 1.
+        "last_bar_closed": True,
+    }
+
+
+def export_symbol(symbol: str, timeframe: str = DEFAULT_TIMEFRAME,
+                  bars: int = DEFAULT_BARS, folder: str = "",
+                  account=None) -> dict:
+    """Выгрузить один инструмент. Возвращает отчёт о том, что получилось."""
+    итог = {"symbol": symbol, "timeframe": timeframe, "bars": 0,
+            "csv": "", "meta": "", "error": ""}
+    tf = mt5c.TF_MAP.get(timeframe)
+    if tf is None:
+        итог["error"] = f"Неизвестный таймфрейм {timeframe}"
+        return итог
+
+    # ПОЗИЦИЯ 1, А НЕ 0. Ноль — текущая, ещё не закрытая свеча.
+    rates = mt5.copy_rates_from_pos(symbol, tf, 1, int(bars))
+    if rates is None or len(rates) == 0:
+        итог["error"] = (f"Терминал не отдал историю по {symbol}. Откройте график "
+                         f"{symbol} {timeframe} и прокрутите его влево, чтобы "
+                         f"MetaTrader подкачал свечи, затем повторите.")
+        return итог
+
+    строки = [dict(zip(r.dtype.names, r.tolist())) if hasattr(r, "dtype") else dict(r)
+              for r in rates]
+
+    csv_file = raw_path(symbol, timeframe, folder)
+    os.makedirs(os.path.dirname(csv_file), exist_ok=True)
+    with open(csv_file, "w", encoding="utf-8", newline="") as f:
+        f.write(";".join(COLUMNS) + "\n")
+        for row in строки:
+            f.write(";".join(str(row.get(c, "")) for c in COLUMNS) + "\n")
+
+    meta = collect_meta(symbol, timeframe, строки, account=account)
+    with open(meta_path(symbol, timeframe, folder), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=1)
+
+    итог.update(bars=len(строки), csv=csv_file, meta=meta_path(symbol, timeframe, folder))
+    log.info("Выгружено %s %s: %d свечей -> %s", symbol, timeframe, len(строки), csv_file)
+    return итог
+
+
+def export_all(symbols=DEFAULT_SYMBOLS, timeframe: str = DEFAULT_TIMEFRAME,
+               bars: int = DEFAULT_BARS, folder: str = "", progress=None) -> list:
+    """Выгрузить всё нужное. Терминал должен быть уже подключён."""
+    account = None
+    try:
+        account = mt5c.get_account_info()
+    except Exception:  # noqa: BLE001
+        pass
+
+    отчёты = []
+    for symbol in symbols:
+        if progress:
+            try:
+                progress(f"Выгружаю {symbol} {timeframe}...")
+            except Exception:  # noqa: BLE001
+                pass
+        # Инструмент должен быть в «Обзоре рынка», иначе истории не будет.
+        try:
+            mt5c.select_symbol(symbol)
+        except Exception:  # noqa: BLE001
+            pass
+        отчёты.append(export_symbol(symbol, timeframe, bars, folder, account=account))
+    return отчёты
+
+
+def describe(reports) -> str:
+    """Что получилось — человеческими словами."""
+    строки = []
+    for r in reports or ():
+        if r.get("error"):
+            строки.append(f"{r['symbol']}: ОШИБКА — {r['error']}")
+        else:
+            строки.append(f"{r['symbol']} {r['timeframe']}: {r['bars']} свечей -> "
+                          f"{os.path.basename(r['csv'])}")
+    return "\n".join(строки) or "Ничего не выгружено."

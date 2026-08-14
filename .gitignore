@@ -92,3 +92,7 @@ symbols_survey.json
 # Пик счёта и начало дня (лимит просадки, дневной лимит) — данные счёта
 risk_state.json
 ai_scalper_standalone/risk_state.json
+
+# Выгруженная история котировок: большая, легко получается заново
+history/
+ai_scalper_standalone/history/

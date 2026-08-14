@@ -2316,6 +2316,29 @@ class App:
         ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=(0, 10))
 
     # ---- вкладка "Система" -----------------------------------------------------------
+    def export_history(self):
+        """Выгрузить настоящие свечи брокера в файлы — для проверки стратегии.
+
+        Работает только при подключённом терминале: свечи отдаёт он. Тяжёлую
+        часть уносим в отдельный поток, иначе окно замрёт на минуту-другую и
+        человек решит, что программа повисла."""
+        self.history_export_var.set("Выгружаю... это может занять минуту.")
+
+        def работа():
+            try:
+                import history_export
+                отчёты = history_export.export_all(
+                    progress=lambda t: self.root.after(
+                        0, lambda: self.history_export_var.set(t)))
+                текст = history_export.describe(отчёты)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Выгрузка истории не удалась")
+                текст = (f"Не получилось: {e}. Проверьте, что терминал "
+                         f"подключён (вкладка «Брокер»).")
+            self.root.after(0, lambda: self.history_export_var.set(текст))
+
+        threading.Thread(target=работа, daemon=True).start()
+
     def show_mt5_terminal(self):
         """Вернуть окно терминала на экран.
 
@@ -2367,6 +2390,26 @@ class App:
         self.terminal_window_var = tk.StringVar(value="")
         ttk.Label(row, textvariable=self.terminal_window_var,
                   foreground=self.colors["muted"]).pack(side="left", padx=8)
+
+        # ---------- Выгрузка истории для проверки ----------
+        hist = ttk.LabelFrame(parent, text=" История для проверки стратегии ")
+        hist.pack(fill="x", padx=12, pady=(6, 4))
+        ttk.Label(hist, foreground=self.colors["muted"], wraplength=780,
+                  justify="left", text=
+                  "Чтобы проверить стратегию на прошлом, нужны настоящие свечи "
+                  "вашего брокера. Программа выгрузит их сама — нажмите кнопку "
+                  "и подождите. Файлы лягут в папку history рядом с программой.\n"
+                  "Выгружается EURUSD и XAUUSD на M5. Последняя свеча в файл не "
+                  "попадает: она ещё не закрыта, и в расчёт идти не может."
+                  ).pack(anchor="w", padx=8, pady=(4, 2))
+        hrow = ttk.Frame(hist)
+        hrow.pack(anchor="w", padx=8, pady=(0, 6))
+        ttk.Button(hrow, text="Выгрузить историю",
+                   command=self.export_history).pack(side="left")
+        self.history_export_var = tk.StringVar(value="")
+        ttk.Label(hrow, textvariable=self.history_export_var,
+                  foreground=self.colors["muted"], wraplength=520,
+                  justify="left").pack(side="left", padx=8)
 
         # ---------- Мост для советников ----------
         br = ttk.LabelFrame(parent, text=" Мост для советников MetaTrader ")
@@ -5213,6 +5256,15 @@ def main():
     # должна отвечать даже у программы, у которой всё прочее сломано.
     if "--selftest" in sys.argv:
         sys.exit(selftest())
+
+    # ОДНА КОМАНДА ДЛЯ ВЫГРУЗКИ ИСТОРИИ. То же самое делает кнопка на вкладке
+    # «Система»; ключ нужен тем, кому удобнее из командной строки.
+    if "--export-history" in sys.argv:
+        import history_export
+        mt5c.connect()
+        print(history_export.describe(history_export.export_all(
+            progress=lambda t: print(t, flush=True))))
+        sys.exit(0)
 
     # КРИТИЧНО для собранного .exe: процессы счетов используют multiprocessing,
     # а на Windows дочерний процесс запускается повторным вызовом этого же
