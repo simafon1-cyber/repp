@@ -15,7 +15,69 @@ import logging
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ЗДЕСЬ = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ЗДЕСЬ)
+
+
+def _настройки() -> str:
+    """Какие настройки взять. Возвращает, что именно использовано.
+
+    Личный config.py есть не всегда: в нём ключи и пароли, и в репозиторий он
+    не кладётся. Тогда берётся образец config.py.example — тот самый, что
+    ставится вместе с программой. Молчать об этом нельзя: baseline, посчитанный
+    по другим настройкам, — это baseline другой системы."""
+    import types
+    if os.path.exists(os.path.join(ЗДЕСЬ, "config.py")):
+        return "config.py (личные настройки)"
+    образец = os.path.join(ЗДЕСЬ, "config.py.example")
+    cfg = types.ModuleType("config")
+    cfg.__file__ = образец
+    with open(образец, encoding="utf-8") as f:
+        exec(f.read(), cfg.__dict__)
+    sys.modules["config"] = cfg
+    return "config.py.example (настройки по умолчанию — личных нет)"
+
+
+def _терминал() -> str:
+    """Заглушка MetaTrader, если настоящего пакета нет.
+
+    Проверка на истории обязана работать БЕЗ терминала: свечи уже выгружены в
+    файлы, а всё, что осталось от терминала, — несколько числовых постоянных.
+    Пакет MetaTrader5 существует только под Windows, и требовать его для
+    расчёта по готовым файлам было бы бессмысленно.
+
+    Ни одна функция здесь не подделывается: заглушка отдаёт только константы,
+    а данные о рынке движок берёт из выгруженной истории и из паспорта."""
+    try:
+        import MetaTrader5  # noqa: F401
+        return "MetaTrader5 (настоящий пакет)"
+    except ImportError:
+        pass
+    import types
+    m = types.ModuleType("MetaTrader5")
+    for имя, знач in (("TIMEFRAME_M1", 1), ("TIMEFRAME_M5", 5), ("TIMEFRAME_M15", 15),
+                      ("TIMEFRAME_M30", 30), ("TIMEFRAME_H1", 16385),
+                      ("TIMEFRAME_H4", 16388), ("TIMEFRAME_D1", 16408),
+                      ("ORDER_TYPE_BUY", 0), ("ORDER_TYPE_SELL", 1),
+                      ("ORDER_FILLING_IOC", 1), ("ORDER_FILLING_FOK", 2),
+                      ("TRADE_RETCODE_REQUOTE", 10004),
+                      ("TRADE_RETCODE_PRICE_CHANGED", 10020),
+                      ("TRADE_RETCODE_PRICE_OFF", 10021),
+                      ("TRADE_RETCODE_DONE", 10009),
+                      ("POSITION_TYPE_BUY", 0), ("POSITION_TYPE_SELL", 1)):
+        setattr(m, имя, знач)
+    # Ничего не возвращают: движок к терминалу не обращается, а если бы
+    # обратился — лучше получить пустоту, чем выдуманное число.
+    for имя in ("symbol_info", "symbol_info_tick", "order_calc_profit",
+                "order_calc_margin", "copy_rates_from_pos", "positions_get",
+                "symbols_get", "account_info", "last_error", "terminal_info"):
+        setattr(m, имя, lambda *a, **k: None)
+    sys.modules["MetaTrader5"] = m
+    return "заглушка (настоящий MetaTrader5 не нужен: свечи уже в файлах)"
+
+
+ОТКУДА_НАСТРОЙКИ = _настройки()
+ОТКУДА_ТЕРМИНАЛ = _терминал()
 
 import baseline_engine          # noqa: E402
 import history_data             # noqa: E402
@@ -161,6 +223,17 @@ def main(argv) -> int:
     print("BASELINE — ПРОГОН ТЕКУЩЕЙ СТРАТЕГИИ ПО ВАШЕЙ ИСТОРИИ")
     print("=" * 70)
     print("Ни один параметр не меняется. Это замер, а не настройка.")
+    print(f"Настройки взяты из: {ОТКУДА_НАСТРОЙКИ}")
+    print(f"Терминал: {ОТКУДА_ТЕРМИНАЛ}")
+    import config as _c
+    профиль = getattr(getattr(_c, "RISK_PROFILE", None), "value", "?")
+    _p = _c.RISK_PROFILES.get(getattr(_c, "RISK_PROFILE", None), {})
+    print(f"Профиль риска: {профиль} — порог входа "
+          f"{_p.get('min_score_to_trade', '?')}, риск {_p.get('risk_percent', '?')}%, "
+          f"стоп {_p.get('atr_sl_multiplier', '?')} ATR, "
+          f"макс. сделок по паре {_p.get('max_open_positions', '?')}")
+    print(f"Автообучение: {'включено' if getattr(_c, 'USE_AUTO_LEARNING', False) else 'выключено'}, "
+          f"AI в прогоне НЕ участвует (см. ниже)")
     print()
     print(baseline_engine.describe_not_reproducible())
 
