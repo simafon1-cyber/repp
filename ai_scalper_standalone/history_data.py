@@ -39,6 +39,7 @@ history/clean — то, что прошло проверку и годится �
 import json
 import logging
 import os
+import sys
 
 log = logging.getLogger("history_data")
 
@@ -56,6 +57,16 @@ BAR_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800,
 
 
 def base_dir() -> str:
+    """Папка РЯДОМ С ПРОГРАММОЙ, а не рядом с её кодом.
+
+    Разница существенная. У собранной программы код лежит в подпапке
+    _internal, и os.path.dirname(__file__) указывает именно туда. Владелец
+    нажал «Выгрузить историю», а файлы уехали в _internal\\history — то есть
+    в служебную папку, куда человек не заглядывает и заглядывать не должен.
+    У запущенной из исходников программы обе папки совпадают, поэтому при
+    разработке ошибка не видна вовсе."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 

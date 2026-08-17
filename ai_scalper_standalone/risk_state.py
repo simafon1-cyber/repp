@@ -39,6 +39,7 @@ AccountState.peak_equity, то есть в памяти процесса.
 import json
 import logging
 import os
+import sys
 from datetime import datetime
 
 import safe_files
@@ -55,7 +56,15 @@ _последнее: dict = {}
 
 
 def store_path(folder: str = "") -> str:
-    base = folder or os.path.dirname(os.path.abspath(__file__))
+    """Файл РЯДОМ С ПРОГРАММОЙ. У собранной версии код лежит в подпапке
+    _internal, и путь по __file__ увёл бы состояние защиты счёта туда же —
+    в служебную папку, которую человек не видит."""
+    if folder:
+        base = folder
+    elif getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base, STATE_FILE)
 
 

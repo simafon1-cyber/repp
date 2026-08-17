@@ -606,6 +606,49 @@ def test_export_finds_symbol_with_broker_suffix() -> None:
           "Пустой список инструментов не роняет поиск")
 
 
+def test_files_land_next_to_the_program() -> None:
+    """ПОЧЕМУ ЭТОТ ТЕСТ ПОЯВИЛСЯ. Владелец нажал «Выгрузить историю», кнопка
+    отработала — а папки рядом с программой не появилось. Файлы уехали в
+    служебную подпапку _internal, куда человек не заглядывает.
+
+    Причина: у собранной программы код лежит в _internal, и «папка рядом с
+    собой», посчитанная по __file__, указывает туда. При запуске из
+    исходников обе папки совпадают, поэтому при разработке ошибки не видно
+    вовсе — она появляется только в собранной версии."""
+    print("\n[Файлы кладутся рядом с программой, а не в служебную папку]")
+    import history_export
+    import history_data
+    import risk_state
+
+    saved_frozen = getattr(sys, "frozen", None)
+    saved_exe = sys.executable
+    try:
+        with tempfile.TemporaryDirectory() as папка:
+            sys.frozen = True
+            sys.executable = os.path.join(папка, "AI_Scalper_Pro.exe")
+            рядом = os.path.abspath(папка)
+
+            for имя, путь in (
+                    ("история", history_export.raw_path("EURUSD", "M5")),
+                    ("чтение истории", history_data.raw_path("EURUSD", "M5")),
+                    ("состояние защиты счёта", risk_state.store_path())):
+                check(os.path.abspath(путь).startswith(рядом),
+                      f"{имя}: файл рядом с программой", путь)
+                check("_internal" not in путь,
+                      f"{имя}: и НЕ в служебной папке _internal", путь)
+    finally:
+        sys.executable = saved_exe
+        if saved_frozen is None:
+            if hasattr(sys, "frozen"):
+                del sys.frozen
+        else:
+            sys.frozen = saved_frozen
+
+    # Из исходников — по-прежнему рядом с кодом, там это одно и то же.
+    check(os.path.abspath(history_export.base_dir()) == str(APP),
+          "Из исходников путь не изменился", history_export.base_dir())
+
+
 if __name__ == "__main__":
     print("=" * 62)
     print("ТЕСТЫ: BASELINE, ДАННЫЕ, ЗАГЛЯДЫВАНИЕ ВПЕРЁД")
@@ -626,6 +669,7 @@ if __name__ == "__main__":
     test_symbols_are_never_mixed()
     test_export_does_not_give_up_on_first_try()
     test_export_finds_symbol_with_broker_suffix()
+    test_files_land_next_to_the_program()
     print()
     print("=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
