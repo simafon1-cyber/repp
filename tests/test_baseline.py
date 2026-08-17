@@ -649,6 +649,94 @@ def test_files_land_next_to_the_program() -> None:
           "Из исходников путь не изменился", history_export.base_dir())
 
 
+def test_auto_off_is_not_a_latch() -> None:
+    """ПОЧЕМУ ЭТОТ ТЕСТ ПОЯВИЛСЯ. Прогон по восьми месяцам истории показал:
+    92% баров EURUSD и 91% баров XAUUSD отклонены с причиной «инструмент
+    отключён сам». Стратегия почти не торговала — не потому, что не находила
+    входов, а потому что была заперта.
+
+    Причина: приговор выносится по окну последних сделок, а окно пополняется
+    ТОЛЬКО закрытой сделкой. Отключился -> сделок нет -> окно не меняется ->
+    отключён навсегда. Собственная документация функции обещала обратное."""
+    print("\n[Самоотключение инструмента имеет выход]")
+    from datetime import datetime, timedelta
+    import auto_learning as al
+    from state import SymbolState
+
+    CFG.USE_SYMBOL_AUTO_OFF = True
+    CFG.SYMBOL_AUTO_OFF_MIN_TRADES = 12
+    CFG.SYMBOL_AUTO_OFF_LOSS_PERCENT = 3.0
+    CFG.AUTO_LEARNING_WINDOW = 20
+
+    def убыточный():
+        st = SymbolState(symbol="EURUSD")
+        for _ in range(14):
+            al.record_trade_result(st, -5.0)
+        return st
+
+    начало = datetime(2026, 8, 1, 12, 0, 0)
+    st = убыточный()
+    причина = al.symbol_auto_off_reason(st, 1000.0, now=начало)
+    check(причина != "", "Убыточный инструмент отключается", причина[:60])
+    check(st.auto_off_since == начало, "И запоминает, КОГДА отключился")
+    check("через" in причина, "Человеку сказано, когда будет новая попытка",
+          причина)
+
+    # Через час — всё ещё отключён.
+    check(al.symbol_auto_off_reason(st, 1000.0, now=начало + timedelta(hours=1)) != "",
+          "Через час — по-прежнему отключён")
+
+    # ГЛАВНОЕ: по истечении срока инструмент получает НАСТОЯЩИЙ шанс.
+    часов = getattr(CFG, "SYMBOL_AUTO_OFF_COOLDOWN_HOURS", al.ЧАСОВ_ОТДЫХА)
+    потом = начало + timedelta(hours=часов + 0.1)
+    было_сделок = len(st.recent_profits)
+    check(al.symbol_auto_off_reason(st, 1000.0, now=потом) == "",
+          "По истечении срока отключение снимается")
+    check(len(st.recent_profits) < было_сделок,
+          "И в окне освободилось место — иначе приговор повторился бы сразу",
+          f"{было_сделок} -> {len(st.recent_profits)}")
+    check(len(st.recent_profits) == len(st.recent_results),
+          "Оба окна одной длины: деньги и винрейт считаются по одним сделкам")
+    check(st.auto_off_since is None, "Отметка времени снята")
+
+    # И проверка сразу же после снятия НЕ включает отключение обратно.
+    check(al.symbol_auto_off_reason(st, 1000.0, now=потом) == "",
+          "Следующая же проверка не запирает инструмент заново")
+
+    # Прибыльный инструмент не отключается и отметку не носит.
+    хороший = SymbolState(symbol="GBPUSD")
+    for _ in range(14):
+        al.record_trade_result(хороший, 5.0)
+    check(al.symbol_auto_off_reason(хороший, 1000.0, now=начало) == "",
+          "Прибыльный инструмент не отключается")
+    check(хороший.auto_off_since is None, "И отметки о времени не имеет")
+
+    # Выключенная настройка — отключения нет вовсе.
+    CFG.USE_SYMBOL_AUTO_OFF = False
+    check(al.symbol_auto_off_reason(убыточный(), 1000.0, now=начало) == "",
+          "При выключенной настройке инструмент не отключается")
+    CFG.USE_SYMBOL_AUTO_OFF = True
+
+    # Отметка переживает перезапуск: иначе срок начинался бы заново каждый раз.
+    import json as _json
+    with tempfile.TemporaryDirectory() as папка:
+        путь = os.path.join(папка, "learning.json")
+        CFG.LEARNING_STATE_PATH = путь
+        CFG.USE_LEARNING_PERSISTENCE = True
+        st2 = убыточный()
+        al.symbol_auto_off_reason(st2, 1000.0, now=начало)
+        check(al.save_learning_state({"EURUSD": st2}) is True, "Состояние сохранено")
+        with open(путь, encoding="utf-8") as f:
+            данные = _json.load(f)
+        check(данные["symbols"]["EURUSD"]["auto_off_since"] != "",
+              "Отметка времени попала в файл")
+        новое = {"EURUSD": SymbolState(symbol="EURUSD")}
+        al.load_learning_state(новое)
+        check(новое["EURUSD"].auto_off_since == начало,
+              "И восстановилась после перезапуска",
+              str(новое["EURUSD"].auto_off_since))
+
+
 if __name__ == "__main__":
     print("=" * 62)
     print("ТЕСТЫ: BASELINE, ДАННЫЕ, ЗАГЛЯДЫВАНИЕ ВПЕРЁД")
@@ -670,6 +758,7 @@ if __name__ == "__main__":
     test_export_does_not_give_up_on_first_try()
     test_export_finds_symbol_with_broker_suffix()
     test_files_land_next_to_the_program()
+    test_auto_off_is_not_a_latch()
     print()
     print("=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")

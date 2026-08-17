@@ -312,7 +312,14 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
             if not rm.volatility_ok(df_ind["atr"], профиль["ignore_soft_filters"]):
                 отказ("Резкий скачок волатильности")
                 continue
-            авто_выкл = al.symbol_auto_off_reason(состояние, equity)
+            # ВРЕМЯ БЕРЁТСЯ ИЗ СВЕЧИ, А НЕ ИЗ ЧАСОВ КОМПЬЮТЕРА. У отключения
+            # инструмента есть срок в часах; если подставить настоящее «сейчас»,
+            # то за десять минут прогона не истечёт ни один суточный срок, и
+            # отключение снова окажется вечным — теперь уже по вине проверки,
+            # а не по вине стратегии.
+            авто_выкл = al.symbol_auto_off_reason(
+                состояние, equity,
+                now=datetime.utcfromtimestamp(int(бар["time"])))
             if авто_выкл:
                 отказ("Инструмент отключён сам")
                 continue

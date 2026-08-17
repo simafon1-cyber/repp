@@ -48,6 +48,12 @@ class SymbolState:
     consecutive_losses: int = 0
     pause_until: datetime = None
 
+    # Когда инструмент отключил себя сам из-за убытков (auto_learning).
+    # None — не отключён. Без этой отметки отключение не имело бы срока и
+    # становилось вечным: окно последних сделок пополняется только сделками,
+    # а их у отключённого инструмента не бывает.
+    auto_off_since: datetime = None
+
     # Режим рынка (MarketRegime)
     current_regime: str = "unknown"   # "unknown" / "trend" / "range"
     regime_candidate: str = "unknown"
