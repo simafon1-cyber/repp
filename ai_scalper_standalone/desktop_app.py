@@ -2316,26 +2316,44 @@ class App:
         ttk.Button(window, text="Закрыть", command=window.destroy).pack(pady=(0, 10))
 
     # ---- вкладка "Система" -----------------------------------------------------------
-    def export_history(self):
+    def export_history(self, send: bool = True):
         """Выгрузить настоящие свечи брокера в файлы — для проверки стратегии.
 
         Работает только при подключённом терминале: свечи отдаёт он. Тяжёлую
         часть уносим в отдельный поток, иначе окно замрёт на минуту-другую и
-        человек решит, что программа повисла."""
-        self.history_export_var.set("Выгружаю... это может занять минуту.")
+        человек решит, что программа повисла.
+
+        send=True — сразу отправить получившиеся файлы на GitHub. Владелец:
+        «сделай, пусть сам выгружает на GitHub». До этого файлы надо было
+        находить в папке руками и присылать в переписку — четыре действия
+        человека на каждое обновление данных."""
+        self.history_export_var.set("Выгружаю... это может занять несколько минут.")
+
+        def скажи(текст):
+            self.root.after(0, lambda: self.history_export_var.set(текст))
 
         def работа():
             try:
                 import history_export
-                отчёты = history_export.export_all(
-                    progress=lambda t: self.root.after(
-                        0, lambda: self.history_export_var.set(t)))
+                отчёты = history_export.export_all(progress=скажи)
                 текст = history_export.describe(отчёты)
             except Exception as e:  # noqa: BLE001
                 log.exception("Выгрузка истории не удалась")
-                текст = (f"Не получилось: {e}. Проверьте, что терминал "
-                         f"подключён (вкладка «Брокер»).")
-            self.root.after(0, lambda: self.history_export_var.set(текст))
+                скажи(f"Не получилось: {e}. Проверьте, что терминал "
+                      f"подключён (вкладка «Брокер»).")
+                return
+
+            # ОТПРАВКА ОТДЕЛЬНО ОТ ВЫГРУЗКИ. Если GitHub недоступен или токена
+            # нет — файлы всё равно уже лежат на диске, и труд не пропал.
+            if send:
+                try:
+                    import history_upload
+                    итог = history_upload.upload_all(progress=скажи)
+                    текст += "\n" + history_upload.describe(итог)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Отправка истории на GitHub не удалась")
+                    текст += f"\nНа GitHub отправить не вышло: {e}. Файлы на диске целы."
+            скажи(текст)
 
         threading.Thread(target=работа, daemon=True).start()
 
@@ -2398,14 +2416,24 @@ class App:
                   justify="left", text=
                   "Чтобы проверить стратегию на прошлом, нужны настоящие свечи "
                   "вашего брокера. Программа выгрузит их сама — нажмите кнопку "
-                  "и подождите. Файлы лягут в папку history рядом с программой.\n"
-                  "Выгружается EURUSD и XAUUSD на M5. Последняя свеча в файл не "
-                  "попадает: она ещё не закрыта, и в расчёт идти не может."
+                  "и подождите. Файлы лягут в папку history рядом с программой "
+                  "И САМИ УЕДУТ НА GITHUB, в отдельную ветку history-data: "
+                  "искать их в папке и пересылать руками больше не нужно.\n"
+                  "Выгружаются восемь инструментов, которыми торгует счёт, на "
+                  "M1, M5 и M15 — это 24 файла, работа на несколько минут. "
+                  "Последняя свеча в файл не попадает: она ещё не закрыта, и в "
+                  "расчёт идти не может.\n"
+                  "Отправка требует токена GitHub с правом записи — того же, "
+                  "что у журнала сделок ниже. Без него файлы просто останутся "
+                  "на диске."
                   ).pack(anchor="w", padx=8, pady=(4, 2))
         hrow = ttk.Frame(hist)
         hrow.pack(anchor="w", padx=8, pady=(0, 6))
-        ttk.Button(hrow, text="Выгрузить историю",
+        ttk.Button(hrow, text="Выгрузить и отправить",
                    command=self.export_history).pack(side="left")
+        ttk.Button(hrow, text="Только в папку",
+                   command=lambda: self.export_history(send=False)
+                   ).pack(side="left", padx=6)
         self.history_export_var = tk.StringVar(value="")
         ttk.Label(hrow, textvariable=self.history_export_var,
                   foreground=self.colors["muted"], wraplength=520,
@@ -5264,6 +5292,12 @@ def main():
         mt5c.connect()
         print(history_export.describe(history_export.export_all(
             progress=lambda t: print(t, flush=True))))
+        # По умолчанию файлы сразу уезжают на GitHub — ради этого всё и
+        # затевалось. Ключ --no-upload оставляет их только на диске.
+        if "--no-upload" not in sys.argv:
+            import history_upload
+            print(history_upload.describe(history_upload.upload_all(
+                progress=lambda t: print(t, flush=True))))
         sys.exit(0)
 
     # КРИТИЧНО для собранного .exe: процессы счетов используют multiprocessing,

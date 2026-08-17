@@ -737,6 +737,173 @@ def test_auto_off_is_not_a_latch() -> None:
               str(новое["EURUSD"].auto_off_since))
 
 
+def test_export_asks_for_a_sensible_number_of_bars() -> None:
+    """ПОЧЕМУ ЭТОТ ТЕСТ ПОЯВИЛСЯ. Одинаковое число баров на разных
+    таймфреймах — это РАЗНЫЕ отрезки времени: 200 000 баров M5 это два года,
+    а M1 — сто сорок дней. Просить всюду поровну значит либо не добрать
+    истории там, где она нужна, либо тащить в репозиторий навсегда мегабайты,
+    которые не с чем сверять."""
+    print("\n[Баров просится столько, сколько нужно делу]")
+    import history_export as he
+
+    check(he.bars_for("M5") == he.БАРОВ_ПО_ТФ["M5"], "M5 берётся из таблицы")
+    check(he.bars_for("M1") < he.bars_for("M5"),
+          "Минуток просится меньше, чем пятиминуток",
+          f"{he.bars_for('M1')} < {he.bars_for('M5')}")
+    check(he.bars_for("m15") == he.БАРОВ_ПО_ТФ["M15"],
+          "Регистр имени таймфрейма не важен")
+    check(he.bars_for("H4") == he.DEFAULT_BARS,
+          "Незнакомый таймфрейм не роняет выгрузку")
+    check(he.bars_for("M5", 300) == 300,
+          "Явно названное число сильнее таблицы")
+    for тф in he.DEFAULT_TIMEFRAMES:
+        check(тф in he.БАРОВ_ПО_ТФ, f"Для {тф} число задано осознанно")
+
+
+def test_history_uploads_itself_and_carries_nothing_extra() -> None:
+    """ПОЧЕМУ ЭТОТ ТЕСТ ПОЯВИЛСЯ. Владелец: «сделай, пусть сам выгружает на
+    GitHub m1 m5 m15, все пары». До этого круг был такой: нажать кнопку,
+    найти папку, заархивировать, прислать в переписку — и на каждом шаге
+    что-то терялось.
+
+    Опасность у такой отправки ровно одна и она серьёзная: модуль ходит по
+    папке рядом с программой, а рядом с программой лежат config.py с ключами,
+    журналы и файл сохранённого входа. Поэтому здесь проверяется не только
+    «отправилось», но и «отправилось ТОЛЬКО то, что можно»."""
+    print("\n[История уезжает на GitHub сама и не прихватывает лишнего]")
+    import gzip as _gzip
+    import history_export as he
+    import history_upload as hu
+
+    # ---- сжатие возвращает ровно то, что дали ----
+    with tempfile.TemporaryDirectory() as папка:
+        проба = os.path.join(папка, "проба.csv")
+        содержимое = ("time,open\n" + "\n".join(str(i) for i in range(5000))).encode()
+        with open(проба, "wb") as f:
+            f.write(содержимое)
+        сжатое = hu.pack(проба)
+        check(_gzip.decompress(сжатое) == содержимое,
+              "Сжатый файл распаковывается в исходный — байт в байт")
+        check(len(сжатое) < len(содержимое),
+              "И он действительно меньше", f"{len(содержимое)} -> {len(сжатое)}")
+
+    # ---- без токена и репозитория ничего не отправляется ----
+    было_repo, было_token = hu.repo, hu.token
+    try:
+        hu.repo = lambda: ""
+        hu.token = lambda: "секрет"
+        можно, почему = hu.ready()
+        check(not можно, "Без репозитория отправка запрещена")
+        check("Репозитор" in почему, "И человеку сказано, где его вписать", почему)
+
+        hu.repo = lambda: "owner/repo"
+        hu.token = lambda: ""
+        можно, почему = hu.ready()
+        check(not можно, "Без токена записи отправка запрещена")
+        check("окен" in почему, "И человеку сказано, где взять токен", почему)
+
+        итог = hu.upload_all()
+        check(итог["sent"] == 0 and not итог["ok"],
+              "Отправка без токена ничего не отправляет")
+        check(итог["errors"], "И объясняет причину", str(итог["errors"])[:80])
+    finally:
+        hu.repo, hu.token = было_repo, было_token
+
+    # ---- отправляется ровно то, что выгружено, и ничего больше ----
+    отправленное = {}
+
+    было_put, было_ветку, было_ready = hu.put_bytes, hu.ensure_branch, hu.ready
+    try:
+        hu.ready = lambda: (True, "")
+        hu.ensure_branch = lambda: "была"
+        hu.put_bytes = lambda путь, данные, сообщение: (
+            отправленное.__setitem__(путь, данные), "abc123")[1]
+
+        with tempfile.TemporaryDirectory() as папка:
+            символы = ("EURUSD", "XAUUSD")
+            for тф in he.DEFAULT_TIMEFRAMES:
+                for символ in символы:
+                    with open(he.raw_path(символ, тф, папка), "w",
+                              encoding="utf-8") as f:
+                        f.write("time,open,high,low,close\n1,1,1,1,1\n")
+                    with open(he.meta_path(символ, тф, папка), "w",
+                              encoding="utf-8") as f:
+                        f.write('{"symbol": "%s"}' % символ)
+
+            # РЯДОМ КЛАДЁМ ТО, ЧТО УЙТИ НЕ ДОЛЖНО НИКОГДА.
+            for опасный, текст in (("config.py", "TELEGRAM_TOKEN = '123'"),
+                                   (".login_remember", "пароль"),
+                                   ("trades_log.csv", "сделки"),
+                                   ("scalper.log", "журнал"),
+                                   ("accounts.json", "[{}]")):
+                with open(os.path.join(папка, опасный), "w", encoding="utf-8") as f:
+                    f.write(текст)
+
+            итог = hu.upload_all(symbols=символы, folder=папка)
+
+        ждём = len(символы) * len(he.DEFAULT_TIMEFRAMES) * 2   # свечи + паспорт
+        check(итог["ok"] and итог["sent"] == ждём,
+              "Отправлены все таймфреймы по всем инструментам",
+              f"{итог['sent']} из {ждём}")
+        check(not итог["errors"], "Без ошибок", str(итог["errors"])[:80])
+
+        for тф in he.DEFAULT_TIMEFRAMES:
+            check(f"{hu.FOLDER}/EURUSD_{тф}.csv.gz" in отправленное,
+                  f"Свечи {тф} отправлены сжатыми")
+            check(f"{hu.FOLDER}/EURUSD_{тф}.meta.json" in отправленное,
+                  f"Паспорт данных {тф} отправлен как есть")
+
+        всё = b"".join(отправленное.values()) + " ".join(отправленное).encode()
+        for запрет in (b"TELEGRAM_TOKEN", b"login_remember", b"trades_log",
+                       b"scalper.log", b"accounts.json", "пароль".encode()):
+            check(запрет not in всё,
+                  f"Ничего похожего на {запрет.decode('utf-8', 'replace')} "
+                  f"не отправлено")
+
+        # ---- одна неудача не отменяет остальные ----
+        отправленное.clear()
+        счётчик = {"n": 0}
+
+        def капризный(путь, данные, сообщение):
+            счётчик["n"] += 1
+            if счётчик["n"] == 2:
+                raise OSError("сеть моргнула")
+            отправленное[путь] = данные
+            return "abc123"
+
+        hu.put_bytes = капризный
+        with tempfile.TemporaryDirectory() as папка:
+            for тф in he.DEFAULT_TIMEFRAMES:
+                with open(he.raw_path("EURUSD", тф, папка), "w",
+                          encoding="utf-8") as f:
+                    f.write("time,open\n1,1\n")
+            итог = hu.upload_all(symbols=("EURUSD",), folder=папка)
+        check(итог["sent"] == len(he.DEFAULT_TIMEFRAMES) - 1 and итог["skipped"] == 1,
+              "Одна неудачная отправка не отменяет остальные",
+              f"отправлено {итог['sent']}, пропущено {итог['skipped']}")
+        check(итог["ok"], "И то, что дошло, считается сделанным")
+
+        # ---- пустая папка: понятная подсказка, а не молчание ----
+        with tempfile.TemporaryDirectory() as пусто:
+            итог = hu.upload_all(symbols=("EURUSD",), folder=пусто)
+        check(not итог["ok"] and "Выгрузить историю" in " ".join(итог["errors"]),
+              "Пустая папка объясняется человеку, а не молчит",
+              str(итог["errors"])[:80])
+    finally:
+        hu.put_bytes, hu.ensure_branch, hu.ready = было_put, было_ветку, было_ready
+
+    # ---- данные не смешиваются с кодом ----
+    check(hu.BRANCH and hu.BRANCH != "main" and hu.BRANCH != "master",
+          "Данные уезжают в отдельную ветку, а не в рабочую", hu.BRANCH)
+
+    # ---- модуль не умеет читать ничего, кроме свечей и паспорта ----
+    src = (APP / "history_upload.py").read_text(encoding="utf-8")
+    for запрет in ("config.py", "trades_log", "accounts.json",
+                   ".login_remember", "os.listdir", "glob"):
+        check(запрет not in src,
+              f"В коде отправки нет обращения к {запрет}")
+
+
 if __name__ == "__main__":
     print("=" * 62)
     print("ТЕСТЫ: BASELINE, ДАННЫЕ, ЗАГЛЯДЫВАНИЕ ВПЕРЁД")
@@ -759,6 +926,8 @@ if __name__ == "__main__":
     test_export_finds_symbol_with_broker_suffix()
     test_files_land_next_to_the_program()
     test_auto_off_is_not_a_latch()
+    test_export_asks_for_a_sensible_number_of_bars()
+    test_history_uploads_itself_and_carries_nothing_extra()
     print()
     print("=" * 62)
     print(f"Пройдено: {passed}   Провалено: {failed}")
