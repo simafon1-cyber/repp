@@ -190,12 +190,18 @@ def atr_bucket(atr_value: float, средний_atr: float) -> str:
 # ПРОГОН
 # =====================================================================
 def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
-        max_bars: int = 0, progress=None) -> dict:
+        max_bars: int = 0, progress=None, only_direction: int = 0) -> dict:
     """Прогнать живую стратегию по истории одного инструмента.
 
     Возвращает {"trades", "equity_curve", "bars_seen", "not_reproducible",
     "rejects"}. Ни одной сделки не выдумывает: каждая — результат тех же
-    функций, что торгуют вживую."""
+    функций, что торгуют вживую.
+
+    only_direction — ТОЛЬКО ДЛЯ ИССЛЕДОВАНИЯ: 1 = проверить одни покупки,
+    -1 = одни продажи, 0 (по умолчанию) = как торгует программа. Сознательно
+    НЕ настройка программы: в config.py такого поля нет и появиться оно может
+    только после того, как владелец утвердит его отдельно. Иначе исследовательский
+    рычаг незаметно превратился бы в рабочий режим торговли."""
     import pandas as pd
 
     import config as cfg
@@ -347,6 +353,15 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
             if getattr(cfg, "USE_MULTI_INDICATOR", False):
                 buy = mi.apply_multi_indicator(buy, mi.calc_multi_indicator_score(1, df_ind))
                 sell = mi.apply_multi_indicator(sell, mi.calc_multi_indicator_score(-1, df_ind))
+
+            # ПРОВЕРКА ОДНОЙ СТОРОНЫ. Запрещённая сторона не «проигрывает
+            # выбор», а исключается вовсе: иначе бар, где сильнее была покупка,
+            # просто пропадал бы, хотя продажа на нём порог проходила — и
+            # проверка «только продажи» отвечала бы не на заданный вопрос.
+            if only_direction > 0:
+                sell = float("-inf")
+            elif only_direction < 0:
+                buy = float("-inf")
 
             порог = al.adaptive_score_threshold(профиль["min_score_to_trade"], состояние)
             if buy >= порог and buy >= sell:
