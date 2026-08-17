@@ -401,6 +401,12 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
                 "sl": вход - направление * sl_dist,
                 "tp": (вход + направление * tp_dist) if tp_dist > 0 else 0.0,
                 "risk_points": sl_dist / point if point else 0.0,
+                # ГДЕ СТОИТ ЦЕЛЬ В ЕДИНИЦАХ РИСКА. Записывается при открытии и
+                # больше не меняется. Нужно, чтобы потом можно было спросить:
+                # а достижима ли цель вообще? Цель в 4R при том, что сделка в
+                # среднем доходит до 0.5R, — это не цель, а украшение.
+                "tp_r": (tp_dist / sl_dist) if sl_dist > 0 and tp_dist > 0 else 0.0,
+                "sl_atr": (sl_dist / atr_value) if atr_value > 0 else 0.0,
                 "peak_points": 0.0, "trough_points": 0.0,
                 "score": score, "bars_held": 0,
                 "session": session_of(int(бар["time"]), смещение),
@@ -517,6 +523,9 @@ def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, и�
         "r": round(пункты / риск, 3) if риск > 0 else 0.0,
         "mae_points": round(поз["trough_points"], 1),
         "mfe_points": round(поз["peak_points"], 1),
+        "risk_points": round(риск, 1),
+        "tp_r": round(поз.get("tp_r", 0.0), 2),
+        "sl_atr": round(поз.get("sl_atr", 0.0), 2),
         "held_seconds": int(бар["time"]) - поз["entry_time"],
         "session": поз["session"], "atr_bucket": поз["atr_bucket"],
         "regime": поз["regime"],
