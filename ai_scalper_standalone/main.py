@@ -51,6 +51,7 @@ from indicators import (
     add_all_indicators, pullback_breakout_ok, ema_stack_ok,
     is_bullish_confirmation, is_bearish_confirmation,
 )
+from indicators import atr as atr_of
 from state import AccountState, SymbolState
 
 logging.basicConfig(
@@ -93,6 +94,87 @@ def check_new_day(acc_state: AccountState, equity: float):
         acc_state.day_start_equity = equity
 
 
+# =====================================================================
+# ATR ДЛЯ ВЕДЕНИЯ ОТКРЫТОЙ ПОЗИЦИИ — M5 ИЛИ M1
+# =====================================================================
+# symbol -> (время последней минутной свечи, ATR в цене). Кэш нужен, чтобы
+# не запрашивать минутки у терминала на каждом такте: быстрый монитор ходит
+# раз в секунду, а новая минутная свеча появляется раз в минуту.
+_m1_atr_cache: dict = {}
+
+
+def management_atr(symbol: str, m5_atr: float) -> float:
+    """ATR, по которому считаются расстояния при ведении открытой сделки.
+
+    ЗАЧЕМ ЭТО НУЖНО. Вход определяется на M5 — это не меняется. Но у ведения
+    позиции задача другая: не «куда идёт рынок», а «где сейчас цена». M5-ATR
+    для этого грубоват — он описывает размах пятиминутки, а решение о
+    подтягивании стопа принимается каждую секунду.
+
+    ЧЕГО ЭТА ФУНКЦИЯ НЕ ДЕЛАЕТ. Она НЕ трогает первоначальный стоп-лосс и НЕ
+    трогает вход: и то и другое посчитано при открытии по M5 и остаётся как
+    есть. Меняются только расстояния трейлинга и пороги защиты прибыли.
+
+    При любой неудаче — нет связи, мало свечей, нечисловой ATR — честно
+    возвращается M5-ATR. Отсутствие минуток не имеет права остановить
+    ведение позиции."""
+    if not getattr(cfg, "USE_M1_POSITION_MANAGEMENT", False):
+        return m5_atr
+    try:
+        период = int(getattr(cfg, "M1_ATR_PERIOD", 14) or 14)
+        df = mt5c.get_rates_df(symbol, "M1", count=max(60, период * 4))
+        if df is None or len(df) < период + 1:
+            return m5_atr
+        последняя = df.iloc[-1]["time"]
+        было = _m1_atr_cache.get(symbol)
+        if было is not None and было[0] == последняя:
+            return было[1]
+        значение = float(atr_of(df, период).iloc[-1])
+        if not (значение > 0):
+            return m5_atr
+        _m1_atr_cache[symbol] = (последняя, значение)
+        return значение
+    except Exception as e:
+        log.debug("M1-ATR по %s недоступен (%s) — веду позицию по M5.", symbol, e)
+        return m5_atr
+
+
+def exit_reason_for(deal, карточка: dict) -> str:
+    """Чем именно закрылась сделка.
+
+    Знание разделено на две половины, и обе нужны:
+
+      * БРОКЕР знает, ЧТО сработало — стоп, цель или закрытие по команде.
+        Это deal.reason, и подменить его нашей догадкой нельзя;
+      * МЫ знаем, КТО поставил тот стоп и ту цель, потому что это делали
+        четыре разных механизма (см. trade_manager).
+
+    Причина выхода = ответ брокера, уточнённый нашим знанием. Если брокер
+    молчит или отдаёт незнакомое значение, честно пишем UNKNOWN, а не
+    подставляем правдоподобное."""
+    import MetaTrader5 as mt5
+
+    reason = getattr(deal, "reason", None)
+    по_стопу = карточка.get("exit_reason") or tm.ПРИЧИНА_СТОП
+    по_цели = карточка.get("tp_reason") or tm.ПРИЧИНА_ЦЕЛЬ
+
+    if reason == getattr(mt5, "DEAL_REASON_SL", -1):
+        return по_стопу
+    if reason == getattr(mt5, "DEAL_REASON_TP", -2):
+        return по_цели
+    if reason in (getattr(mt5, "DEAL_REASON_CLIENT", -3),
+                  getattr(mt5, "DEAL_REASON_MOBILE", -4),
+                  getattr(mt5, "DEAL_REASON_WEB", -5)):
+        return tm.ПРИЧИНА_РУЧНОЕ
+    if reason == getattr(mt5, "DEAL_REASON_EXPERT", -6):
+        # Закрыли мы сами: спасение в безубыток, частичное закрытие или
+        # кнопка в интерфейсе — все три помечают себя в trade_manager.
+        return по_стопу
+    if reason == getattr(mt5, "DEAL_REASON_SO", -7):
+        return "STOP_OUT"
+    return tm.ПРИЧИНА_НЕИЗВЕСТНО
+
+
 def process_closed_deals(acc_state: AccountState, sym_states: dict):
     """Аналог OnTradeTransaction в MQL5: опрашиваем историю сделок за последние
     сутки и реагируем на новые ЗАКРЫТИЯ позиций с нашим magic number."""
@@ -131,6 +213,43 @@ def process_closed_deals(acc_state: AccountState, sym_states: dict):
         if peak is not None:
             al.record_trade_peak(sym_state, peak)
         learning_changed = True
+
+        # ЖУРНАЛ ВЫХОДОВ. Пишется здесь и только здесь: это единственное
+        # место, где известно И чем сделка кончилась (брокер), И как она
+        # жила (наши замеры за время ведения позиции).
+        try:
+            карточка = tm.pop_closed_journal(d.position_id) or {}
+            риск_пт = float(карточка.get("initial_r_points", 0) or 0)
+            цена_пт = mt5c.get_symbol_point(d.symbol) or 0.0
+            прибыль_r = ""
+            if риск_пт > 0 and цена_пт > 0:
+                # Результат в долях риска считается по ЦЕНЕ, а не по деньгам:
+                # деньги зависят ещё и от лота, и сделки с разным объёмом
+                # оказались бы несравнимыми.
+                пунктов = abs(d.price - float(карточка.get("entry", d.price))) / цена_пт
+                прибыль_r = round((пунктов / риск_пт) * (1 if profit >= 0 else -1), 3)
+            tm.log_exit_journal({
+                "time": datetime.now().isoformat(timespec="seconds"),
+                "symbol": d.symbol,
+                "ticket": d.position_id,
+                "direction": "SELL" if d.type == mt5.DEAL_TYPE_SELL else "BUY",
+                "entry": карточка.get("entry", ""),
+                "exit": f"{d.price:.5f}",
+                "initial_sl": карточка.get("initial_sl", ""),
+                "initial_r_points": карточка.get("initial_r_points", ""),
+                "max_profit_r": карточка.get("max_profit_r", ""),
+                "max_loss_r": карточка.get("max_loss_r", ""),
+                "time_to_mfe_sec": карточка.get("time_to_mfe_sec", ""),
+                "time_to_mae_sec": карточка.get("time_to_mae_sec", ""),
+                "holding_time_sec": карточка.get("holding_time_sec", ""),
+                "exit_reason": exit_reason_for(d, карточка),
+                "profit": f"{profit:.2f}",
+                "profit_r": прибыль_r,
+            })
+        except Exception as e:
+            # Журнал — наблюдение, а не решение. Его сбой не имеет права
+            # прервать разбор закрытых сделок и остановить торговлю.
+            log.warning("Журнал выходов по %s: %s", d.symbol, e)
 
         acc_state.total_trades += 1
         if profit >= 0:
@@ -362,7 +481,8 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     sym_state.last_atr_value = atr_value  # кэш для _fast_position_monitor()
 
     # Ведём уже открытые позиции на КАЖДОМ опросе, не только на новый бар
-    tm.manage_open_positions(symbol, atr_value, point, positions=all_positions,
+    tm.manage_open_positions(symbol, management_atr(symbol, atr_value), point,
+                             positions=all_positions,
                              learned_tp_points=al.learned_profit_points(sym_state, 0.0))
 
     last_bar_time = df_raw.iloc[-1]["time"]
@@ -815,6 +935,10 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
 
 
 def _close_one_position(pos):
+    # Отмечаем ДО отправки приказа: после закрытия позиции её уже не будет в
+    # списке открытых, и пометить станет нечего — в журнал попал бы тот стоп,
+    # который стоял последним, вместо честного «закрыто вручную».
+    tm.note_manual_close(pos.ticket)
     if cfg.LIVE_TRADING:
         result = mt5c.close_position_partial(pos, pos.volume)
         log.info("Позиция %s (%s) закрыта вручную с дашборда: %s", pos.ticket, pos.symbol, result)
@@ -1588,7 +1712,8 @@ def _fast_position_monitor(sym_states, stop_event, total_seconds: float):
                 if atr_value <= 0:
                     continue  # ещё не было ни одного полного прохода по этому символу
                 point = mt5c.get_symbol_point(sym)
-                tm.manage_open_positions(sym, atr_value, point, positions=sym_positions,
+                tm.manage_open_positions(sym, management_atr(sym, atr_value), point,
+                                         positions=sym_positions,
                                          learned_tp_points=al.learned_profit_points(st, 0.0))
         except Exception as e:
             log.exception("Ошибка быстрого мониторинга позиций: %s", e)

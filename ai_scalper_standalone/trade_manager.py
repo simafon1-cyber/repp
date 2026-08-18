@@ -55,6 +55,50 @@ _CLOSED_PEAKS_LIMIT = 500
 # (мгновенное сжатие цели до пола), либо в отрицательный возраст. Свои часы
 # дают честный возраст без единого допущения о часовом поясе брокера.
 _position_first_seen: dict = {}
+# ticket -> имя механизма, который ПОСЛЕДНИМ сдвинул стоп в сторону прибыли.
+# Механизмов, двигающих стоп, четыре, и все они пишут в одну переменную: по
+# итоговому числу невозможно сказать, кто его поставил. Нужно, чтобы у
+# закрытой сделки была честная причина выхода, а не догадка (см. журнал
+# выходов ниже и docs/EXIT_AUDIT.md).
+_position_sl_source: dict = {}
+# ticket -> кто последним подвинул ЦЕЛЬ. Отдельно от стопа: закрыть сделку
+# может и стоп, и цель, а поставили их разные механизмы. Какой из двух
+# сработал, знает только брокер — он и говорит это в причине сделки
+# (см. exit_reason_for в main.py).
+_position_tp_source: dict = {}
+# ticket -> (сколько секунд от открытия до пика, до самой глубокой просадки).
+# Пик и просадка сами по себе не говорят, РАНО или ПОЗДНО сделка их показала.
+_position_peak_age: dict = {}
+_position_trough_age: dict = {}
+# ticket -> первоначальный стоп-лосс (цена). Отличается от _position_risk_points
+# тем, что это цена, а не расстояние: нужна в журнале как есть.
+_position_initial_sl: dict = {}
+# position_id -> полная карточка ЗАКРЫВШЕЙСЯ сделки. Забирается из main.py при
+# разборе закрытых сделок и пишется в журнал выходов. Тот же приём и тот же
+# предел размера, что у _closed_peaks.
+_closed_journal: dict = {}
+
+
+# Заголовок журнала выходов. Порядок столбцов — ровно как в задании владельца.
+ЖУРНАЛ_ВЫХОДОВ_СТОЛБЦЫ = [
+    "time", "symbol", "ticket", "direction", "entry", "exit",
+    "initial_sl", "initial_r_points", "max_profit_r", "max_loss_r",
+    "time_to_mfe_sec", "time_to_mae_sec", "holding_time_sec",
+    "exit_reason", "profit", "profit_r",
+]
+
+# Названия причин выхода. Заглавными и латиницей — это машинный столбец, по
+# которому потом считают, а не текст для чтения человеком.
+ПРИЧИНА_СТОП = "STOP_LOSS"
+ПРИЧИНА_БЕЗУБЫТОК = "BREAK_EVEN"
+ПРИЧИНА_ТРЕЙЛИНГ = "TRAILING"
+ПРИЧИНА_ЛЕСТНИЦА = "R_LADDER"
+ПРИЧИНА_ЛОК = "PROFIT_LOCK"
+ПРИЧИНА_ЦЕЛЬ = "TAKE_PROFIT"
+ПРИЧИНА_СПАСЕНИЕ = "BREAK_EVEN_RESCUE"
+ПРИЧИНА_ЧАСТИЧНО = "PARTIAL_CLOSE"
+ПРИЧИНА_РУЧНОЕ = "MANUAL"
+ПРИЧИНА_НЕИЗВЕСТНО = "UNKNOWN"
 
 
 def _ensure_csv_header():
@@ -98,6 +142,56 @@ def log_trade_csv(evt, symbol, direction, price, sl, tp, lot, score, profit=0.0)
                     cfg.LOG_CSV_PATH, e)
         with open(cfg.LOG_CSV_PATH, "a", newline="", encoding="utf-8") as f:
             _write_row(f)
+
+
+def exit_journal_path() -> str:
+    """Куда писать журнал выходов. Рядом с журналом сделок, если явно не задано."""
+    свой = getattr(cfg, "EXIT_JOURNAL_PATH", "")
+    if свой:
+        return свой
+    папка = os.path.dirname(os.path.abspath(cfg.LOG_CSV_PATH))
+    return os.path.join(папка, "exits_log.csv")
+
+
+def _ensure_journal_header(путь):
+    if os.path.exists(путь):
+        return
+    with open(путь, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f, delimiter=";").writerow(ЖУРНАЛ_ВЫХОДОВ_СТОЛБЦЫ)
+        f.flush()
+        os.fsync(f.fileno())
+    try:
+        safe_files.restrict_to_current_user(путь)
+        safe_files.mark_integrity_current(путь)
+    except Exception:
+        pass
+
+
+def log_exit_journal(строка: dict):
+    """Дописать одну закрытую сделку в журнал выходов.
+
+    Журнал существует ради одного: чтобы по каждой закрытой сделке было
+    ВИДНО, какой именно механизм её закрыл, насколько высоко она поднималась
+    и насколько глубоко проседала — в долях собственного риска. Без этого
+    любой разбор «почему прибыль маленькая» упирается в догадки.
+
+    Ошибка записи журнала не должна ронять торговлю: это наблюдение, а не
+    решение. Поэтому исключение только пишется в лог."""
+    путь = exit_journal_path()
+    try:
+        _ensure_journal_header(путь)
+
+        def _write_row(f):
+            csv.writer(f, delimiter=";").writerow(
+                [строка.get(имя, "") for имя in ЖУРНАЛ_ВЫХОДОВ_СТОЛБЦЫ])
+
+        try:
+            safe_files.append_line_safely(путь, _write_row)
+        except Exception:
+            with open(путь, "a", newline="", encoding="utf-8") as f:
+                _write_row(f)
+    except Exception as e:
+        log.warning("Не удалось записать журнал выходов (%s): %s", путь, e)
 
 
 def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point):
@@ -174,6 +268,17 @@ def cleanup_peak_profit(open_tickets: set):
     Теперь уборка вызывается один раз за проход оттуда, где виден полный
     список позиций (см. main.py). Проверяется тестом
     test_multi_symbol_state_survives."""
+    # СНАЧАЛА КАРТОЧКИ, ПОТОМ УБОРКА. Карточка закрывшейся сделки собирается
+    # из пика, дна и риска — то есть ровно из того, что уборка ниже стирает.
+    # Если поменять эти два шага местами, в журнал пойдут пустые поля: пик к
+    # тому моменту уже выброшен. Поймано тестом test_exit_management.
+    исчезли = set()
+    for словарь in (_position_peak_points, _position_trough_points,
+                    _position_risk_points, _position_first_seen):
+        исчезли.update(t for t in словарь if t not in open_tickets)
+    for ticket in исчезли:
+        _archive_journal(ticket)
+
     for ticket in list(_position_peak_points.keys()):
         if ticket not in open_tickets:
             # Пик НЕ выбрасываем, а откладываем в архив: сделка закрылась, и
@@ -198,6 +303,11 @@ def cleanup_peak_profit(open_tickets: set):
     for ticket in list(_position_first_seen.keys()):
         if ticket not in open_tickets:
             _position_first_seen.pop(ticket, None)
+    for словарь in (_position_sl_source, _position_tp_source, _position_peak_age,
+                    _position_trough_age, _position_initial_sl):
+        for ticket in list(словарь.keys()):
+            if ticket not in open_tickets:
+                словарь.pop(ticket, None)
 
 
 def _archive_closed_peak(position_id, peak_points: float):
@@ -205,6 +315,46 @@ def _archive_closed_peak(position_id, peak_points: float):
     while len(_closed_peaks) > _CLOSED_PEAKS_LIMIT:
         # dict в Python сохраняет порядок вставки — вычищаем самый старый
         _closed_peaks.pop(next(iter(_closed_peaks)), None)
+
+
+def _archive_journal(ticket):
+    """Сложить карточку закрывшейся сделки в архив.
+
+    Пишется только то, что мы ДЕЙСТВИТЕЛЬНО измерили, пока вели позицию.
+    Ничего не достраивается и не оценивается задним числом: пустое поле
+    честнее выдуманного."""
+    риск = _position_risk_points.get(ticket, 0.0)
+    пик = _position_peak_points.get(ticket)
+    дно = _position_trough_points.get(ticket)
+    if пик is None and дно is None and риск <= 0:
+        return                      # позиция открыта до запуска — измерять нечего
+    _closed_journal[ticket] = {
+        "initial_sl": _position_initial_sl.get(ticket, 0.0),
+        "initial_r_points": round(риск, 1),
+        "max_profit_r": round(пик / риск, 3) if (риск > 0 and пик is not None) else "",
+        "max_loss_r": round(дно / риск, 3) if (риск > 0 and дно is not None) else "",
+        "time_to_mfe_sec": int(_position_peak_age.get(ticket, 0)),
+        "time_to_mae_sec": int(_position_trough_age.get(ticket, 0)),
+        "holding_time_sec": int(position_age_seconds(ticket)),
+        "exit_reason": _position_sl_source.get(ticket, ПРИЧИНА_СТОП),
+        "tp_reason": _position_tp_source.get(ticket, ПРИЧИНА_ЦЕЛЬ),
+    }
+    while len(_closed_journal) > _CLOSED_PEAKS_LIMIT:
+        _closed_journal.pop(next(iter(_closed_journal)), None)
+
+
+def pop_closed_journal(position_id):
+    """Карточка закрытой сделки или None. Забирается один раз — повторный
+    вызов вернёт None, и дважды в журнал одна сделка не попадёт."""
+    return _closed_journal.pop(position_id, None)
+
+
+def note_manual_close(ticket):
+    """Отметить, что сделку закрыли кнопкой, а не механизмом.
+
+    Без этой отметки ручное закрытие выглядело бы в журнале как срабатывание
+    того стопа, который стоял последним, — и статистика причин врала бы."""
+    _position_sl_source[ticket] = ПРИЧИНА_РУЧНОЕ
 
 
 def pop_closed_peak(position_id):
@@ -215,8 +365,12 @@ def pop_closed_peak(position_id):
 
 def update_peak_profit(ticket, profit_points) -> float:
     peak = _position_peak_points.get(ticket, profit_points)
-    if profit_points > peak:
+    if ticket not in _position_peak_points or profit_points > peak:
         peak = profit_points
+        # Запоминаем НЕ только величину пика, но и когда он случился. Без
+        # этого невозможно отличить «сделка сразу пошла и мы её рано срезали»
+        # от «сделка час болталась и дала пик перед самым закрытием».
+        _position_peak_age[ticket] = position_age_seconds(ticket)
     _position_peak_points[ticket] = peak
     return peak
 
@@ -238,6 +392,7 @@ def update_position_risk(ticket, price_open: float, sl: float, point: float) -> 
     if ticket not in _position_risk_points:
         risk = abs(price_open - sl) / point if (sl and point) else 0.0
         _position_risk_points[ticket] = risk
+        _position_initial_sl[ticket] = float(sl or 0.0)
     return _position_risk_points[ticket]
 
 
@@ -338,8 +493,9 @@ def update_position_trough(ticket, profit_points: float) -> float:
     """Запоминает самую глубокую просадку позиции (в пунктах, отрицательное
     число). Зеркало update_peak_profit()."""
     trough = _position_trough_points.get(ticket, profit_points)
-    if profit_points < trough:
+    if ticket not in _position_trough_points or profit_points < trough:
         trough = profit_points
+        _position_trough_age[ticket] = position_age_seconds(ticket)
     _position_trough_points[ticket] = trough
     return trough
 
@@ -542,6 +698,7 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                         result = mt5c.close_position_partial(p, close_volume)
                         if result is not None and result.retcode == mt5c.RETCODE_DONE:
                             _partial_closed_tickets.add(p.ticket)
+                            _position_sl_source[p.ticket] = ПРИЧИНА_ЧАСТИЧНО
                             log.info("%s тикет %s: частичное закрытие %.2f лота (профит %.1f пт)",
                                      symbol, p.ticket, close_volume, profit_points)
                         else:
@@ -555,6 +712,24 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
         current_sl = p.sl
         current_tp = p.tp
         best_sl = current_sl
+        # КТО ДВИГАЕТ СТОП. Четыре механизма ниже пишут в одну переменную
+        # best_sl, и по итоговому числу не сказать, чей это уровень. Здесь
+        # запоминается имя того, кто реально подвинул стоп в сторону прибыли.
+        #
+        # Это же место отвечает за требование «механизмы не должны бороться
+        # друг с другом»: бороться им не за что, потому что применяется не
+        # последний по порядку, а САМЫЙ ВЫГОДНЫЙ из предложенных, и только
+        # если он лучше текущего. Стоп физически не может уехать назад —
+        # см. _better_sl и проверку improved ниже.
+        sl_source = _position_sl_source.get(p.ticket, ПРИЧИНА_СТОП)
+
+        def предложить(уровень, кто):
+            """Предложить новый стоп. Принимается, только если он ЛУЧШЕ."""
+            nonlocal best_sl, sl_source
+            если_лучше = _better_sl(is_buy, best_sl, уровень)
+            if если_лучше != best_sl:
+                best_sl = если_лучше
+                sl_source = кто
 
         eff_be_offset = rm.eff_points_threshold(cfg.BREAK_EVEN_OFFSET_POINTS, 0.05, atr_value, point)
         eff_trail_min = rm.eff_points_threshold(cfg.TRAILING_MIN_POINTS, 0.3, atr_value, point)
@@ -576,13 +751,13 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
         be_trigger_pts = (atr_value * cfg.BREAK_EVEN_ATR_MULTIPLIER) / point if point else 0
         if cfg.USE_BREAK_EVEN and profit_points >= be_trigger_pts:
             be_sl = p.price_open + eff_be_offset * point if is_buy else p.price_open - eff_be_offset * point
-            best_sl = _better_sl(is_buy, best_sl, be_sl)
+            предложить(be_sl, ПРИЧИНА_БЕЗУБЫТОК)
 
         # 2) ATR-трейлинг
         trail_pts = max(eff_trail_min, (atr_value * cfg.TRAILING_ATR_MULTIPLIER) / point if point else 0)
         if cfg.USE_TRAILING_STOP and profit_points >= trail_pts:
             trail_sl = price - trail_pts * point if is_buy else price + trail_pts * point
-            best_sl = _better_sl(is_buy, best_sl, trail_sl)
+            предложить(trail_sl, ПРИЧИНА_ТРЕЙЛИНГ)
 
         # 2.5) Лестница трейлинга в единицах СОБСТВЕННОГО РИСКА сделки (R).
         # Включается сильно раньше безубытка по ATR и отступает от пика на
@@ -595,7 +770,7 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
             if lock_pts is not None:
                 ladder_sl = (p.price_open + lock_pts * point) if is_buy \
                     else (p.price_open - lock_pts * point)
-                best_sl = _better_sl(is_buy, best_sl, ladder_sl)
+                предложить(ladder_sl, ПРИЧИНА_ЛЕСТНИЦА)
 
         # 3) Profit Lock — гонится за ПИКОВОЙ прибылью, а не текущей ценой.
         # Ступенчатый % (см. _tiered_lock_percent) вместо одного фиксированного —
@@ -606,7 +781,7 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                         else cfg.PROFIT_LOCK_PERCENT)
             lock_points = peak_points * lock_pct / 100.0
             lock_sl = p.price_open + lock_points * point if is_buy else p.price_open - lock_points * point
-            best_sl = _better_sl(is_buy, best_sl, lock_sl)
+            предложить(lock_sl, ПРИЧИНА_ЛОК)
 
         improved = (best_sl > current_sl) if is_buy else (current_sl == 0 or best_sl < current_sl)
         dist_ok = broker_min_dist <= 0 or abs(price - best_sl) >= broker_min_dist
@@ -615,6 +790,11 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
         sl_changed = best_sl != current_sl and improved and dist_ok and step_ok
         if not sl_changed:
             best_sl = current_sl
+        else:
+            # Имя запоминаем ТОЛЬКО когда стоп действительно переехал. Иначе
+            # в журнал попал бы механизм, который что-то предложил, но был
+            # отвергнут брокерской дистанцией или шагом.
+            _position_sl_source[p.ticket] = sl_source
 
         # 4) Спасение в безубыток: сделка глубоко проседала и вернулась к нулю.
         # Проверяем ДО подтягивания TP — если пора закрывать, TP уже не нужен.
@@ -631,6 +811,7 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                 eff_rescue_exit)
 
             if action == "close":
+                _position_sl_source[p.ticket] = ПРИЧИНА_СПАСЕНИЕ
                 log.info("%s тикет %s: спасение в безубыток — просадка была %.1f пт, "
                          "вернулась к %.1f пт, закрываю", symbol, p.ticket, trough_points, profit_points)
                 if cfg.LIVE_TRADING:
@@ -653,6 +834,7 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                 if rescue_tp > 0:
                     best_tp = rescue_tp
                     rescued = True
+                    _position_tp_source[p.ticket] = ПРИЧИНА_СПАСЕНИЕ
 
         # 5) Подтягивание тейк-профита — только ближе к цене, никогда дальше.
         if getattr(cfg, "USE_TP_TIGHTEN", False) and not rescued:
@@ -673,6 +855,8 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                 min_r=getattr(cfg, "TP_TIGHTEN_MIN_R", 1.0))
             if new_tp > 0:
                 best_tp = new_tp
+                _position_tp_source[p.ticket] = (
+                    "LEARNED_TP" if learned_tp_points > 0 else "TP_TIGHTEN")
 
         tp_changed = best_tp != current_tp
 
