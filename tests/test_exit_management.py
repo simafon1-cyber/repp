@@ -453,6 +453,57 @@ def test_new_metrics_exist_and_are_honest() -> None:
           "Без убытков Sortino = 0, а не бесконечность: это мало данных")
 
 
+def test_only_the_proven_change_was_adopted() -> None:
+    """Принято ровно то, что подтвердили ворота проверки, и ничего сверх.
+
+    Проверка версий дала три разных ответа, и все три закреплены здесь:
+
+      * новая лестница по R    — ПРИНЯТЬ (3 способа из 5 на VALIDATION по
+                                 обоим инструментам, подтверждено на OOS);
+      * выключение механизмов
+        времени                — ОТКЛОНИТЬ (0 из 5 во всех четырёх
+                                 сочетаниях, хуже по каждой метрике);
+      * ведение по M1          — НЕ ПРОВЕРЕНО, значит выключено.
+
+    Тест существует затем, чтобы отклонённое не просочилось в настройки
+    позже, когда причина забудется."""
+    print("\n[Принято только подтверждённое]")
+
+    лестница = list(getattr(CFG, "R_TRAIL_LADDER", []))
+    check(len(лестница) >= 5, "Лестница на месте", str(лестница))
+    первая = лестница[0] if лестница else (0, 0)
+    check(abs(float(первая[0]) - 0.50) < 1e-9,
+          "Защита включается с +0.5R, а не с +0.30R", str(первая))
+    check(float(первая[1]) < 0,
+          "Первая ступень урезает риск, а НЕ ставит стоп в безубыток",
+          str(первая))
+    check(all(float(лестница[i][0]) < float(лестница[i + 1][0])
+              for i in range(len(лестница) - 1)),
+          "Ступени идут по возрастанию пика")
+    check(all(float(лестница[i][1]) < float(лестница[i + 1][1])
+              for i in range(len(лестница) - 1)),
+          "И запирают всё больше — лестница не может идти вниз")
+    check(all(float(п) >= float(з) for п, з in лестница),
+          "Ни одна ступень не запирает больше, чем сделка стоила")
+
+    # ОТКЛОНЁННОЕ. Механизмы времени остаются включёнными: их выключение
+    # измерено и делает счёт хуже в 2.2 и 2.9 раза.
+    check(getattr(CFG, "USE_TP_TIGHTEN", None) is True,
+          "Поджим цели по времени НЕ выключен: измерение против")
+    check(getattr(CFG, "USE_BREAK_EVEN_RESCUE", None) is True,
+          "Спасение в безубыток НЕ выключено: измерение против")
+    check(getattr(CFG, "USE_M1_POSITION_MANAGEMENT", None) is False,
+          "Ведение по M1 выключено: не проверено")
+
+    # И то же самое доезжает до УЖЕ УСТАНОВЛЕННОЙ программы: config.py
+    # обновление обычно не трогает, поэтому нужна разовая миграция.
+    миграции = (APP / "config_migrate.py").read_text(encoding="utf-8")
+    check("MIGRATED_R_LADDER_LATER_START" in миграции,
+          "Новая лестница доезжает до уже установленной программы")
+    check("R_TRAIL_LADDER" in миграции.split("ONE_TIME")[1][:2000],
+          "И заменяется целиком, а не дописывается второй раз")
+
+
 def test_the_forbidden_things_are_still_forbidden() -> None:
     """Задание, пункты 12, 13 и 22: чего в коде быть не должно."""
     print("\n[Запрещённое не появилось]")
@@ -491,6 +542,7 @@ if __name__ == "__main__":
     test_m1_index_refuses_to_invent_numbers()
     test_version_b_is_skipped_when_there_is_nothing_to_check_it_with()
     test_new_metrics_exist_and_are_honest()
+    test_only_the_proven_change_was_adopted()
     test_the_forbidden_things_are_still_forbidden()
     print()
     print("=" * 62)
