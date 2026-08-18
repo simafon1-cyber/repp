@@ -339,7 +339,8 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
             #    это ДО поиска нового входа.
             if открытая is not None:
                 открытая = _вести(открытая, бар, atr_value, point, cfg, rm, tm,
-                                  сделки, инфо)
+                                  сделки, инфо,
+                                  al.learned_profit_points(состояние, 0.0))
                 if открытая is None:
                     # Сделка закрылась: тот же учёт, что в живой программе.
                     последняя = сделки[-1]
@@ -568,7 +569,8 @@ def _записать_путь(ряд, i, поз, atr_value, point, spread_point
     }
 
 
-def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, инфо):
+def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, инфо,
+           learned_tp_points: float = 0.0):
     """Один бар жизни открытой сделки. Возвращает позицию или None (закрылась).
 
     Порядок ровно тот же, что в trade_manager.manage_open_positions:
@@ -581,18 +583,26 @@ def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, и�
 
     лучшая = (high - поз["entry_price"]) / point if is_buy else (поз["entry_price"] - low) / point
     худшая = (поз["entry_price"] - low) / point if is_buy else (high - поз["entry_price"]) / point
-    поз["peak_points"] = max(поз["peak_points"], лучшая)
+    if лучшая > поз["peak_points"]:
+        поз["peak_points"] = лучшая
+        поз["peak_bar"] = поз["bars_held"]
     поз["trough_points"] = min(поз["trough_points"], -худшая)
 
     риск = поз["risk_points"]
     лучший_sl = поз["sl"]
+    # ЧЕЙ ЭТО СТОП. Механизмов, двигающих стоп, четыре, и все они пишут в одну
+    # переменную — по итоговому числу невозможно сказать, кто её поставил.
+    # Здесь запоминается ИМЯ последнего механизма, который реально сдвинул
+    # стоп в лучшую сторону. Когда стоп сработает, это и будет причина выхода.
+    # Ничего в поведении не меняет: только подпись.
+    источник = поз.get("sl_source", "начальный стоп")
 
-    def подтянуть(новый):
-        nonlocal лучший_sl
-        if is_buy:
-            лучший_sl = max(лучший_sl, новый)
-        else:
-            лучший_sl = min(лучший_sl, новый) if лучший_sl > 0 else новый
+    def подтянуть(новый, кто):
+        nonlocal лучший_sl, источник
+        лучше = (новый > лучший_sl) if is_buy else (лучший_sl <= 0 or новый < лучший_sl)
+        if лучше:
+            лучший_sl = новый
+            источник = кто
 
     # 1) Безубыток
     if getattr(cfg, "USE_BREAK_EVEN", False):
@@ -600,7 +610,7 @@ def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, и�
         if поз["peak_points"] >= be_trigger:
             смещение = rm.eff_points_threshold(cfg.BREAK_EVEN_OFFSET_POINTS, 0.05,
                                                atr_value, point)
-            подтянуть(поз["entry_price"] + поз["direction"] * смещение * point)
+            подтянуть(поз["entry_price"] + поз["direction"] * смещение * point, "безубыток")
 
     # 2) ATR-трейлинг — от ЦЕНЫ ЗАКРЫТИЯ бара: внутрибарового хода мы не знаем.
     if getattr(cfg, "USE_TRAILING_STOP", False):
@@ -608,7 +618,7 @@ def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, и�
         шаг = max(мин, (atr_value * cfg.TRAILING_ATR_MULTIPLIER) / point if point else 0)
         текущая_прибыль = ((float(бар["close"]) - поз["entry_price"]) / point) * поз["direction"]
         if текущая_прибыль >= шаг:
-            подтянуть(float(бар["close"]) - поз["direction"] * шаг * point)
+            подтянуть(float(бар["close"]) - поз["direction"] * шаг * point, "ATR-трейлинг")
 
     # 3) Лестница по R — функцией самого trade_manager
     if getattr(cfg, "USE_R_TRAIL_LADDER", False) and риск > 0:
@@ -616,7 +626,7 @@ def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, и�
                                         getattr(cfg, "R_TRAIL_LADDER", None),
                                         float(getattr(cfg, "R_TRAIL_GIVEBACK_R", 0) or 0))
         if замок is not None:
-            подтянуть(поз["entry_price"] + поз["direction"] * замок * point)
+            подтянуть(поз["entry_price"] + поз["direction"] * замок * point, "лестница R")
 
     # 4) Profit Lock — тоже функцией trade_manager
     if getattr(cfg, "USE_PROFIT_LOCK_TRAILING", False):
@@ -627,9 +637,62 @@ def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, и�
             процент = (tm._tiered_lock_percent(поз["peak_points"], порог)
                        if getattr(cfg, "USE_TIERED_PROFIT_LOCK", False)
                        else cfg.PROFIT_LOCK_PERCENT)
-            подтянуть(поз["entry_price"] + поз["direction"] * поз["peak_points"] * процент / 100.0 * point)
+            подтянуть(поз["entry_price"] + поз["direction"] * поз["peak_points"] * процент / 100.0 * point,
+                      "Profit Lock")
 
     поз["sl"] = лучший_sl
+    поз["sl_source"] = источник
+
+    # 5) СПАСЕНИЕ В БЕЗУБЫТОК и 6) ПОДЖИМ ЦЕЛИ ПО ВРЕМЕНИ.
+    # Их здесь раньше НЕ БЫЛО, хотя в шапке файла они были заявлены. Это
+    # значит, что прежние проверки на истории были МЯГЧЕ живой торговли:
+    # оба механизма только ограничивают прибыль, и оба зависят от времени.
+    # Решения по-прежнему принимают функции trade_manager, не этот файл.
+    возраст = float(int(бар["time"]) - поз["entry_time"])
+    цена = float(бар["close"])
+    текущая_прибыль = ((цена - поз["entry_price"]) / point) * поз["direction"]
+    спасена = False
+
+    if getattr(cfg, "USE_BREAK_EVEN_RESCUE", False):
+        просадка = rm.eff_points_threshold(
+            getattr(cfg, "BE_RESCUE_MIN_DRAWDOWN_POINTS", 20), 0.25, atr_value, point)
+        выходной = rm.eff_points_threshold(
+            getattr(cfg, "BE_RESCUE_EXIT_POINTS", 3), 0.03, atr_value, point)
+        действие = tm.break_even_rescue_action(
+            поз["trough_points"], текущая_прибыль, возраст, просадка,
+            getattr(cfg, "BE_RESCUE_AFTER_MINUTES", 10) * 60.0, выходной)
+        if действие == "close":
+            поз["forced_exit"] = цена
+            поз["forced_reason"] = "спасение в БУ"
+        elif действие == "arm":
+            новая = tm.tighten_take_profit(
+                is_buy, поз["entry_price"], цена, поз["tp"],
+                выходной, выходной, point, 0.0, 0.0)
+            if новая > 0:
+                поз["tp"] = новая
+                поз["tp_source"] = "спасение в БУ"
+                спасена = True
+
+    if getattr(cfg, "USE_TP_TIGHTEN", False) and not спасена:
+        база = (learned_tp_points if learned_tp_points > 0 else
+                (atr_value * getattr(cfg, "TP_TIGHTEN_START_ATR", 1.5)) / point
+                if point else 0.0)
+        цель = tm.shrunk_target_points(
+            база, возраст,
+            getattr(cfg, "TP_TIGHTEN_SHRINK_PER_MINUTE", 0.10),
+            getattr(cfg, "TP_TIGHTEN_MIN_FRACTION", 0.25))
+        мин_прибыль = rm.eff_points_threshold(
+            getattr(cfg, "TP_TIGHTEN_MIN_PROFIT_POINTS", 10), 0.08, atr_value, point)
+        шаг_цели = rm.eff_points_threshold(
+            getattr(cfg, "TP_TIGHTEN_STEP_POINTS", 5), 0.02, atr_value, point)
+        новая = tm.tighten_take_profit(
+            is_buy, поз["entry_price"], цена, поз["tp"], цель,
+            мин_прибыль, point, 0.0, шаг_цели, risk_points=риск,
+            min_r=getattr(cfg, "TP_TIGHTEN_MIN_R", 1.0))
+        if новая > 0:
+            поз["tp"] = новая
+            поз["tp_source"] = ("выученная цель" if learned_tp_points > 0
+                                else "поджим цели")
 
     # СНАЧАЛА СТОП. Порядок касаний внутри бара неизвестен, берётся худший
     # для нас вариант — иначе проверка на истории врала бы в нашу пользу.
@@ -637,10 +700,19 @@ def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, и�
     цель_задета = поз["tp"] > 0 and ((high >= поз["tp"]) if is_buy else (low <= поз["tp"]))
 
     выход = None
+    причина = ""
     if стоп_задет:
         выход = поз["sl"]
+        причина = поз.get("sl_source", "начальный стоп")
     elif цель_задета:
         выход = поз["tp"]
+        причина = поз.get("tp_source", "цель (TP)")
+    elif поз.get("forced_exit") is not None:
+        # Спасение в безубыток закрывает САМО, а не стопом брокера. Проверяется
+        # последним: стоп и цель этого бара имеют приоритет, потому что могли
+        # сработать раньше внутри бара, а порядок касаний нам неизвестен.
+        выход = поз["forced_exit"]
+        причина = поз.get("forced_reason", "спасение в БУ")
 
     if выход is None:
         return поз
@@ -661,6 +733,13 @@ def _вести(поз, бар, atr_value, point, cfg, rm, tm, сделки, и�
         "tp_r": round(поз.get("tp_r", 0.0), 2),
         "sl_atr": round(поз.get("sl_atr", 0.0), 2),
         "held_seconds": int(бар["time"]) - поз["entry_time"],
+        # Кто именно закрыл сделку и когда она была на пике — без этих двух
+        # полей причину «мелкие плюсы, крупные минусы» назвать невозможно.
+        "exit_reason": причина,
+        "bars_held": поз["bars_held"],
+        "peak_bar": поз.get("peak_bar", 0),
+        "mfe_r": round(поз["peak_points"] / риск, 3) if риск > 0 else 0.0,
+        "mae_r": round(поз["trough_points"] / риск, 3) if риск > 0 else 0.0,
         "session": поз["session"], "atr_bucket": поз["atr_bucket"],
         "regime": поз["regime"],
         # Новости невоспроизводимы, поэтому метка честная, а не выдуманная.
