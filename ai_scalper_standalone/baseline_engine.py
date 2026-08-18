@@ -193,7 +193,7 @@ def atr_bucket(atr_value: float, средний_atr: float) -> str:
 def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
         max_bars: int = 0, progress=None, only_direction: int = 0,
         record_horizon: int = 0, record_random: float = 0.0,
-        random_seed: int = 0) -> dict:
+        random_seed: int = 0, record_mirror: bool = False) -> dict:
     """Прогнать живую стратегию по истории одного инструмента.
 
     Возвращает {"trades", "equity_curve", "bars_seen", "not_reproducible",
@@ -235,7 +235,22 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
 
     Случайные входы НЕ торгуются и ни на что не влияют: они не занимают
     позицию, не пополняют окно автообучения, не меняют счёт. Они только
-    записываются."""
+    записываются.
+
+    record_mirror — ПАРНАЯ КОНТРОЛЬНАЯ ГРУППА, самая строгая из возможных.
+
+    На КАЖДОМ настоящем входе записывается ещё один путь — на том же баре, в
+    ТУ ЖЕ секунду, при том же ATR и том же спреде, но в ОБРАТНУЮ сторону.
+
+    Зачем нужна отдельно от случайной. Случайные входы разбросаны по всей
+    истории, в том числе по часам, когда стратегия не торгует вовсе. Значит
+    они сравнивают заодно и выбор ВРЕМЕНИ, и выбор СТОРОНЫ, и разделить эти
+    два вклада по ним нельзя. Зеркальный вход берётся ровно там же, где и
+    настоящий, поэтому выбор времени из сравнения выпадает полностью, и
+    остаётся ровно один вопрос: угадывает ли стратегия СТОРОНУ.
+
+    Если зеркальный вход не хуже настоящего, то направление выбирается не
+    лучше подбрасывания монеты."""
     import pandas as pd
 
     import config as cfg
@@ -296,6 +311,7 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
     сделки = []
     пути = []
     случайные = []
+    зеркальные = []
     случай = random.Random(random_seed)
     кривая = []
     отказы = {}
@@ -478,6 +494,17 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
             if record_horizon > 0:
                 пути.append(_записать_путь(ряд, i, открытая, atr_value, point,
                                            текущий["spread"], record_horizon))
+                # ЗЕРКАЛО: тот же бар, та же секунда, обратная сторона.
+                # Вход берётся по своей худшей стороне — как и настоящий,
+                # иначе зеркало получило бы поблажку на спред.
+                if record_mirror:
+                    зеркало = dict(открытая)
+                    зеркало["direction"] = -направление
+                    зеркало["entry_price"] = (float(бар["close"])
+                                              - направление * текущий["spread"] * point)
+                    зеркальные.append(_записать_путь(
+                        ряд, i, зеркало, atr_value, point,
+                        текущий["spread"], record_horizon))
 
         # Незакрытую в конце истории сделку не считаем: её исход неизвестен.
         if открытая is not None:
@@ -496,6 +523,7 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
         "rejects": отказы,
         "paths": пути,
         "random_paths": случайные,
+        "mirror_paths": зеркальные,
     }
 
 
