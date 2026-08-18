@@ -1131,13 +1131,30 @@ def test_folder_install_is_not_patched_by_one_file() -> None:
                 check(f.read() == "рабочая программа".encode("utf-8"),
                       "РАБОЧАЯ ПРОГРАММА НЕ ТРОНУТА")
 
-            # И скачивать 60 МБ, чтобы потом отказаться, тоже незачем.
-            итог = up.download_new_exe()
-            check(итог["ok"] is False, "Скачивание не начинается")
-            check(up.INSTALLER_NAME in итог["error"],
-                  "И названо, что именно скачать", итог["error"][:120])
-            check("http" in итог["error"], "Со ссылкой, а не «поищите сами»",
-                  итог["error"][:160])
+            # РАНЬШЕ ЗДЕСЬ БЫЛ ОТКАЗ. Программа советовала скачать
+            # установщик руками, то есть кнопка «Обновить всё сейчас» не
+            # обновляла ничего. Теперь установка папкой обновляется
+            # установщиком — сама. Проверяем именно это, сеть не трогаем.
+            было_скачать = up.download_installer
+            try:
+                up.download_installer = lambda progress=None: {
+                    "ok": True, "path": os.path.join(folder, "Setup.exe.new"),
+                    "tag": "build-99", "error": ""}
+                итог = up.download_new_exe()
+                check(итог["ok"] is True,
+                      "Установка папкой теперь обновляется, а не отклоняется")
+                check(итог.get("installer", "").endswith(".new"),
+                      "И скачан именно установщик", итог.get("installer", ""))
+                check("build-99" in итог.get("source", ""),
+                      "С номером версии", итог.get("source", ""))
+            finally:
+                up.download_installer = было_скачать
+            # Совет «скачайте установщик руками» остался — но теперь он
+            # запасной, на случай когда тихая установка невозможна. Ссылка в
+            # нём обязана быть: без неё совет упирается в вопрос «откуда?».
+            check("http" in up.installer_advice(),
+                  "Запасной совет по-прежнему со ссылкой, а не «поищите сами»",
+                  up.installer_advice()[:160])
 
         with tempfile.TemporaryDirectory() as folder:
             обстановка(folder, "одним файлом")

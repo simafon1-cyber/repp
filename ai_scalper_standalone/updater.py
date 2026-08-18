@@ -695,6 +695,228 @@ def installed_as_folder() -> bool:
     return os.path.isdir(os.path.join(рядом, ВНУТРЕННЯЯ_ПАПКА))
 
 
+# =====================================================================
+# ОБНОВЛЕНИЕ УСТАНОВКИ ПАПКОЙ — УСТАНОВЩИКОМ, ТИХО
+# =====================================================================
+# ПОЧЕМУ ЭТО ПОЯВИЛОСЬ. Программа ставится установщиком, то есть ПАПКОЙ. А
+# самообновление умело только одно: скачать .exe и подменить им работающий
+# файл. Для папки это неверно и ломает установку, поэтому обновление честно
+# отказывалось работать и советовало «скачайте установщик руками».
+#
+# Совет верный, но это НЕ САМООБНОВЛЕНИЕ. Владелец: «почини самообновление,
+# чтобы работало». Значит программа должна поставить новую версию сама.
+#
+# ЧТО ДЕЛАЕТ ЭТО ВОЗМОЖНЫМ. Установщик собран Inno Setup со строками
+# PrivilegesRequired=lowest и DefaultDirName={localappdata}: он ставится в
+# папку пользователя и НЕ требует прав администратора. Значит тихая установка
+# пройдёт без окна «разрешить внести изменения», которого в фоне нажать
+# некому. AppId у него постоянный, поэтому новая версия ложится поверх
+# старой, а config.py помечен onlyifdoesntexist — настройки не трогаются.
+#
+# ПОЧЕМУ НУЖЕН ПОСРЕДНИК-СЦЕНАРИЙ. Установщик не может переписать файлы
+# работающей программы: Windows их держит. Значит порядок обязан быть таким:
+# программа закрывается -> установщик работает -> программа открывается
+# заново. Сама себя закрыть и потом запустить она не может — после закрытия
+# выполнять команды уже некому. Поэтому наружу выносится крошечный .cmd,
+# который ждёт нашего завершения, ставит и запускает.
+
+# Метка внутри файла установщика. Проверена на настоящем файле сборки 62:
+# лежит примерно на 1.6% длины, поэтому искать достаточно в первых мегабайтах.
+INNO_MARKER = b"Inno Setup Setup Data"
+INSTALLER_SCAN_BYTES = 2 * 1024 * 1024
+
+
+def latest_release_installer() -> dict:
+    """Ссылка на установщик из последнего релиза. {"url","size","tag"} или {}."""
+    url = f"{API}/repos/{repo()}/releases/latest"
+    try:
+        with _request(url) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {}
+        raise
+    for asset in (data.get("assets") or []):
+        if str(asset.get("name", "")).lower() == INSTALLER_NAME.lower():
+            return {"url": asset.get("url", ""),
+                    "name": str(asset.get("name", "")),
+                    "size": int(asset.get("size") or 0),
+                    "tag": str(data.get("tag_name", ""))}
+    return {}
+
+
+def looks_like_installer(path: str) -> str:
+    """Похоже ли скачанное на установщик. Пусто — похоже.
+
+    Проверки другие, чем у самой программы: у установщика нет метки
+    PyInstaller в конце, зато есть своя собственная. Взять чужую проверку и
+    решить, что «файл оборван», было бы ложной тревогой на каждом обновлении."""
+    try:
+        size = os.path.getsize(path)
+    except OSError as e:
+        return f"скачанный файл не читается ({e})"
+    if size < MIN_EXE_BYTES:
+        return (f"скачано всего {size / 1024 / 1024:.1f} МБ — это обрывок, "
+                f"а не установщик")
+    try:
+        with open(path, "rb") as f:
+            head = f.read(INSTALLER_SCAN_BYTES)
+    except OSError as e:
+        return f"скачанный файл не читается ({e})"
+    if head[:2] != EXE_HEADER:
+        return ("скачано не приложение Windows — похоже, вместо установщика "
+                "пришла страница с ошибкой")
+    if INNO_MARKER not in head:
+        return ("это не установщик программы — внутри нет его опознавательной "
+                "метки. Ставить такой файл нельзя")
+    return ""
+
+
+def installer_download_path() -> str:
+    """Куда кладётся скачанный установщик.
+
+    Рядом с программой, а не во временную папку Windows: временную чистит
+    система и антивирус, и файл может исчезнуть между скачиванием и запуском."""
+    return os.path.join(app_dir(), INSTALLER_NAME + ".new")
+
+
+def download_installer(progress=None) -> dict:
+    """Скачать установщик новой версии. {"ok", "path", "tag", "error"}."""
+    def say(text):
+        if progress:
+            try:
+                progress(text)
+            except Exception:  # noqa: BLE001
+                pass
+
+    итог = {"ok": False, "path": "", "tag": "", "error": ""}
+    try:
+        say("Ищу готовую сборку...")
+        release = latest_release_installer()
+        if not release.get("url"):
+            итог["error"] = (
+                "В последнем релизе нет установщика. Нажмите «Собрать новую "
+                "версию» и подождите — сборка положит его в Releases сама.")
+            return итог
+
+        путь = installer_download_path()
+        временный = путь + ".part"
+        say(f"Скачиваю установщик версии {release.get('tag', '')}...")
+        получено = download_binary(release["url"], временный,
+                                   accept="application/octet-stream",
+                                   progress=progress)
+        ожидалось = int(release.get("size") or 0)
+        if ожидалось and получено != ожидалось:
+            итог["error"] = (
+                f"Обновление не установлено: GitHub сообщает, что установщик "
+                f"весит {ожидалось} байт, а скачалось {получено}. Прежняя "
+                f"версия осталась на месте — попробуйте ещё раз при "
+                f"устойчивой связи.")
+            return итог
+        плохо = looks_like_installer(временный)
+        if плохо:
+            итог["error"] = ("Обновление не установлено: " + плохо +
+                             ". Прежняя версия осталась на месте.")
+            return итог
+        os.replace(временный, путь)
+        итог.update(ok=True, path=путь, tag=str(release.get("tag", "")))
+        return итог
+    except Exception as e:  # noqa: BLE001
+        итог["error"] = explain_error(e)
+        return итог
+    finally:
+        врем = installer_download_path() + ".part"
+        if os.path.exists(врем):
+            try:
+                os.remove(врем)
+            except OSError:
+                pass
+
+
+def _installer_script(installer: str, target_dir: str, exe: str,
+                      pid: int) -> str:
+    """Текст сценария-посредника. Вынесен отдельно, чтобы его можно было
+    проверить тестом, не запуская Windows."""
+    журнал = os.path.join(target_dir, "update_install.log")
+    return (
+        "@echo off\r\n"
+        "rem Посредник обновления. Ждёт закрытия программы, ставит новую\r\n"
+        "rem версию поверх старой и запускает её заново.\r\n"
+        ":wait\r\n"
+        f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul\r\n'
+        "if not errorlevel 1 (\r\n"
+        "  ping -n 2 127.0.0.1 >nul\r\n"
+        "  goto wait\r\n"
+        ")\r\n"
+        # /VERYSILENT — без окон, /SUPPRESSMSGBOXES — без вопросов,
+        # /NORESTART — не перезагружать компьютер, /DIR — ровно та же папка.
+        f'"{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART '
+        f'/DIR="{target_dir}" /LOG="{журнал}"\r\n'
+        f'start "" "{exe}"\r\n'
+        f'del "{installer}"\r\n'
+        # Сценарий удаляет сам себя последней строкой: иначе он остался бы
+        # лежать в папке программы навсегда.
+        '(goto) 2>nul & del "%~f0"\r\n'
+    )
+
+
+def install_downloaded(installer: str = "") -> str:
+    """Запустить установку и закрыть программу. Возвращает текст ошибки.
+
+    При успехе НЕ ВОЗВРАЩАЕТСЯ: процесс завершается, дальше работает
+    сценарий-посредник."""
+    путь = installer or installer_download_path()
+    if not os.path.exists(путь):
+        return "Установщик не скачан — сначала нажмите «Обновить всё сейчас»."
+    плохо = looks_like_installer(путь)
+    if плохо:
+        try:
+            os.remove(путь)
+        except OSError:
+            pass
+        return ("Скачанный установщик негоден: " + плохо +
+                ". Он удалён, попробуйте обновиться ещё раз.")
+
+    папка = app_dir()
+    exe = os.path.join(папка, EXE_NAME)
+    сценарий = os.path.join(папка, "update_install.cmd")
+    текст = _installer_script(путь, папка, exe, os.getpid())
+
+    # КОДИРОВКА СЦЕНАРИЯ. Командный процессор Windows читает .cmd в так
+    # называемой кодировке OEM — на русской системе это cp866. Записать файл
+    # в UTF-8 значит получить путь из нечитаемых символов и установку «в
+    # никуда». Поэтому кодировка задана явно и ПРОВЕРЯЕТСЯ: если путь
+    # содержит символы, которых в cp866 нет (например, китайские), молча
+    # портить его нельзя — про это надо сказать.
+    try:
+        текст.encode("cp866")
+    except UnicodeEncodeError:
+        return ("В пути к программе есть символы, которых командный процессор "
+                "Windows не понимает. Переустановите программу в папку с "
+                "обычным именем — из русских или латинских букв.")
+    try:
+        with open(сценарий, "w", encoding="cp866", newline="") as f:
+            f.write(текст)
+    except OSError as e:
+        return f"Не удалось подготовить установку: {e}"
+
+    try:
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — иначе сценарий умрёт
+        # вместе с программой, ради закрытия которой он и запускается.
+        флаги = 0x00000008 | 0x00000200
+        subprocess.Popen(["cmd", "/c", сценарий], close_fds=True,
+                         creationflags=флаги,
+                         cwd=папка)
+    except Exception as e:  # noqa: BLE001
+        return f"Не удалось запустить установку: {e}"
+
+    log.info("Запущена тихая установка новой версии.")
+    # os._exit, а не sys.exit: sys.exit бросает исключение, его перехватит
+    # обработчик выше, программа продолжит работать — и установщик упрётся в
+    # занятые файлы.
+    os._exit(0)
+
+
 def installer_advice() -> str:
     """Что делать человеку, когда обновиться подменой файла нельзя.
 
@@ -985,13 +1207,20 @@ def download_new_exe(progress=None) -> dict:
             except Exception:
                 pass
 
-    result = {"ok": False, "source": "", "error": ""}
+    result = {"ok": False, "source": "", "error": "", "installer": ""}
 
-    # НЕ КАЧАЕМ ТО, ЧЕГО ВСЁ РАВНО НЕ ПОСТАВИМ. Установка папкой обновляется
-    # установщиком целиком; скачать 60 МБ и потом отказаться — значит зря
-    # потратить связь человека и его время.
+    # УСТАНОВКА ПАПКОЙ ОБНОВЛЯЕТСЯ УСТАНОВЩИКОМ, А НЕ ПОДМЕНОЙ ФАЙЛА.
+    # Раньше здесь стоял отказ с советом «скачайте установщик руками». Совет
+    # был верный, но это не самообновление. Теперь программа скачивает
+    # установщик сама, а ставит его при закрытии — см. download_installer и
+    # install_downloaded.
     if installed_as_folder():
-        result["error"] = installer_advice()
+        got = download_installer(progress=progress)
+        if not got.get("ok"):
+            result["error"] = got.get("error", "")
+            return result
+        result.update(ok=True, installer=got["path"],
+                      source=f"установщик {got.get('tag', '')}")
         return result
 
     destination = pending_swap_path()
@@ -1166,7 +1395,8 @@ def update_everything(progress=None) -> dict:
             except Exception:
                 pass
 
-    summary = {"errors": [], "lines": [], "restart_needed": False}
+    summary = {"errors": [], "lines": [], "restart_needed": False,
+               "installer": ""}
 
     say("Обновляю советники в MetaTrader...")
     advisors = update_advisors(progress=progress)
@@ -1180,7 +1410,15 @@ def update_everything(progress=None) -> dict:
     if is_frozen():
         say("Обновляю саму программу...")
         exe = download_new_exe(progress=progress)
-        if exe.get("ok"):
+        if exe.get("ok") and exe.get("installer"):
+            # Установка папкой: файл скачан, поставить его можно только при
+            # закрытой программе. Говорим об этом прямо, а не «встанет сама».
+            summary["lines"].append(
+                f"Новая версия скачана ({exe['source']}). Программа закроется, "
+                f"поставит её и откроется заново — это займёт около минуты.")
+            summary["restart_needed"] = True
+            summary["installer"] = exe["installer"]
+        elif exe.get("ok"):
             summary["lines"].append(
                 f"Новая версия программы скачана ({exe['source']}). "
                 f"Она встанет при следующем запуске.")

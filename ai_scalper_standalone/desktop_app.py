@@ -2936,7 +2936,8 @@ class App:
         self.status_var.set("Проверяю обновления...")
 
         def worker():
-            summary = {"errors": [], "lines": [], "restart_needed": False}
+            summary = {"errors": [], "lines": [], "restart_needed": False,
+                       "installer": ""}
             try:
                 check = updater.check()
                 if check.get("error"):
@@ -2978,15 +2979,33 @@ class App:
 
         # Файлы на диске уже новые, а в памяти — старые модули. Работать в
         # таком виде нельзя: части программы разошлись бы по версиям.
-        self._show_toast("Обновление установлено",
-                         "Программа перезапускается в новой версии.")
-        self.root.after(1500, self._restart_after_update)
+        установщик = summary.get("installer") or ""
+        self._show_toast(
+            "Обновление скачано",
+            "Программа ставит новую версию и откроется заново."
+            if установщик else "Программа перезапускается в новой версии.")
+        self.root.after(1500, lambda: self._restart_after_update(установщик))
 
-    def _restart_after_update(self):
+    def _restart_after_update(self, installer: str = ""):
         try:
             self.stop_bot()
         except Exception:
             pass
+
+        # УСТАНОВКА ПАПКОЙ. Простого перезапуска мало: новую версию надо
+        # сначала поставить, а поставить её можно только при закрытой
+        # программе. install_downloaded запускает установку и завершает нас —
+        # обратно эта функция не возвращается.
+        if installer:
+            problem = updater.install_downloaded(installer)
+            if problem:
+                log.warning("Тихая установка не удалась: %s", problem)
+                messagebox.showwarning(
+                    APP_TITLE,
+                    problem + "\n\nПрограмма продолжит работать на прежней "
+                              "версии.")
+            return
+
         problem = updater.restart_program()
         if problem:
             messagebox.showwarning(
@@ -3166,6 +3185,40 @@ class App:
             pass
 
         text = "\n".join(lines) if lines else "Всё уже свежее — обновлять нечего."
+
+        # УСТАНОВКА ПАПКОЙ: файл скачан, но поставить его можно только при
+        # закрытой программе — Windows держит её файлы. Поэтому здесь и
+        # спрашиваем: закрыть сейчас или потом. Молча закрывать программу,
+        # которая ведёт открытые сделки, нельзя.
+        установщик = summary.get("installer")
+        if установщик:
+            self.update_status_var.set(text.replace("\n", " "))
+            self._refresh_version_line()
+            открыто = 0
+            try:
+                открыто = len(mt5c.get_open_positions() or [])
+            except Exception:  # noqa: BLE001
+                pass
+            вопрос = (text + "\n\nЗакрыть программу и поставить новую версию "
+                             "сейчас? Она откроется сама примерно через минуту.")
+            if открыто:
+                вопрос = (text + f"\n\nВНИМАНИЕ: сейчас открыто сделок: "
+                                 f"{открыто}. Пока программа обновляется, вести "
+                                 f"их некому — стоп-лосс у брокера остаётся, а "
+                                 f"трейлинг и безубыток не работают.\n\n"
+                                 f"Всё равно обновиться сейчас?")
+            if messagebox.askyesno(APP_TITLE, вопрос, default="no" if открыто else "yes"):
+                problem = updater.install_downloaded(установщик)
+                if problem:
+                    messagebox.showerror(APP_TITLE, problem)
+            else:
+                messagebox.showinfo(
+                    APP_TITLE,
+                    "Хорошо. Новая версия уже скачана и лежит рядом с "
+                    "программой — нажмите «Обновить всё сейчас» ещё раз, "
+                    "когда будет удобно.")
+            return
+
         if summary.get("restart_needed"):
             text += "\n\nПерезапустите программу, чтобы новая версия заработала."
         self.update_status_var.set(text.replace("\n", " "))
