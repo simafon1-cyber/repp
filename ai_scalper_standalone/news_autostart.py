@@ -1,7 +1,7 @@
 """news_autostart.py — программа сама налаживает источник новостей.
 
 ЗАЧЕМ
-Новостной режим (TradingMode.NEWS_TRADING) работает только если есть
+Новостной вход работает только если есть
 календарь. Календарь берётся из сервиса CalendarExport внутри MetaTrader:
 python-библиотека MT5 календарь не отдаёт, эти функции есть только в MQL5.
 
@@ -48,10 +48,13 @@ RECHECK_SECONDS = 300
 
 
 def _news_mode_on() -> bool:
-    """Новостной режим включён (сам по себе или вместе со скальпингом)."""
-    mode = getattr(cfg, "TRADING_MODE", None)
-    name = getattr(mode, "name", str(mode)).upper()
-    return "NEWS" in name or "BOTH" in name
+    """Нужен ли программе источник новостей.
+
+    Раньше это зависело от режима торговли. Режимов больше нет: новостной
+    вход работает всегда, а когда свежей новости нет — обычный отбор
+    сигнала. Значит календарь нужен всегда, пока не выключен сам источник
+    новостей (USE_NEWS_FILTER) — тогда его и налаживать незачем."""
+    return bool(getattr(cfg, "USE_NEWS_FILTER", True))
 
 
 def service_state(terminal_dir: str) -> dict:

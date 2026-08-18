@@ -163,11 +163,16 @@ PROFILE_OPTIONS = [
     ("Агрессивный", "aggressive"),
     ("Истеричка (YOLO)", "hysteric"),
 ]
-MODE_OPTIONS = [
-    ("Скальпинг", "scalping"),
-    ("Новости", "news_trading"),
-    ("Оба", "both"),
-]
+# РЕЖИМОВ ТОРГОВЛИ БОЛЬШЕ НЕТ — И ЭТО СОЗНАТЕЛЬНО.
+#
+# Их было три: «скальпинг», «новости», «оба». Владелец: «убери все режимы
+# торговли, так как всё равно работает только один». Он прав, и хуже того:
+# «скальпинг» и «новости» были не двумя стратегиями, а одной с отрезанной
+# половиной. Выбор между ними означал только одно — что-нибудь выключить.
+#
+# Осталось одно поведение, самое полное: новостной пробой в приоритете, а
+# когда свежей новости нет — обычный отбор сигнала. Ничего не потеряно:
+# прежний «оба» и был этим поведением, а два других — им же, но урезанным.
 ADVANCED_TAB_NAMES = ["Брокер", "Equity", "Новости", "Сигналы", "Чат"]
 # "Источники" видна всегда: это единственное место, где источники данных
 # включаются и выключаются — прятать его в продвинутый режим нельзя.
@@ -1586,16 +1591,18 @@ class App:
         self._build_tab_profiles_and_context(extra)
 
     # ---- Быстрая настройка: выбрал режим и торгуешь ------------------------
+    # Карточки задают ТОЛЬКО профиль риска. Режима торговли в них больше нет:
+    # он был один на всю программу и выбирать в нём было нечего.
     QUICK_PRESETS = [
-        ("Осторожный", "conservative", "scalping",
+        ("Осторожный", "conservative",
          "Меньше сделок, но каждая тщательно отобрана.",
          "риск 0.3% · 1 сделка · совокупный риск 0.5% · порог сигнала высокий"),
-        ("Сбалансированный", "balanced", "scalping",
+        ("Сбалансированный", "balanced",
          "Золотая середина. С него стоит начинать.",
          "риск 0.7% · до 2 сделок · совокупный риск 1.8% · порог сигнала средний"),
-        ("Активный", "aggressive", "both",
+        ("Активный", "aggressive",
          "Больше сделок и больше риск. Только на демо, пока не проверите.",
-         "риск 1.2% · до 5 сделок · совокупный риск 6.5% · ловит и новостные пробои"),
+         "риск 1.2% · до 5 сделок · совокупный риск 6.5% · порог сигнала мягкий"),
     ]
 
     def _build_quick_setup(self, parent):
@@ -1626,11 +1633,11 @@ class App:
 
         self.quick_choice = tk.StringVar(value="balanced")
         current = (control.get_risk_profile() or cfg.RISK_PROFILE).value
-        for _, value, _, _, _ in self.QUICK_PRESETS:
+        for _, value, _, _ in self.QUICK_PRESETS:
             if value == current:
                 self.quick_choice.set(value)
 
-        for title, value, mode, summary, details in self.QUICK_PRESETS:
+        for title, value, summary, details in self.QUICK_PRESETS:
             card = ttk.LabelFrame(cards, text=title)
             card.pack(side="left", fill="both", expand=True, padx=6, pady=4)
             ttk.Radiobutton(card, text="Выбрать", value=value,
@@ -1731,16 +1738,12 @@ class App:
 
     def _apply_quick_preset(self):
         """Ставит профиль риска и режим торговли одним действием."""
-        title, value, mode, _, details = self._quick_preset_by_value(self.quick_choice.get())
+        title, value, _, details = self._quick_preset_by_value(self.quick_choice.get())
         try:
             for label, pv in PROFILE_OPTIONS:
                 if pv == value:
                     self.profile_combo.set(label)
             self._apply_profile()
-            for label, mv in MODE_OPTIONS:
-                if mv == mode:
-                    self.mode_combo.set(label)
-            self._apply_mode()
         except Exception as e:  # noqa: BLE001
             log.exception("Не удалось применить быстрый режим")
             messagebox.showerror(APP_TITLE, f"Не удалось применить режим: {e}")
@@ -1775,16 +1778,6 @@ class App:
                 self.profile_combo.set(label)
         ttk.Button(parent, text="Применить профиль", command=self._apply_profile).pack(anchor="w", **pad)
 
-        ttk.Label(parent, text="Режим торговли", font=("Segoe UI", 11, "bold")).pack(anchor="w", **pad)
-        self.mode_combo = ttk.Combobox(parent, values=[label for label, _ in MODE_OPTIONS],
-                                        state="readonly", width=30)
-        self.mode_combo.pack(anchor="w", padx=10)
-        current_mode = (control.get_trading_mode() or cfg.TRADING_MODE).value
-        for label, value in MODE_OPTIONS:
-            if value == current_mode:
-                self.mode_combo.set(label)
-        ttk.Button(parent, text="Применить режим", command=self._apply_mode).pack(anchor="w", **pad)
-
         self.pause_btn = ttk.Button(parent, text="Пауза (новые сделки)", command=self._toggle_pause)
         self.pause_btn.pack(anchor="w", **pad)
 
@@ -1805,13 +1798,6 @@ class App:
         if value:
             control.set_risk_profile(cfg.RiskProfile(value))
             messagebox.showinfo(APP_TITLE, f"Профиль риска изменён на «{label}».")
-
-    def _apply_mode(self):
-        label = self.mode_combo.get()
-        value = next((v for l, v in MODE_OPTIONS if l == label), None)
-        if value:
-            control.set_trading_mode(cfg.TradingMode(value))
-            messagebox.showinfo(APP_TITLE, f"Режим торговли изменён на «{label}».")
 
     def _toggle_pause(self):
         control.set_paused(not control.is_paused())
@@ -4754,7 +4740,7 @@ class App:
                     f"Счёт {acc.get('login', '-')}  ({acc.get('server', '-')})\n"
                     f"Баланс: {acc.get('balance', 0):.2f}   Эквити: {acc.get('equity', 0):.2f}\n"
                     f"Режим: {mode_txt} | Профиль: {snap.get('risk_profile', '-')} | "
-                    f"Торговля: {snap.get('trading_mode', '-')} | Сделок сегодня: {snap.get('trades_today', 0)}"
+                    f"Сделок сегодня: {snap.get('trades_today', 0)}"
                 )
                 st = snap.get("stats", {})
                 self.stats_var.set(

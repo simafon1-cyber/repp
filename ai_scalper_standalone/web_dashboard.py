@@ -11,7 +11,7 @@ DASHBOARD_LOGIN/DASHBOARD_PASSWORD из config.py) — браузер на те�
 мини-график equity (чистый canvas, без внешних библиотек), score/AI/режим
 рынка по каждому символу, открытые сделки (с закрытием по кнопке), полный
 лог сделок. Профиль риска и режим торговли можно менять прямо тут — без
-перезапуска программы (см. control.py: set_risk_profile/set_trading_mode).
+перезапуска программы (см. control.py: set_risk_profile).
 
 ВАЖНО: этот модуль НИКОГДА не вызывает MetaTrader5 напрямую. Он только читает
 dashboard_state.get_snapshot() и кладёт заявки на действия в control.control
@@ -161,15 +161,6 @@ PAGE = """<!DOCTYPE html>
         </select>
         <button class="small" onclick="applyProfile()">Применить</button>
       </div>
-      <div>
-        <div class="muted">Режим торговли</div>
-        <select id="modeSelect">
-          <option value="scalping">Скальпинг</option>
-          <option value="news_trading">Новости</option>
-          <option value="both">Оба</option>
-        </select>
-        <button class="small" onclick="applyMode()">Применить</button>
-      </div>
     </div>
   </div>
 
@@ -225,13 +216,6 @@ async function applyProfile() {
   const v = document.getElementById('profileSelect').value;
   await fetch('/api/set_profile', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({profile: v})});
-  refresh();
-}
-
-async function applyMode() {
-  const v = document.getElementById('modeSelect').value;
-  await fetch('/api/set_mode', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({mode: v})});
   refresh();
 }
 
@@ -291,7 +275,7 @@ async function refresh() {
       `Счёт <b>${acc.login ?? '-'}</b> (${acc.server ?? '-'}) ${modeBadge}${pauseBadge}<br>` +
       `Баланс: <b>${(acc.balance ?? 0).toFixed(2)} ${acc.currency ?? ''}</b> | ` +
       `Эквити: <b>${(acc.equity ?? 0).toFixed(2)}</b><br>` +
-      `Профиль: ${s.risk_profile ?? '-'} | Режим: ${s.trading_mode ?? '-'} | Сделок сегодня: ${s.trades_today ?? 0}`;
+      `Профиль: ${s.risk_profile ?? '-'} | Сделок сегодня: ${s.trades_today ?? 0}`;
 
     document.getElementById('pauseBtn').textContent = s.paused ? 'Возобновить торговлю' : 'Пауза (новые сделки)';
 
@@ -426,18 +410,6 @@ def api_set_profile():
         return jsonify({"error": "unknown profile"}), 400
     control.set_risk_profile(profile_enum)
     return jsonify({"ok": True, "profile": profile_enum.value})
-
-
-@app.route("/api/set_mode", methods=["POST"])
-def api_set_mode():
-    data = request.get_json(force=True, silent=True) or {}
-    name = data.get("mode")
-    try:
-        mode_enum = cfg.TradingMode(name)
-    except ValueError:
-        return jsonify({"error": "unknown mode"}), 400
-    control.set_trading_mode(mode_enum)
-    return jsonify({"ok": True, "mode": mode_enum.value})
 
 
 @app.route("/api/set_symbol_enabled", methods=["POST"])

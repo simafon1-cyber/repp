@@ -499,18 +499,16 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     # с дашборда, отключённая пара, самоотключение убыточного инструмента,
     # лимит одновременных сделок. Новость не даёт права обойти ни одну из
     # них. Снимаются ровно те фильтры, которые сама новость и вызывает.
-    trading_mode = control.get_trading_mode() or cfg.TRADING_MODE
     news_ready, news_dir, news_conf = False, 0, 0.0
-    if trading_mode in (cfg.TradingMode.NEWS_TRADING, cfg.TradingMode.BOTH):
-        try:
-            news_ready, news_dir, news_conf = news_calendar.detect_news_breakout(
-                symbol, cfg.NEWS_BREAKOUT_WINDOW_MIN)
-        except Exception as e:  # noqa: BLE001
-            # Источник календаря отвалился — это не повод уронить весь цикл.
-            # Молчать тоже нельзя: иначе «новости не работают» опять останется
-            # без объяснения.
-            log.warning("Новости по %s: %s", symbol, e)
-            sym_state.last_news_error = str(e)
+    try:
+        news_ready, news_dir, news_conf = news_calendar.detect_news_breakout(
+            symbol, cfg.NEWS_BREAKOUT_WINDOW_MIN)
+    except Exception as e:  # noqa: BLE001
+        # Источник календаря отвалился — это не повод уронить весь цикл.
+        # Молчать тоже нельзя: иначе «новости не работают» опять останется
+        # без объяснения.
+        log.warning("Новости по %s: %s", symbol, e)
+        sym_state.last_news_error = str(e)
 
     if not rm.spread_ok(symbol, atr_value, point):
         # У новостного входа потолок спреда свой, более широкий — но он ЕСТЬ.
@@ -580,25 +578,19 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     # либо внешний API — см. NEWS_PROVIDER_CHAIN), так что этот режим рабочий.
     # Если ни один источник не отвечает, пробоя просто не будет — вход не
     # состоится, а не откроется вслепую.
-    if trading_mode in (cfg.TradingMode.NEWS_TRADING, cfg.TradingMode.BOTH):
-        # Сигнал уже посчитан ВЫШЕ, до фильтров спреда и ликвидности — см.
-        # длинное пояснение там. Считать его второй раз нельзя: за это время
-        # цена ушла бы, и два ответа на один вопрос разошлись бы.
-        if news_ready and news_conf >= adaptive_threshold:
-            direction, score, is_news_entry = news_dir, news_conf, True
-            sym_state.last_buy_score = score if direction == 1 else 0
-            sym_state.last_sell_score = score if direction == -1 else 0
-        elif news_ready:
-            # Пробой есть, но уверенности не хватило до порога. Раньше это
-            # выглядело как «новости не работают»; теперь так и написано.
-            sym_state.last_reject_reason = (
-                f"Новость есть, но уверенность {news_conf:.0f} ниже порога "
-                f"{adaptive_threshold:.0f}")
-            if trading_mode == cfg.TradingMode.NEWS_TRADING:
-                return
-        elif trading_mode == cfg.TradingMode.NEWS_TRADING:
-            sym_state.last_reject_reason = "Новостной режим: свежего пробоя нет"
-            return
+    # Сигнал уже посчитан ВЫШЕ, до фильтров спреда и ликвидности — см. длинное
+    # пояснение там. Считать его второй раз нельзя: за это время цена ушла бы,
+    # и два ответа на один вопрос разошлись бы.
+    if news_ready and news_conf >= adaptive_threshold:
+        direction, score, is_news_entry = news_dir, news_conf, True
+        sym_state.last_buy_score = score if direction == 1 else 0
+        sym_state.last_sell_score = score if direction == -1 else 0
+    elif news_ready:
+        # Пробой есть, но уверенности не хватило до порога. Раньше это
+        # выглядело как «новости не работают»; теперь так и написано.
+        sym_state.last_reject_reason = (
+            f"Новость есть, но уверенность {news_conf:.0f} ниже порога "
+            f"{adaptive_threshold:.0f}")
 
     # Обычный скальпинг-паттерн — если новостной вход не сработал (или режим = только скальпинг)
     if direction == 0:
@@ -958,7 +950,6 @@ def build_snapshot(acc_info, acc_state: AccountState, sym_states: dict, all_posi
               if acc_state.peak_equity > 0 else 0.0)
 
     effective_profile = control.get_risk_profile() or cfg.RISK_PROFILE
-    effective_mode = control.get_trading_mode() or cfg.TRADING_MODE
 
     return {
         "account": {
@@ -969,7 +960,6 @@ def build_snapshot(acc_info, acc_state: AccountState, sym_states: dict, all_posi
             "currency": acc_info.currency,
         },
         "live_trading": cfg.LIVE_TRADING,
-        "trading_mode": effective_mode.value,
         "risk_profile": effective_profile.value,
         "trades_today": acc_state.trades_today,
         "symbols": symbols_data,
@@ -1090,12 +1080,11 @@ def reload_config_if_changed(sym_states: dict):
                     "программа перестанет видеть уже открытые этим процессом позиции.",
                     old_magic, cfg.MAGIC_NUMBER)
 
-    # reload() создаёт НОВЫЕ классы Enum (RiskProfile/TradingMode) — старые
+    # reload() создаёт НОВЫЙ класс Enum (RiskProfile) — старые
     # переопределения профиля/режима с дашборда ссылались бы на "старые" классы
     # и перестали бы совпадать при сравнении. Поэтому сбрасываем их на дефолт
     # из свежего config.py; если нужно — просто выбери профиль/режим на дашборде заново.
     control.set_risk_profile(None)
-    control.set_trading_mode(None)
 
     # Новые символы, добавленные в SYMBOLS, подключаются на лету.
     # Убранные из SYMBOLS — не удаляются из обработки: их открытые сделки
@@ -1127,10 +1116,9 @@ def start_dashboard_thread():
 
 def print_status(sym_states: dict, acc_state: AccountState, equity: float):
     effective_profile = control.get_risk_profile() or cfg.RISK_PROFILE
-    effective_mode = control.get_trading_mode() or cfg.TRADING_MODE
     print("-" * 78)
     print(f"Equity: {equity:.2f} | Сделок сегодня: {acc_state.trades_today} | "
-          f"LIVE_TRADING={cfg.LIVE_TRADING} | режим={effective_mode.value} | профиль={effective_profile.value}")
+          f"LIVE_TRADING={cfg.LIVE_TRADING} | профиль={effective_profile.value}")
     for sym, st in sym_states.items():
         print(f"  [{sym}] Score BUY {st.last_buy_score:.1f} / SELL {st.last_sell_score:.1f} | "
               f"Режим рынка: {st.current_regime} | Серия убытков: {st.consecutive_losses} | "
@@ -1624,8 +1612,8 @@ def main(stop_event=None, start_dashboard: bool = True):
     if restored:
         log.info("Норма спреда восстановлена по %d парам", restored)
 
-    log.info("Запуск AI Scalper Standalone | LIVE_TRADING=%s | режим=%s | профиль=%s | символы=%s",
-              cfg.LIVE_TRADING, cfg.TRADING_MODE.value, cfg.RISK_PROFILE.value, cfg.SYMBOLS)
+    log.info("Запуск AI Scalper Standalone | LIVE_TRADING=%s | профиль=%s | символы=%s",
+              cfg.LIVE_TRADING, cfg.RISK_PROFILE.value, cfg.SYMBOLS)
     if not cfg.LIVE_TRADING:
         log.warning("LIVE_TRADING=False — это СУХОЙ ПРОГОН, реальные ордера отправляться НЕ будут.")
 

@@ -545,28 +545,45 @@ def test_news_mode_is_on() -> None:
     fresh = types.ModuleType("config_fresh")
     exec((APP / "config.py.example").read_text(encoding="utf-8"), fresh.__dict__)
 
-    mode = getattr(fresh.TRADING_MODE, "name", str(fresh.TRADING_MODE))
-    check(mode in ("BOTH", "NEWS_TRADING"),
-          "Режим торговли включает новости", mode)
-    check(mode == "BOTH",
-          "И это BOTH: новости в приоритете, но без них бот не простаивает",
-          mode)
+    # ВЫБОРА РЕЖИМА БОЛЬШЕ НЕТ. Он и был причиной: «скальпинг» просто
+    # отрезал новостную ветку. Владелец: «убери все режимы торговли, так как
+    # всё равно работает только один».
+    check(not hasattr(fresh, "TRADING_MODE"),
+          "Настройки режима торговли больше нет")
+    check(not hasattr(fresh, "TradingMode"),
+          "И перечисления режимов тоже")
     check(fresh.NEWS_TRADE_MIN_IMPACT == "medium",
           "Порог важности снижен до medium — отрабатываются не только "
           "самые крупные новости", str(fresh.NEWS_TRADE_MIN_IMPACT))
 
     src = (APP / "main.py").read_text(encoding="utf-8")
-    check("TradingMode.NEWS_TRADING" in src,
+    check("news_calendar.detect_news_breakout" in src,
           "Главный цикл умеет входить по новости")
+    check("TradingMode" not in src,
+          "И делает это БЕЗУСЛОВНО, без выбора режима")
 
     migrate = (APP / "config_migrate.py").read_text(encoding="utf-8")
-    check("MIGRATED_NEWS_TRADING_ON" in migrate, "Есть одноразовая миграция")
-    check("_enable_news_mode" in migrate,
-          "И она переключает режим торговли, а не только порог")
-    body = migrate.split("def _enable_news_mode", 1)[1].split("\ndef ", 1)[0]
-    check('value.attr == "SCALPING"' in body,
-          "Режим трогается ТОЛЬКО если стоит заводской SCALPING — "
-          "выбранный человеком не перебиваем")
+    check("MIGRATED_NEWS_TRADING_ON" in migrate,
+          "Одноразовая миграция порога важности осталась")
+    check("_enable_news_mode" not in migrate,
+          "А переключение режима из неё убрано — переключать больше нечего")
+
+    # СТАРЫЙ config.py НЕ ДОЛЖЕН СЛОМАТЬСЯ. У людей, кто уже пользуется
+    # программой, строки class TradingMode и TRADING_MODE остались в их
+    # файле. Удалять их незачем, но и ломаться от них программа не должна.
+    старый = types.ModuleType("config_old")
+    текст = (APP / "config.py.example").read_text(encoding="utf-8") + """
+class TradingMode(Enum):
+    SCALPING = "scalping"
+    NEWS_TRADING = "news_trading"
+    BOTH = "both"
+TRADING_MODE = TradingMode.SCALPING
+"""
+    try:
+        exec(текст, старый.__dict__)
+        check(True, "Старый config.py с прежними строками по-прежнему читается")
+    except Exception as e:  # noqa: BLE001
+        check(False, "Старый config.py по-прежнему читается", str(e))
 
 
 def test_news_explain() -> None:
@@ -576,16 +593,17 @@ def test_news_explain() -> None:
     import news_calendar as nc
     from datetime import datetime as _dt, timedelta as _td
 
-    saved_mode = CFG.TRADING_MODE
     saved_get = nc._get_events
     saved_detect = nc.detect_news_breakout
     saved_impact = getattr(CFG, "NEWS_TRADE_MIN_IMPACT", "medium")
+    saved_filter = getattr(CFG, "USE_NEWS_FILTER", True)
     try:
-        CFG.TRADING_MODE = CFG.TradingMode.SCALPING
+        # Выключить новости отдельным режимом больше нельзя — режимов нет.
+        # Единственный выключатель остался один, он же и называется.
+        CFG.USE_NEWS_FILTER = False
         text = nc.explain_news_entry("EURUSD")
-        check("выключен" in text, "Выключенный режим назван первым", text)
-
-        CFG.TRADING_MODE = CFG.TradingMode.BOTH
+        check("выключены" in text, "Выключенный источник назван первым", text)
+        CFG.USE_NEWS_FILTER = True
 
         nc._get_events = lambda: ([], "сервис календаря остановлен")
         text = nc.explain_news_entry("EURUSD")
@@ -630,7 +648,7 @@ def test_news_explain() -> None:
         check("Есть новостной сигнал" in text, "Сигнал показан", text)
         check("вверх" in text, "И направление названо", text)
     finally:
-        CFG.TRADING_MODE = saved_mode
+        CFG.USE_NEWS_FILTER = saved_filter
         CFG.NEWS_TRADE_MIN_IMPACT = saved_impact
         nc._get_events = saved_get
         nc.detect_news_breakout = saved_detect

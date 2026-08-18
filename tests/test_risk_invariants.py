@@ -68,7 +68,6 @@ ctrl = types.ModuleType("control")
 ctrl.control = types.SimpleNamespace(
     get_lot_override=lambda symbol: 0,
     get_risk_profile=lambda: None,
-    get_trading_mode=lambda: "",
     is_symbol_enabled=lambda symbol: True,
     is_paused=lambda: False,
 )

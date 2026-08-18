@@ -24,7 +24,6 @@ class Control:
         self._lock = threading.Lock()
         self._paused = False
         self._risk_profile = None   # None = использовать cfg.RISK_PROFILE по умолчанию
-        self._trading_mode = None   # None = использовать cfg.TRADING_MODE по умолчанию
         self.close_requests: "queue.Queue[int]" = queue.Queue()
         self._close_all_requested = False
         self._close_profitable_requested = False
@@ -64,14 +63,6 @@ class Control:
     def set_risk_profile(self, profile):
         with self._lock:
             self._risk_profile = profile
-
-    def get_trading_mode(self):
-        with self._lock:
-            return self._trading_mode
-
-    def set_trading_mode(self, mode):
-        with self._lock:
-            self._trading_mode = mode
 
     def request_close(self, ticket: int):
         self.close_requests.put(int(ticket))

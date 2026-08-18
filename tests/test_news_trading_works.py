@@ -180,9 +180,10 @@ def test_settings_exist_and_are_sane() -> None:
           "И он шире обычного, иначе смысла в нём нет",
           str(getattr(CFG, "NEWS_MAX_SPREAD_MULT", 0)))
 
-    режим = getattr(CFG, "TRADING_MODE", None)
-    check("BOTH" in str(режим),
-          "По умолчанию новостной вход включён (режим BOTH)", str(режим))
+    check(not hasattr(CFG, "TRADING_MODE"),
+          "Выбора режима торговли больше нет — новостной вход работает всегда")
+    check("TradingMode" not in ИСХОДНИК,
+          "И торговый цикл о режимах ничего не знает")
     check(getattr(CFG, "NEWS_HARD_BLOCK_WINDOW_MIN", 1) == 0,
           "Паузы вокруг новостей нет — иначе она сама и запрещала бы вход")
     check(getattr(CFG, "USE_NEWS_FILTER", False) is True,
@@ -236,12 +237,12 @@ def test_explainer_names_the_real_reason() -> None:
         check("через" in текст and "мин" in текст,
               "Сказано, через сколько ближайшая новость", текст[:90])
 
-        # Режим выключен — это тоже причина, и её надо назвать.
-        было_режим = CFG.TRADING_MODE
-        CFG.TRADING_MODE = CFG.TradingMode.SCALPING
+        # Источник выключен совсем — это тоже причина, и её надо назвать.
+        было_фильтр = CFG.USE_NEWS_FILTER
+        CFG.USE_NEWS_FILTER = False
         текст = news_calendar.explain_news_entry("EURUSD")
-        check("выключен" in текст, "Выключенный режим назван прямо", текст[:70])
-        CFG.TRADING_MODE = было_режим
+        check("выключены" in текст, "Выключенный источник назван прямо", текст[:70])
+        CFG.USE_NEWS_FILTER = было_фильтр
     finally:
         news_calendar._get_events = было_события
 

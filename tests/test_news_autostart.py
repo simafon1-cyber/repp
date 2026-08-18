@@ -228,12 +228,17 @@ def test_repair_installs_itself() -> None:
             mt5_install.install_all = saved_install
 
 
-def test_only_when_news_mode() -> None:
-    """В чужой терминал без нужды не лезем."""
+def test_only_when_news_source_is_wanted() -> None:
+    """В чужой терминал без нужды не лезем.
+
+    Раньше это зависело от режима торговли. Режимов больше нет — они были не
+    тремя стратегиями, а одной и двумя способами отрезать от неё половину.
+    Теперь единственная причина не налаживать календарь — выключенный
+    источник новостей."""
     print("\n[Чиним только когда новости нужны]")
     saved_find = mt5_install.find_terminals
     saved_install = mt5_install.install_all
-    saved_mode = CFG.TRADING_MODE
+    saved_filter = CFG.USE_NEWS_FILTER
     calls = []
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -242,26 +247,19 @@ def test_only_when_news_mode() -> None:
         mt5_install.install_all = lambda progress=None: (
             calls.append("install") or {"copied": 1, "compiled": 1, "errors": []})
         try:
-            CFG.TRADING_MODE = CFG.TradingMode.SCALPING
+            CFG.USE_NEWS_FILTER = False
             na.reset_checks()
             state = na.ensure_ready(force=True)
-            check(state["news_mode"] is False, "Новостной режим выключен")
+            check(state["news_mode"] is False, "Новости выключены совсем")
             check(calls == [], "В терминал не полезли", str(calls))
 
-            CFG.TRADING_MODE = CFG.TradingMode.NEWS_TRADING
+            CFG.USE_NEWS_FILTER = True
             na.reset_checks()
             na.ensure_ready(force=True)
-            check(calls == ["install"], "Новостной режим — ставим сами", str(calls))
-
-            # Режим BOTH тоже считается новостным
-            calls.clear()
-            CFG.TRADING_MODE = CFG.TradingMode.BOTH
-            na.reset_checks()
-            check(na.check()["news_mode"] is True, "Режим BOTH тоже новостной")
+            check(calls == ["install"], "Новости нужны — ставим сами", str(calls))
 
             # Проверка не гоняется на каждом вызове
             calls.clear()
-            CFG.TRADING_MODE = CFG.TradingMode.NEWS_TRADING
             na.reset_checks()
             na.ensure_ready(force=True)
             first = len(calls)
@@ -271,7 +269,7 @@ def test_only_when_news_mode() -> None:
         finally:
             mt5_install.find_terminals = saved_find
             mt5_install.install_all = saved_install
-            CFG.TRADING_MODE = saved_mode
+            CFG.USE_NEWS_FILTER = saved_filter
             na.reset_checks()
 
 
@@ -336,7 +334,7 @@ def main() -> int:
     test_calendar_freshness()
     test_check_and_texts()
     test_repair_installs_itself()
-    test_only_when_news_mode()
+    test_only_when_news_source_is_wanted()
     test_honest_about_manual_step()
     test_calendar_refreshes_itself()
 
