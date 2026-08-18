@@ -657,10 +657,18 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
             continue
         price = tick.bid if is_buy else tick.ask
         profit_points = (price - p.price_open) / point if is_buy else (p.price_open - price) / point
+        # ВОЗРАСТ СЧИТАЕТСЯ ПЕРВЫМ, И ЭТО НЕ КОСМЕТИКА. Именно здесь позиция
+        # впервые попадает в _position_first_seen. update_peak_profit ниже
+        # тоже спрашивает возраст (чтобы запомнить, КОГДА был пик), и если
+        # пустить его вперёд, то отметка времени создастся там — а к этой
+        # строке сделке будет уже несколько микросекунд от роду. Цель прибыли
+        # ужимается пропорционально возрасту, и на первом же проходе она
+        # оказывалась чуть меньше положенного. Поймано тестом
+        # test_profit_taking.
+        age_seconds = position_age_seconds(p.ticket)
         peak_points = update_peak_profit(p.ticket, profit_points)
         trough_points = update_position_trough(p.ticket, profit_points)
         risk_points = update_position_risk(p.ticket, p.price_open, p.sl, point)
-        age_seconds = position_age_seconds(p.ticket)
 
         # 0) Частичное закрытие при достижении профита (один раз за сделку) —
         # как "Partial Close" в MQL5-советнике. Не мешает BE/трейлингу ниже —

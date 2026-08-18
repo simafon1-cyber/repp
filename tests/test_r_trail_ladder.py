@@ -104,22 +104,46 @@ def test_protection_starts_earlier_than_before() -> None:
           "На первой ступени защита включается")
 
     # Именно ради этого всё и делалось: сделка, дошедшая до 0.5R и
-    # развернувшаяся, раньше теряла ПОЛНЫЙ стоп (-1R). Теперь она в нуле.
-    check(lock(0.5) is not None and lock(0.5) >= 0.0,
+    # развернувшаяся, раньше теряла ПОЛНЫЙ стоп (-1R). Теперь её риск
+    # урезан. НЕ до нуля — это осознанное решение, см. следующий тест.
+    check(lock(0.5) is not None and lock(0.5) > -1.0,
           "Сделка на +0.5R уже защищена (раньше теряла полный стоп)",
+          str(lock(0.5)))
+    check(lock(0.5) is not None and lock(0.5) <= -0.25,
+          "Но стоп НЕ прижат к цене входа — сделке оставлено место",
           str(lock(0.5)))
 
 
-def test_first_step_is_break_even_not_profit() -> None:
-    print("\n[Первая ступень — безубыток, а не фиксация прибыли]")
+def test_first_step_reduces_risk_but_is_not_break_even() -> None:
+    """ЧИСЛА ЗДЕСЬ ПОМЕНЯЛИСЬ, И ЭТО НЕ ОПЕЧАТКА.
+
+    Раньше первая ступень ставила стоп РОВНО в безубыток на +0.30R. Замер
+    показал, чем это оборачивается: через эту ступень проходило 48.8% всех
+    сделок, и после неё сделка уже не могла принести больше нуля, если
+    движение не продолжалось. Прибыль срезалась в самом начале.
+
+    Теперь первая ступень только УРЕЗАЕТ риск и не прижимает стоп к цене
+    входа. Проверено на EURUSD и XAUUSD, на TRAIN, VALIDATION и OOS — итог
+    улучшился во всех шести сочетаниях (см. docs/EXIT_VERSIONS.md)."""
+    print("\n[Первая ступень урезает риск, а не ставит безубыток]")
     first_trigger, first_lock = min(LADDER, key=lambda s: float(s[0]))
-    check(float(first_lock) == 0.0,
-          "Первая ступень запирает ровно ноль — это безубыток",
+    check(float(first_lock) < 0.0,
+          "Первая ступень урезает риск, а не запирает ноль",
+          str(first_lock))
+    check(float(first_lock) > -1.0,
+          "Но риск действительно урезан — стоп ближе исходного",
           str(first_lock))
     # Запирать прибыль сразу нельзя: стоп встал бы слишком близко к цене и
     # выбивался обычным шумом, а сделка не успевала бы развернуться в плюс.
     check(float(first_trigger) > 0,
-          "Но включается не мгновенно, а пройдя часть риска")
+          "Включается не мгновенно, а пройдя часть риска")
+    check(float(first_trigger) >= 0.5,
+          "И не раньше половины риска: до этого не вмешиваемся вовсе",
+          str(first_trigger))
+
+    # Безубыток никуда не делся — он просто стал ВТОРОЙ ступенью.
+    нули = [float(з) for _, з in LADDER if abs(float(з)) < 1e-9]
+    check(len(нули) == 1, "Безубыток в лестнице есть, ровно один раз")
 
 
 def test_ladder_never_locks_more_than_earned() -> None:
@@ -234,9 +258,16 @@ def test_ladder_is_wired_into_position_management() -> None:
     # Ключевое: результат обязан пройти через _better_sl. Именно он и есть
     # запрет двигать стоп назад — без него лестница могла бы РАСШИРИТЬ стоп
     # и превратить защиту в свою противоположность.
-    tail = src.split("r_ladder_lock_points", 1)[1][:600]
-    check("_better_sl" in tail,
-          "Стоп от лестницы проходит через _better_sl (только в сторону прибыли)")
+    # Раньше здесь искалось прямое обращение к _better_sl. Теперь все четыре
+    # механизма ходят через общую точку `предложить`, а она внутри вызывает
+    # тот же _better_sl. Проверяем и то, и другое: важно не имя вызова, а
+    # что стоп не может уехать назад.
+    tail = src.split("r_ladder_lock_points", 1)[1][:900]
+    check("предложить(" in tail or "_better_sl" in tail,
+          "Стоп от лестницы проходит через общую точку переноса")
+    точка = src.split("def предложить", 1)
+    check(len(точка) > 1 and "_better_sl" in точка[1][:400],
+          "А она двигает стоп только через _better_sl (никогда назад)")
 
 
 def test_better_sl_never_moves_stop_backwards() -> None:
@@ -488,7 +519,7 @@ def test_get_price_is_safe_without_connection() -> None:
 
 def main() -> int:
     test_protection_starts_earlier_than_before()
-    test_first_step_is_break_even_not_profit()
+    test_first_step_reduces_risk_but_is_not_break_even()
     test_ladder_never_locks_more_than_earned()
     test_ladder_only_grows()
     test_giveback_tightens_but_never_loosens()
