@@ -63,6 +63,7 @@ action, ATR/ADX/RSI/объём, спред (берётся из истории),
 
 import logging
 import math
+import random
 from datetime import datetime, timezone
 
 log = logging.getLogger("baseline_engine")
@@ -191,7 +192,8 @@ def atr_bucket(atr_value: float, средний_atr: float) -> str:
 # =====================================================================
 def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
         max_bars: int = 0, progress=None, only_direction: int = 0,
-        record_horizon: int = 0) -> dict:
+        record_horizon: int = 0, record_random: float = 0.0,
+        random_seed: int = 0) -> dict:
     """Прогнать живую стратегию по истории одного инструмента.
 
     Возвращает {"trades", "equity_curve", "bars_seen", "not_reproducible",
@@ -219,7 +221,21 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
     НИКОГДА не участвует ни в одном решении. Оно складывается в отдельный
     список и читается только потом, при разборе. Ни один вход, ни один выход,
     ни один фильтр этих чисел не видит — проверка на заглядывание вперёд
-    («отравленное будущее») по-прежнему проходит."""
+    («отравленное будущее») по-прежнему проходит.
+
+    record_random — КОНТРОЛЬНАЯ ГРУППА: с этой вероятностью на каждом баре
+    записывается путь от СЛУЧАЙНОГО входа в случайную сторону.
+
+    Зачем она нужна. Сказать «после наших входов цена проходит 2R» само по
+    себе не значит ничего: она проходит 2R после ЛЮБОГО бара, потому что за
+    восемь часов рынок успевает сходить куда угодно. Вопрос всегда
+    сравнительный: лучше ли наши входы, чем взятые наугад в то же время на
+    том же инструменте. Без контрольной группы на этот вопрос ответить
+    нельзя, а без ответа на него нельзя говорить ни о каком преимуществе.
+
+    Случайные входы НЕ торгуются и ни на что не влияют: они не занимают
+    позицию, не пополняют окно автообучения, не меняют счёт. Они только
+    записываются."""
     import pandas as pd
 
     import config as cfg
@@ -279,6 +295,8 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
     профиль = rm.get_profile()
     сделки = []
     пути = []
+    случайные = []
+    случай = random.Random(random_seed)
     кривая = []
     отказы = {}
     открытая = None
@@ -319,6 +337,24 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
                         состояние.consecutive_losses += 1
                     else:
                         состояние.consecutive_losses = 0
+
+            # КОНТРОЛЬНАЯ ГРУППА. Стоит здесь, ДО всех фильтров и до решения
+            # о входе: случайный вход на то и случайный, что ни один фильтр
+            # его не касается. Ни одна строка ниже об этом списке не знает.
+            if record_random > 0 and atr_value > 0 and случай.random() < record_random:
+                напр = 1 if случай.random() < 0.5 else -1
+                sl_д = rm.apply_min_stop_floor(
+                    symbol, atr_value * профиль["atr_sl_multiplier"],
+                    atr_value, point)
+                случайные.append(_записать_путь(
+                    ряд, i,
+                    {"symbol": symbol, "direction": напр,
+                     "entry_price": float(бар["close"]) + напр * текущий["spread"] * point,
+                     "entry_time": int(бар["time"]), "score": 0.0,
+                     "session": session_of(int(бар["time"]), смещение),
+                     "atr_bucket": "не размечен", "regime": состояние.current_regime,
+                     "sl_atr": (sl_д / atr_value) if atr_value > 0 else 0.0},
+                    atr_value, point, текущий["spread"], record_horizon or 100))
 
             состояние.bar_counter += 1
             mr.update_market_regime(состояние, df_ind)
@@ -459,6 +495,7 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
         "not_reproducible": NOT_REPRODUCIBLE,
         "rejects": отказы,
         "paths": пути,
+        "random_paths": случайные,
     }
 
 
