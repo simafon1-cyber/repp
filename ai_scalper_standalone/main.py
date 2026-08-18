@@ -415,18 +415,16 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     if max_per_day and acc_state.trades_today >= max_per_day:
         sym_state.last_reject_reason = "Достигнут лимит сделок за день"
         return
-    if not rm.spread_ok(symbol, atr_value, point):
-        sym_state.last_reject_reason = "Спред слишком широкий"
-        return
     if atr_value <= 0:
         sym_state.last_reject_reason = "Индикаторы не готовы"
         return
-    if not rm.rollover_guard_ok(profile["ignore_soft_filters"]):
-        sym_state.last_reject_reason = "Ролловерная дыра ликвидности — сигнал пропущен"
-        return
-    if not rm.trading_hours_ok():
-        sym_state.last_reject_reason = "Вне разрешённых часов торговли"
-        return
+
+    # ДЕШЁВЫЕ ЗАПРЕТЫ — ДО НОВОСТЕЙ. Порядок здесь не косметический: расчёт
+    # новостного пробоя лезет к источнику календаря и запрашивает минутные
+    # свечи. Делать эту работу по паре, которая всё равно отключена или уже
+    # упёрлась в лимит сделок, — значит тратить связь и время впустую. Сами
+    # запреты от переноса не ослабли: они по-прежнему возвращают управление
+    # до любого входа.
 
     # ИНСТРУМЕНТ ВЫКЛЮЧЕН ВРУЧНУЮ (владелец: «отключи торговлю золота»).
     #
@@ -449,36 +447,6 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     if symbol_blocked:
         sym_state.last_reject_reason = symbol_blocked
         return
-
-    # РЫНОК ЗАКРЫТ ИЛИ НЕЛИКВИДЕН — спрашиваем у самого рынка, а не у часов.
-    #
-    # Владелец: «не по моему времени, а когда именно рынок закрыт». Часы для
-    # этого не годятся: время компьютера и время сервера брокера расходятся
-    # на 2-3 часа, у разных брокеров по-разному, и окно, заданное часами,
-    # промахивается мимо цели целиком. Признаки берутся из рынка: запрет
-    # брокера, замершая цена, спред намного шире обычного для этой же пары
-    # (см. market_hours.py).
-    #
-    # ДЕЙСТВУЕТ ВСЕГДА, включая профиль с ignore_soft_filters («Истеричка») —
-    # тот самый профиль, на котором и получены ночные убытки. Иначе вышло бы
-    # как с ролловерной паузой выше: настройка включена, а профиль её молча
-    # отменяет, и эффекта ноль. Тот же приём уже применён к анти-флэтовому
-    # фильтру ниже.
-    #
-    # Открытые сделки это НЕ трогает: запрещается только вход, только по
-    # этой паре. Трейлинг, безубыток и частичное закрытие работают как всегда.
-    if getattr(cfg, "USE_MARKET_CLOSED_GUARD", False):
-        market_reason = market_hours.market_block_reason(
-            symbol,
-            trade_mode=getattr(mt5.symbol_info(symbol), "trade_mode", None),
-            spread_points=mt5c.get_spread_points(symbol),
-            dead_seconds=float(getattr(cfg, "MARKET_DEAD_SECONDS", 90) or 0),
-            thin_ratio=(float(getattr(cfg, "THIN_SPREAD_RATIO", 0) or 0)
-                        if getattr(cfg, "USE_THIN_MARKET_GUARD", False) else 0.0),
-            thin_min_samples=int(getattr(cfg, "THIN_MIN_SAMPLES", 30) or 30))
-        if market_reason:
-            sym_state.last_reject_reason = "Вход закрыт: " + market_reason
-            return
 
     # ОБЩИЙ ПОТОЛОК ЧИСЛА ОДНОВРЕМЕННЫХ СДЕЛОК — по всем парам сразу.
     #
@@ -510,15 +478,98 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         sym_state.last_reject_reason = same_bet
         return
 
+    # =================================================================
+    # НОВОСТНОЙ ВХОД СЧИТАЕТСЯ ЗДЕСЬ — ДО ФИЛЬТРОВ, КОТОРЫЕ САМА НОВОСТЬ
+    # И ВКЛЮЧАЕТ. Владелец: «ни разу новостная не работала».
+    # =================================================================
+    # ПОЧЕМУ ОНА НЕ РАБОТАЛА. Проверка новостного пробоя стояла НИЖЕ по
+    # тексту — после фильтра спреда, после защиты от неликвидного рынка,
+    # после ролловерной паузы. А новость всегда расширяет спред: это её
+    # первое и самое надёжное следствие. Получалось так:
+    #
+    #     вышла новость -> спред расширился -> сработал фильтр спреда ->
+    #     функция вернулась -> до новостной ветки дело не дошло.
+    #
+    # То есть новостной режим отключался ровно в ту минуту, ради которой он
+    # и существует. Сколько бы источников календаря ни было настроено и
+    # какой бы порог важности ни стоял, входа не происходило никогда.
+    #
+    # ЧТО ОСТАЁТСЯ НА МЕСТЕ. Всё, что защищает деньги, стоит ВЫШЕ и
+    # проверено до этой строки: дневной лимит убытка, лимит просадки, пауза
+    # с дашборда, отключённая пара, самоотключение убыточного инструмента,
+    # лимит одновременных сделок. Новость не даёт права обойти ни одну из
+    # них. Снимаются ровно те фильтры, которые сама новость и вызывает.
+    trading_mode = control.get_trading_mode() or cfg.TRADING_MODE
+    news_ready, news_dir, news_conf = False, 0, 0.0
+    if trading_mode in (cfg.TradingMode.NEWS_TRADING, cfg.TradingMode.BOTH):
+        try:
+            news_ready, news_dir, news_conf = news_calendar.detect_news_breakout(
+                symbol, cfg.NEWS_BREAKOUT_WINDOW_MIN)
+        except Exception as e:  # noqa: BLE001
+            # Источник календаря отвалился — это не повод уронить весь цикл.
+            # Молчать тоже нельзя: иначе «новости не работают» опять останется
+            # без объяснения.
+            log.warning("Новости по %s: %s", symbol, e)
+            sym_state.last_news_error = str(e)
+
+    if not rm.spread_ok(symbol, atr_value, point):
+        # У новостного входа потолок спреда свой, более широкий — но он ЕСТЬ.
+        if not (news_ready and rm.news_spread_ok(symbol, atr_value, point)):
+            sym_state.last_reject_reason = (
+                "Спред слишком широкий даже для новостного входа"
+                if news_ready else "Спред слишком широкий")
+            return
+    if not news_ready and not rm.rollover_guard_ok(profile["ignore_soft_filters"]):
+        # Ролловер — это дыра ликвидности, а не новость. Но если новость
+        # ВСЁ-ТАКИ вышла в эти минуты, пропускать её незачем: причина паузы
+        # (никого нет на рынке) в этот момент как раз не выполняется.
+        sym_state.last_reject_reason = "Ролловерная дыра ликвидности — сигнал пропущен"
+        return
+    if not rm.trading_hours_ok():
+        sym_state.last_reject_reason = "Вне разрешённых часов торговли"
+        return
+
+    # РЫНОК ЗАКРЫТ ИЛИ НЕЛИКВИДЕН — спрашиваем у самого рынка, а не у часов.
+    #
+    # Владелец: «не по моему времени, а когда именно рынок закрыт». Часы для
+    # этого не годятся: время компьютера и время сервера брокера расходятся
+    # на 2-3 часа, у разных брокеров по-разному, и окно, заданное часами,
+    # промахивается мимо цели целиком. Признаки берутся из рынка: запрет
+    # брокера, замершая цена, спред намного шире обычного для этой же пары
+    # (см. market_hours.py).
+    #
+    # ДЕЙСТВУЕТ ВСЕГДА, включая профиль с ignore_soft_filters («Истеричка») —
+    # тот самый профиль, на котором и получены ночные убытки. Иначе вышло бы
+    # как с ролловерной паузой выше: настройка включена, а профиль её молча
+    # отменяет, и эффекта ноль. Тот же приём уже применён к анти-флэтовому
+    # фильтру ниже.
+    #
+    # Открытые сделки это НЕ трогает: запрещается только вход, только по
+    # этой паре. Трейлинг, безубыток и частичное закрытие работают как всегда.
+    if getattr(cfg, "USE_MARKET_CLOSED_GUARD", False):
+        market_reason = market_hours.market_block_reason(
+            symbol,
+            trade_mode=getattr(mt5.symbol_info(symbol), "trade_mode", None),
+            spread_points=mt5c.get_spread_points(symbol),
+            dead_seconds=float(getattr(cfg, "MARKET_DEAD_SECONDS", 90) or 0),
+            # Признак «спред намного шире обычного» на новости выполняется
+            # ВСЕГДА — это и есть новость. Для новостного входа его снимаем,
+            # а жёсткие признаки (брокер запретил торговлю, цена замерла)
+            # остаются: они с новостью никак не связаны.
+            thin_ratio=(float(getattr(cfg, "THIN_SPREAD_RATIO", 0) or 0)
+                        if (getattr(cfg, "USE_THIN_MARKET_GUARD", False)
+                            and not news_ready) else 0.0),
+            thin_min_samples=int(getattr(cfg, "THIN_MIN_SAMPLES", 30) or 30))
+        if market_reason:
+            sym_state.last_reject_reason = "Вход закрыт: " + market_reason
+            return
+
     direction = 0
     score = 0.0
     is_news_entry = False
     hedge_directions = None  # None = обычный вход в одну сторону; иначе [1, -1] — хедж (см. ниже)
 
     trend_df = mt5c.get_rates_df(symbol, cfg.TREND_TIMEFRAME, count=cfg.EMA_TREND_PERIOD + 10)
-
-    # Режим торговли можно сменить с дашборда "на лету" — если не переопределён, берём из config.py
-    trading_mode = control.get_trading_mode() or cfg.TRADING_MODE
 
     # Автообучение: порог входа плавно подстраивается под недавний винрейт ПО
     # ЭТОМУ символу (см. auto_learning.py) — в жёстких границах из config.py.
@@ -530,11 +581,21 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     # Если ни один источник не отвечает, пробоя просто не будет — вход не
     # состоится, а не откроется вслепую.
     if trading_mode in (cfg.TradingMode.NEWS_TRADING, cfg.TradingMode.BOTH):
-        has_signal, news_dir, news_conf = news_calendar.detect_news_breakout(symbol, cfg.NEWS_BREAKOUT_WINDOW_MIN)
-        if has_signal and news_conf >= adaptive_threshold:
+        # Сигнал уже посчитан ВЫШЕ, до фильтров спреда и ликвидности — см.
+        # длинное пояснение там. Считать его второй раз нельзя: за это время
+        # цена ушла бы, и два ответа на один вопрос разошлись бы.
+        if news_ready and news_conf >= adaptive_threshold:
             direction, score, is_news_entry = news_dir, news_conf, True
             sym_state.last_buy_score = score if direction == 1 else 0
             sym_state.last_sell_score = score if direction == -1 else 0
+        elif news_ready:
+            # Пробой есть, но уверенности не хватило до порога. Раньше это
+            # выглядело как «новости не работают»; теперь так и написано.
+            sym_state.last_reject_reason = (
+                f"Новость есть, но уверенность {news_conf:.0f} ниже порога "
+                f"{adaptive_threshold:.0f}")
+            if trading_mode == cfg.TradingMode.NEWS_TRADING:
+                return
         elif trading_mode == cfg.TradingMode.NEWS_TRADING:
             sym_state.last_reject_reason = "Новостной режим: свежего пробоя нет"
             return

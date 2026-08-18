@@ -232,9 +232,30 @@ def explain_news_entry(symbol: str, window_minutes: int = 0) -> str:
     has_signal, direction, confidence = detect_news_breakout(symbol, window)
     if has_signal:
         side = "вверх" if direction == 1 else "вниз"
+        # СПРЕД НАЗЫВАЕТСЯ ОТДЕЛЬНО. Именно он и отменял новостные входы:
+        # новость расширяет спред, обычный потолок срабатывал, и до новостной
+        # ветки дело не доходило. Теперь у неё свой потолок — и человек
+        # должен видеть, проходит вход по нему или нет.
+        хвост = ""
+        try:
+            import mt5_connector as mt5c
+            import risk_manager as rm
+            спред = mt5c.get_spread_points(symbol)
+            обычный = rm.spread_ok(symbol, 0.0, mt5c.get_symbol_point(symbol))
+            новостной = rm.news_spread_ok(symbol, 0.0, mt5c.get_symbol_point(symbol))
+            if not новостной:
+                хвост = (f" НО спред сейчас {спред} пунктов — шире даже "
+                         f"новостного потолка, вход не состоится.")
+            elif not обычный:
+                хвост = (f" Спред сейчас {спред} пунктов — для обычной сделки "
+                         f"это много, для новостной проходит.")
+            else:
+                хвост = f" Спред {спред} пунктов — обычный."
+        except Exception:  # noqa: BLE001
+            pass
         return (f"Есть новостной сигнал по «{event['event']}»: рынок пошёл "
                 f"{side}, оценка {confidence:.0f}. Вход состоится, если "
-                f"пройдут проверки риска.")
+                f"пройдут проверки риска.{хвост}")
     return (f"Новость «{event['event']}» ({event['impact']}) вышла "
             f"{int(minutes_since)} мин назад, но цена не дала явного движения "
             f"— тело свечей меньше "

@@ -56,6 +56,27 @@ def spread_ok(symbol: str, atr_value: float, point: float) -> bool:
     return mt5c.get_spread_points(symbol) <= max_spread
 
 
+def news_spread_ok(symbol: str, atr_value: float, point: float) -> bool:
+    """Потолок спреда ДЛЯ НОВОСТНОГО ВХОДА — свой, более широкий.
+
+    ПОЧЕМУ ОН ВООБЩЕ НУЖЕН. Новость всегда расширяет спред: это её первое и
+    самое надёжное следствие. Обычный потолок из-за этого срабатывает ровно в
+    ту минуту, ради которой новостной режим и существует, — и вход не
+    состоится никогда. Владелец: «ни разу новостная не работала».
+
+    ПОЧЕМУ НЕ «БЕЗ ПОТОЛКА ВОВСЕ». Войти при спреде в пятьдесят раз шире
+    обычного — значит подарить брокеру стоп ещё до того, как цена куда-либо
+    пошла. Поэтому потолок остаётся, просто он свой: обычный, умноженный на
+    NEWS_MAX_SPREAD_MULT."""
+    if not getattr(cfg, "USE_SPREAD_FILTER", True):
+        return True
+    множитель = float(getattr(cfg, "NEWS_MAX_SPREAD_MULT", 3.0) or 0)
+    if множитель <= 0:
+        return True                     # 0 = потолка нет вовсе, осознанный выбор
+    потолок = eff_points_threshold(cfg.MAX_SPREAD_POINTS, 0.4, atr_value, point)
+    return mt5c.get_spread_points(symbol) <= потолок * множитель
+
+
 def volatility_ok(atr_series, ignore_soft_filters: bool) -> bool:
     if ignore_soft_filters:
         return True
