@@ -353,6 +353,72 @@ def test_m1_cache_does_not_hammer_the_terminal() -> None:
           "Кэш обновляется по времени последней минутной свечи, а не по часам")
 
 
+def test_m1_in_the_backtest_never_looks_ahead() -> None:
+    """Минутный ATR в проверке на истории берётся ТОЛЬКО из прошлого.
+
+    Это главная опасность минуток: соблазн взять минутку из середины
+    пятиминутного бара. Она уже знает то, чего решение по цене закрытия
+    знать не может, и весь отчёт превращается в самообман."""
+    print("\n[Минутки в стенде не заглядывают вперёд]")
+    import baseline_engine as be
+
+    индекс = {100: 1.0, 200: 2.0, 300: 3.0}
+    времена = sorted(индекс)
+
+    check(be._m1_atr_на_момент(индекс, времена, 250, 9.9) == 2.0,
+          "Берётся последняя минутка НЕ ПОЗЖЕ бара, а не ближайшая")
+    check(be._m1_atr_на_момент(индекс, времена, 200, 9.9) == 2.0,
+          "Минутка ровно на границе бара считается прошлым")
+    check(be._m1_atr_на_момент(индекс, времена, 299, 9.9) == 2.0,
+          "Будущая минутка не берётся, даже если она рядом")
+    check(be._m1_atr_на_момент(индекс, времена, 50, 9.9) == 9.9,
+          "До первой минутки честно возвращается запасной ATR")
+
+
+def test_m1_index_refuses_to_invent_numbers() -> None:
+    """Минутного индекса не должно появляться там, где считать не из чего."""
+    print("\n[Минутный индекс не выдумывает значений]")
+    import baseline_engine as be
+
+    check(be._m1_atr_index(None) is None, "Без свечей индекса нет")
+    check(be._m1_atr_index([]) is None, "Из пустого списка индекса нет")
+    коротко = [{"time": t, "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.0}
+               for t in range(5)]
+    check(be._m1_atr_index(коротко) is None,
+          "Свечей меньше периода ATR — индекса нет, а не ноль")
+
+    длинно = [{"time": t * 60, "open": 1.0, "high": 1.0 + t * 0.001,
+               "low": 1.0 - t * 0.001, "close": 1.0} for t in range(60)]
+    индекс = be._m1_atr_index(длинно)
+    check(индекс is not None and len(индекс) > 0, "На нормальных свечах индекс есть")
+    check(индекс is None or all(з > 0 for з in индекс.values()),
+          "В индексе нет нулей и NaN")
+
+
+def test_version_b_is_skipped_when_there_is_nothing_to_check_it_with() -> None:
+    """Версия B не попадает в отчёт, если минуток нет.
+
+    Показать её без данных значило бы напечатать пустой столбец, который
+    легко принять за результат."""
+    print("\n[Версия B без минуток пропускается]")
+    исходник = (APP / "run_exit_versions.py").read_text(encoding="utf-8")
+
+    check("по_минуткам" in исходник, "Версия B помечена отдельным признаком")
+    check("версии_для" in исходник, "Есть отбор версий по наличию минуток")
+    check("ПРОПУЩЕНА" in исходник,
+          "Про пропуск версии B говорится вслух, а не молча")
+
+    import run_exit_versions as rv
+    без = rv.версии_для(None)
+    check(all(not в.get("по_минуткам") for в in без),
+          "Без минуток версии по M1 в списке нет")
+    с_минутками = rv.версии_для([{"time": 0}])
+    check(any(в.get("по_минуткам") for в in с_минутками),
+          "С минутками версия B появляется сама")
+    check(len(с_минутками) == len(без) + 1,
+          "И появляется ровно одна, остальные не трогаются")
+
+
 def test_new_metrics_exist_and_are_honest() -> None:
     """Метрики из пункта 17. Особенно — что они не врут на пустых данных."""
     print("\n[Метрики отчёта о версиях]")
@@ -421,6 +487,9 @@ if __name__ == "__main__":
     test_m1_management_is_off_until_proven()
     test_m1_falls_back_to_m5_and_never_touches_entry()
     test_m1_cache_does_not_hammer_the_terminal()
+    test_m1_in_the_backtest_never_looks_ahead()
+    test_m1_index_refuses_to_invent_numbers()
+    test_version_b_is_skipped_when_there_is_nothing_to_check_it_with()
     test_new_metrics_exist_and_are_honest()
     test_the_forbidden_things_are_still_forbidden()
     print()

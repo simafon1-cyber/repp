@@ -169,7 +169,7 @@ def slice_for(bars, отрезок):
 # ОДИН ПРОГОН ОДНОГО ВАРИАНТА
 # =====================================================================
 def run_variant(symbol: str, bars, meta: dict, вариант: dict,
-                отрезок, equity: float = 0.0) -> dict:
+                отрезок, equity: float = 0.0, m1_bars=None) -> dict:
     """Прогнать один вариант на одном куске истории.
 
     Возвращает {"вариант", "отрезок", "trades", "money", "сводка", "rejects"}."""
@@ -178,7 +178,8 @@ def run_variant(symbol: str, bars, meta: dict, вариант: dict,
     with правка:
         итог = baseline_engine.run(
             symbol, кусок, meta, equity_start=equity,
-            only_direction=int(вариант.get("направление", 0) or 0))
+            only_direction=int(вариант.get("направление", 0) or 0),
+            m1_bars=m1_bars if вариант.get("по_минуткам") else None)
     сделки = итог.get("trades", [])
     деньги = [float(t["money"]) for t in сделки]
     return {

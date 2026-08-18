@@ -156,6 +156,37 @@ def resample(bars, factor: int):
     return итог
 
 
+def _m1_atr_index(m1_bars, период: int = 14):
+    """Минутный ATR по времени: {время минутной свечи -> ATR в цене}.
+
+    Считается той же функцией indicators.atr, что и в живой торговле — своей
+    формулы здесь нет и быть не должно."""
+    import pandas as pd
+    from indicators import atr as _atr
+    df = pd.DataFrame(list(m1_bars or ()))
+    if df.empty or len(df) <= период:
+        return None
+    значения = _atr(df, период)
+    итог = {}
+    for время, знач in zip(df["time"].tolist(), значения.tolist()):
+        if знач == знач and знач > 0:          # знач == знач отсеивает NaN
+            итог[int(время)] = float(знач)
+    return итог or None
+
+
+def _m1_atr_на_момент(индекс, времена, время_бара, запас):
+    """ATR минутки, действовавший НА МОМЕНТ начала этого бара.
+
+    Берётся последняя минутка, начавшаяся НЕ ПОЗЖЕ бара. Брать минутку из
+    середины бара нельзя: это заглядывание вперёд относительно решения,
+    которое принимается по его цене закрытия."""
+    import bisect
+    поз = bisect.bisect_right(времена, int(время_бара)) - 1
+    if поз < 0:
+        return запас
+    return индекс.get(времена[поз], запас)
+
+
 # =====================================================================
 # СЕССИИ И РЕЖИМЫ — ТОЛЬКО ДЛЯ РАЗБИВКИ СТАТИСТИКИ
 # =====================================================================
@@ -197,7 +228,8 @@ def atr_bucket(atr_value: float, средний_atr: float) -> str:
 def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
         max_bars: int = 0, progress=None, only_direction: int = 0,
         record_horizon: int = 0, record_random: float = 0.0,
-        random_seed: int = 0, record_mirror: bool = False) -> dict:
+        random_seed: int = 0, record_mirror: bool = False,
+        m1_bars=None) -> dict:
     """Прогнать живую стратегию по истории одного инструмента.
 
     Возвращает {"trades", "equity_curve", "bars_seen", "not_reproducible",
@@ -283,6 +315,19 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
                           f"минимум {ОКНО_БАРОВ}. Выгрузите больше истории.")}
 
     инфо = ФальшивыйТерминал(meta)
+
+    # ВЕДЕНИЕ ПОЗИЦИИ ПО МИНУТКАМ. Если минутные свечи переданы, расстояния
+    # трейлинга и пороги защиты считаются по ИХ ATR, а не по ATR рабочего
+    # таймфрейма. Вход и первоначальный стоп это НЕ трогает — ровно как в
+    # живой торговле (см. management_atr в main.py).
+    #
+    # ЧЕСТНАЯ ОГОВОРКА, КОТОРУЮ НЕЛЬЗЯ ПРОПУСКАТЬ: даже с минутками проверка
+    # на истории видит только четыре цены пятиминутного бара, а живая
+    # программа смотрит на цену каждую секунду. Минутный ATR делает
+    # РАССТОЯНИЯ точнее, но НЕ делает точнее момент касания. Совпадения с
+    # живой торговлей это не даёт и дать не может.
+    m1_индекс = _m1_atr_index(m1_bars) if m1_bars else None
+    m1_времена = sorted(m1_индекс) if m1_индекс else None
     point = инфо.point
     цена_пункта = float(meta.get("money_per_point_per_lot", 0) or 0)
     смещение = meta.get("server_utc_offset_hours")
@@ -342,7 +387,11 @@ def run(symbol: str, bars, meta: dict, equity_start: float = 0.0,
             # 1) Ведём уже открытую сделку — ровно как живая программа делает
             #    это ДО поиска нового входа.
             if открытая is not None:
-                открытая = _вести(открытая, бар, atr_value, point, cfg, rm, tm,
+                atr_ведения = atr_value
+                if m1_индекс:
+                    atr_ведения = _m1_atr_на_момент(
+                        m1_индекс, m1_времена, бар["time"], atr_value)
+                открытая = _вести(открытая, бар, atr_ведения, point, cfg, rm, tm,
                                   сделки, инфо,
                                   al.learned_profit_points(состояние, 0.0))
                 if открытая is None:
