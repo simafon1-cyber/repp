@@ -15,6 +15,8 @@ state.py — рантайм-состояние программы.
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import reservations
+
 
 @dataclass
 class AccountState:
@@ -27,6 +29,13 @@ class AccountState:
     win_trades: int = 0
     gross_profit: float = 0.0
     gross_loss: float = 0.0
+
+    # Сделки, открытые в ТЕКУЩЕМ обходе символов и ещё не попавшие в снимок
+    # позиций. Снимок берётся один раз за проход, а инструменты внутри этого
+    # же прохода открываются — без книги резервов следующая пара считала бы
+    # лимиты по устаревшему списку и могла бы их обойти.
+    # Подробный разбор — в reservations.py.
+    reservations: "reservations.Книга" = field(default_factory=reservations.Книга)
 
 
 @dataclass

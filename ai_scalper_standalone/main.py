@@ -52,6 +52,7 @@ from indicators import (
     is_bullish_confirmation, is_bearish_confirmation,
 )
 from indicators import atr as atr_of
+import reservations
 from state import AccountState, SymbolState
 
 logging.basicConfig(
@@ -579,7 +580,10 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     # больше сделок, см. его решение по потолку плеча).
     max_all = int(getattr(cfg, "MAX_SIMULTANEOUS_POSITIONS", 0) or 0)
     if max_all > 0:
-        open_now = rm.count_open_positions(None, positions=all_positions)
+        # К снимку добавляются сделки, открытые РАНЬШЕ в этом же проходе:
+        # снимок берётся один раз на круг и о них ещё не знает.
+        open_now = (rm.count_open_positions(None, positions=all_positions)
+                    + acc_state.reservations.сколько())
         if open_now >= max_all:
             sym_state.last_reject_reason = (
                 f"Уже открыто {open_now} сделок при потолке {max_all} "
@@ -592,7 +596,9 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     # списке для просмотра: смотреть можно сколько угодно пар, платим мы
     # только за одновременно открытые. См. rm.currency_exposure_reason().
     same_bet = rm.currency_exposure_reason(
-        symbol, _open_symbols(all_positions),
+        symbol,
+        reservations.объединить_символы(_open_symbols(all_positions),
+                                        acc_state.reservations),
         getattr(cfg, "MAX_POSITIONS_PER_CURRENCY", 0))
     if same_bet:
         sym_state.last_reject_reason = same_bet
@@ -840,7 +846,9 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     # Хедж открывает 2 позиции за раз — нужно, чтобы оба слота были свободны
     # (иначе получится однобокая "хеджированная" сделка, которая на деле хедж не даёт).
     if hedge_directions is not None:
-        free_slots = profile["max_open_positions"] - rm.count_open_positions(symbol, positions=all_positions)
+        free_slots = (profile["max_open_positions"]
+                      - rm.count_open_positions(symbol, positions=all_positions)
+                      - acc_state.reservations.сколько(symbol))
         if free_slots < len(directions_to_open):
             sym_state.last_reject_reason = (
                 f"Хедж (обе стороны): не хватает свободных слотов сделок ({free_slots} из "
@@ -891,16 +899,23 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     # сравнивал бы числа, посчитанные по-разному. Внутри — точный расчёт от
     # терминала с приближением по цене тика в запасе (rm.money_risk_per_lot).
     new_trade_risk_pct = 0.0
+    # То же число в ДЕНЬГАХ — оно уходит в бронь. Проценты для этого не
+    # годятся: следующая сделка в том же проходе считает свой процент от
+    # того же капитала, и складывать проценты, посчитанные от разных
+    # знаменателей, было бы ошибкой. Деньги складываются всегда.
+    new_trade_risk_money = 0.0
     if equity > 0:
         per_lot = rm.money_risk_per_lot(symbol, sl_dist)
         if per_lot > 0:
-            new_trade_risk_pct = per_lot * lot / equity * 100.0
+            new_trade_risk_money = per_lot * lot
+            new_trade_risk_pct = new_trade_risk_money / equity * 100.0
 
     # Используем уже полученный в начале ЭТОЙ итерации acc_info вместо
     # повторного запроса к MT5 (fallback на свежий запрос, если функцию
     # вызвали без него — на случай прямого вызова откуда-то ещё).
     risk_acc_info = acc_info if acc_info is not None else mt5c.get_account_info()
-    open_risk_pct = rm.get_open_risk_percent(risk_acc_info, positions=all_positions)
+    open_risk_pct = (rm.get_open_risk_percent(risk_acc_info, positions=all_positions)
+                     + acc_state.reservations.риск_процент(equity))
     # В хедже считаем риск по ОБЕИМ ногам (консервативно — реальный чистый риск
     # обычно меньше, т.к. ноги в противоположных направлениях, но так надёжнее).
     if open_risk_pct + new_trade_risk_pct * len(directions_to_open) > profile["max_total_risk_pct"]:
@@ -924,6 +939,11 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         if ok:
             opened_count += 1
             acc_state.trades_today += 1
+            # БРОНЬ. Ставится ровно здесь — после подтверждения ордера и до
+            # перехода к следующему инструменту. Снимок позиций о этой сделке
+            # ещё не знает и до конца прохода не узнает, поэтому лимиты
+            # следующей пары обязаны считать её по брони.
+            acc_state.reservations.забронировать(symbol, d, new_trade_risk_money)
             dir_txt = "BUY" if d == 1 else "SELL"
             hedge_txt = " [хедж]" if hedge_directions is not None else ""
             control.push_notification(
@@ -1859,6 +1879,13 @@ def main(stop_event=None, start_dashboard: bool = True):
                 # N лишних обращений к MT5-терминалу за проход по symbols —
                 # основная причина задержки в 100+ мс при нескольких парах).
                 all_positions = mt5c.get_open_positions()
+
+                # РЕЗЕРВЫ ПРОШЛОГО ПРОХОДА БОЛЬШЕ НЕ НУЖНЫ. Свежий снимок уже
+                # содержит те сделки, которые они описывали. Очистка стоит
+                # ВПЛОТНУЮ к запросу намеренно: между этими двумя строками не
+                # должно быть ничего, что читает резервы, — иначе оно увидит
+                # чужой проход. См. reservations.py.
+                acc_state.reservations.очистить()
 
                 # Память о сделках (пик прибыли, просадка, исходный риск,
                 # возраст) чистится РОВНО ЗДЕСЬ — там, где виден полный список
