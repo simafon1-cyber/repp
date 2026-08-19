@@ -54,6 +54,14 @@ def install_stubs() -> types.ModuleType:
             return name
 
     mt5 = _FakeMT5("MetaTrader5")
+    # Коды ответа — НАСТОЯЩИЕ числа, а не строки-заглушки: их теперь
+    # разбирает execution.разобрать(), и ему нужно число.
+    mt5.TRADE_RETCODE_DONE = 10009
+    mt5.TRADE_RETCODE_DONE_PARTIAL = 10010
+    mt5.TRADE_RETCODE_TIMEOUT = 10012
+    mt5.TRADE_RETCODE_REQUOTE = 10004
+    mt5.TRADE_RETCODE_PRICE_CHANGED = 10020
+    mt5.TRADE_RETCODE_PRICE_OFF = 10021
     mt5.POSITION_TYPE_BUY = 0
     mt5.ORDER_TYPE_BUY = 0
     mt5.ORDER_TYPE_SELL = 1

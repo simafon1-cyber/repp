@@ -139,6 +139,7 @@ fake.terminal_info = lambda: None
 fake.history_deals_get = lambda *a, **k: []
 sys.modules["MetaTrader5"] = fake
 
+import execution as ex        # noqa: E402
 import main as bot            # noqa: E402
 import mt5_connector as mt5c  # noqa: E402
 import risk_manager as rm     # noqa: E402
@@ -325,26 +326,33 @@ def _хедж_профиль():
     return профиль, было
 
 
-def test_order_now_returns_a_ticket_not_a_yes_no() -> None:
-    """Раньше отправка ордера возвращала True/False.
+def test_order_now_returns_a_state_not_a_yes_no() -> None:
+    """Раньше отправка ордера возвращала True/False, потом номер позиции.
 
-    Этого не хватало: закрыть повисшую ногу без её номера нечем."""
-    print("\n[Отправка ордера возвращает номер позиции]")
+    Ни того, ни другого не хватало. «Номер или ноль» — это по-прежнему
+    ответ на вопрос «получилось?», а у заявки четыре исхода: полное,
+    частичное, отказ и «неизвестно» (см. execution.py). Теперь отсюда
+    возвращается состояние, а не да/нет."""
+    print("\n[Отправка ордера возвращает состояние заявки]")
     import trade_manager as tm
     check(hasattr(tm, "TICKET_НЕИЗВЕСТЕН"),
           "Есть метка «открылось, но номер неизвестен»")
-    check(bool(tm.TICKET_НЕИЗВЕСТЕН),
-          "И она ИСТИННА: это успех, а не отказ",
-          str(tm.TICKET_НЕИЗВЕСТЕН))
-    check(not bool(0), "А ноль остаётся отказом")
+
+    итог = tm.execute_market_order("EURUSD", 1, 0.01, 0.001, 0.002, 5.0, 0.00001)
+    check(isinstance(итог, ex.Итог), "Возвращается Итог, а не число",
+          type(итог).__name__)
+    check(итог.статус in (ex.ПОЛНОЕ, ex.ЧАСТИЧНОЕ, ex.ОТКАЗ, ex.НЕИЗВЕСТНО),
+          "И его статус — одно из четырёх состояний", итог.статус)
 
     исходник = (APP / "trade_manager.py").read_text(encoding="utf-8")
     начало = исходник.find("def execute_market_order")
-    конец = исходник.find("\ndef ", начало + 10)
+    конец = исходник.find("\n# Сколько раз пытаться", начало + 10)
     тело = исходник[начало:конец]
     check("return True" not in тело,
           "Из отправки больше не возвращается True")
-    check("return 0" in тело, "Отказ возвращается нулём")
+    check("return 0" not in тело,
+          "И голый ноль тоже: он не отличает отказ от «не знаю»")
+    check("ex.отказ(" in тело, "Отказ возвращается явным Итогом")
 
 
 def test_half_filled_hedge_closes_the_filled_leg() -> None:
@@ -357,11 +365,13 @@ def test_half_filled_hedge_closes_the_filled_leg() -> None:
 
     def подделка_ордера(symbol, direction, lot, sl_dist, tp_dist, score, point):
         отправлено.append(direction)
-        return 111 if len(отправлено) == 1 else 0     # вторая нога срывается
+        if len(отправлено) == 1:
+            return ex.полное(111, lot)
+        return ex.отказ("вторая нога срывается", lot)
 
     def подделка_закрытия(symbol, ticket, direction=0, volume=0.0):
         закрыто.append(ticket)
-        return True
+        return ex.полное(ticket, volume)
 
     tm.execute_market_order = подделка_ордера
     tm.close_leg = подделка_закрытия
@@ -390,8 +400,11 @@ def test_failed_compensation_stops_new_entries() -> None:
     отправлено = []
 
     tm.execute_market_order = (
-        lambda *a, **k: (отправлено.append(1), 222 if len(отправлено) == 1 else 0)[1])
-    tm.close_leg = lambda *a, **k: False          # закрыть не удалось
+        lambda *a, **k: (отправлено.append(1),
+                         ex.полное(222, 0.01) if len(отправлено) == 1
+                         else ex.отказ("вторая нога срывается"))[1])
+    # Закрыть не удалось — и это ОТКАЗ, а не частичное закрытие.
+    tm.close_leg = lambda *a, **k: ex.отказ("брокер не принял закрытие")
 
     control.set_paused(False)
     try:
@@ -413,8 +426,8 @@ def test_first_leg_failing_needs_no_compensation() -> None:
     профиль, было = _хедж_профиль()
     ордер, нога = tm.execute_market_order, tm.close_leg
     закрыто = []
-    tm.execute_market_order = lambda *a, **k: 0
-    tm.close_leg = lambda *a, **k: закрыто.append(1) or True
+    tm.execute_market_order = lambda *a, **k: ex.отказ("первая нога сорвалась")
+    tm.close_leg = lambda *a, **k: закрыто.append(1) or ex.полное(1, 0.01)
     try:
         прогнать("EURUSD", _Счёт(margin_mode=ХЕДЖ))
         check(закрыто == [], "Компенсация не вызывалась", str(закрыто))
@@ -430,8 +443,8 @@ def test_successful_hedge_is_not_disturbed() -> None:
     профиль, было = _хедж_профиль()
     ордер, нога = tm.execute_market_order, tm.close_leg
     закрыто = []
-    tm.execute_market_order = lambda *a, **k: 333
-    tm.close_leg = lambda *a, **k: закрыто.append(1) or True
+    tm.execute_market_order = lambda *a, **k: ex.полное(333, 0.01)
+    tm.close_leg = lambda *a, **k: закрыто.append(1) or ex.полное(1, 0.01)
     try:
         причина = прогнать("EURUSD", _Счёт(margin_mode=ХЕДЖ))
         check(закрыто == [], "Компенсация не вызывалась", str(закрыто))
@@ -471,8 +484,9 @@ def test_dry_run_never_sends_a_closing_order() -> None:
     настоящий = mt5c.close_position_partial
     mt5c.close_position_partial = lambda *a, **k: звонки.append(1)
     try:
-        check(tm.close_leg("EURUSD", 123, direction=1, volume=0.01) is True,
-              "Закрытие в проверочном режиме считается успешным")
+        итог = tm.close_leg("EURUSD", 123, direction=1, volume=0.01)
+        check(итог.статус == ex.ПОЛНОЕ,
+              "Закрытие в проверочном режиме считается успешным", итог.статус)
         check(звонки == [], "И наружу ничего не отправлено", str(звонки))
     finally:
         mt5c.close_position_partial = настоящий
@@ -492,7 +506,7 @@ if __name__ == "__main__":
     test_refusal_is_not_a_silent_switch_to_one_side()
     test_check_happens_before_lot_and_risk_are_computed()
     test_no_extra_terminal_call_for_the_check()
-    test_order_now_returns_a_ticket_not_a_yes_no()
+    test_order_now_returns_a_state_not_a_yes_no()
     test_half_filled_hedge_closes_the_filled_leg()
     test_failed_compensation_stops_new_entries()
     test_first_leg_failing_needs_no_compensation()

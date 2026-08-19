@@ -400,6 +400,45 @@ def get_open_positions(symbol: str = None, magic: int = None):
     return list(positions)
 
 
+def positions_or_none(symbol: str = None, magic: int = None):
+    """То же самое, но ОТЛИЧАЕТ «позиций нет» от «спросить не удалось».
+
+    get_open_positions() возвращает пустой список в обоих случаях, и для
+    обычной работы этого хватает. Для СВЕРКИ не хватает категорически:
+    после неясного ответа брокера пустой список означает либо «сделка не
+    открылась» (можно спокойно идти дальше), либо «терминал молчит»
+    (нельзя вообще ничего). Перепутать эти два — значит открыть вторую
+    сделку поверх первой.
+
+    None — «спросить не удалось». Список (возможно пустой) — ответ."""
+    try:
+        positions = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
+    except Exception as e:
+        log.error("positions_get не отработал: %s", e)
+        return None
+    if positions is None:
+        return None
+    if magic is not None:
+        positions = [p for p in positions if p.magic == magic]
+    return list(positions)
+
+
+def deals_or_none(date_from, date_to, symbol: str = None):
+    """История сделок за период. None — спросить не удалось.
+
+    Нужна там же, где positions_or_none: позиция могла открыться и тут же
+    закрыться по стопу, и тогда среди открытых её нет, а в истории есть."""
+    try:
+        deals = (mt5.history_deals_get(date_from, date_to, group=symbol)
+                 if symbol else mt5.history_deals_get(date_from, date_to))
+    except Exception as e:
+        log.error("history_deals_get не отработал: %s", e)
+        return None
+    if deals is None:
+        return None
+    return list(deals)
+
+
 def trading_permission_status() -> dict:
     """Проверка разрешений на торговлю — самая частая причина того, что бот
     считает сигналы и не падает с ошибкой, но ни одна сделка не открывается.
@@ -599,3 +638,34 @@ RETCODE_REQUOTE = mt5.TRADE_RETCODE_REQUOTE
 RETCODE_PRICE_CHANGED = mt5.TRADE_RETCODE_PRICE_CHANGED
 RETCODE_PRICE_OFF = mt5.TRADE_RETCODE_PRICE_OFF
 RETCODE_DONE = mt5.TRADE_RETCODE_DONE
+
+# =====================================================================
+# КОДЫ ОТВЕТА БРОКЕРА, КОТОРЫХ ЗДЕСЬ РАНЬШЕ НЕ БЫЛО
+# =====================================================================
+# Программа знала ровно четыре кода: DONE и три «повторите». Всё
+# остальное считалось отказом. Для двух кодов это неправда, и неправда
+# опасная:
+#
+#   DONE_PARTIAL (10010) — «исполнено ЧАСТИЧНО». Просили 0.10, дали 0.06.
+#       Считать это отказом нельзя: позиция на счету ЕСТЬ. Режим
+#       ORDER_FILLING_IOC, который здесь стоит по умолчанию, частичное
+#       исполнение прямо разрешает — см. send_market_order().
+#
+#   TIMEOUT (10012) — «ответа нет». Не «отказ» и не «успех»: заявка могла
+#       дойти до сервера и исполниться, а потерялся только ответ. Считать
+#       это отказом — значит отправить вторую такую же.
+#
+# getattr с числом: в старых сборках модуля MetaTrader5 отдельных констант
+# может не быть, а сами числа заданы платформой и не меняются.
+RETCODE_DONE_PARTIAL = getattr(mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010)
+RETCODE_TIMEOUT = getattr(mt5, "TRADE_RETCODE_TIMEOUT", 10012)
+RETCODE_PLACED = getattr(mt5, "TRADE_RETCODE_PLACED", 10008)
+RETCODE_CONNECTION = getattr(mt5, "TRADE_RETCODE_CONNECTION", 10031)
+RETCODE_REJECT = getattr(mt5, "TRADE_RETCODE_REJECT", 10006)
+RETCODE_NO_MONEY = getattr(mt5, "TRADE_RETCODE_NO_MONEY", 10019)
+RETCODE_INVALID_FILL = getattr(mt5, "TRADE_RETCODE_INVALID_FILL", 10030)
+RETCODE_HEDGE_PROHIBITED = getattr(mt5, "TRADE_RETCODE_HEDGE_PROHIBITED", 10046)
+
+# Тип сделки в истории: 0 — вход в позицию, 1 — выход. Нужен сверке
+# (trade_manager.сверить_вход): среди истории ищется именно ВХОД.
+DEAL_ENTRY_IN = getattr(mt5, "DEAL_ENTRY_IN", 0)

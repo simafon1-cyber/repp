@@ -15,6 +15,7 @@ import os
 from datetime import datetime
 
 import config as cfg
+import execution as ex
 import mt5_connector as mt5c
 import risk_manager as rm
 import runtime_events
@@ -201,13 +202,130 @@ def log_exit_journal(строка: dict):
 TICKET_НЕИЗВЕСТЕН = -1
 
 
-def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point):
-    """Открыть сделку по рынку.
+def наши_тикеты(symbol: str):
+    """Снимок номеров НАШИХ открытых позиций по инструменту.
 
-    Возвращает НОМЕР ПОЗИЦИИ (истинное число) при успехе и 0 при отказе.
-    Раньше возвращалось True/False, и этого не хватало: у хеджа две ноги, и
-    если вторая не исполнилась, первую надо закрыть — а закрыть без номера
-    нечего. Проверка `if ok:` работает как прежде: ноль ложен, номер истинен."""
+    Снимается ДО отправки заявки и нужен ровно для одного: если брокер
+    ответит невнятно, сравнить «было» и «стало». Позже снять его нельзя —
+    сравнивать будет уже не с чем.
+
+    None — снимок не удался. Это не пустой снимок: пустой значит «позиций
+    не было», а None значит «неизвестно, были ли»."""
+    позиции = mt5c.positions_or_none(symbol=symbol, magic=cfg.MAGIC_NUMBER)
+    if позиции is None:
+        return None
+    return {int(p.ticket) for p in позиции}
+
+
+def сверить_вход(symbol: str, direction: int, снимок, момент_сервера: float,
+                 заказано: float):
+    """Открылась ли позиция, когда ответа брокера мы не поняли.
+
+    ЗАЧЕМ. Ответ TIMEOUT или молчание терминала не значат «отказ»: заявка
+    могла дойти до сервера и исполниться, а потеряться мог только ответ.
+    Повторить её в этом случае — открыть вторую позицию поверх первой.
+    Поэтому вместо повтора мы идём и СМОТРИМ, что на счету.
+
+    Смотрим в двух местах:
+      1. открытые позиции — появилась ли новая, которой не было в снимке;
+      2. история сделок — позиция могла открыться и тут же уйти по стопу,
+         тогда среди открытых её нет, а в истории есть.
+
+    ВРЕМЯ БЕРЁТСЯ У СЕРВЕРА (tick.time), а не у нашего компьютера. Часы
+    брокера обычно на два-три часа впереди, и по местному времени в
+    истории не нашлось бы ничего.
+
+    Возвращает Итог. НЕИЗВЕСТНО остаётся только если сверка не удалась
+    физически — тогда наверху обязана включиться пауза."""
+    нужный_тип = _тип_позиции(direction)
+
+    позиции = mt5c.positions_or_none(symbol=symbol, magic=cfg.MAGIC_NUMBER)
+    if позиции is None:
+        return ex.неизвестно(
+            "ответ брокера неясен, и список позиций получить не удалось",
+            заказано)
+
+    if снимок is None:
+        # Ответ неясен, а сравнить не с чем: снимок до отправки не сняли.
+        # Здесь честно только одно — сказать «не знаю».
+        return ex.неизвестно(
+            "ответ брокера неясен, а снимка позиций до отправки нет",
+            заказано)
+
+    новые = [p for p in позиции
+             if int(p.ticket) not in снимок and p.type == нужный_тип]
+    if новые:
+        свежая = max(новые, key=lambda p: getattr(p, "time", 0))
+        объём = sum(float(p.volume) for p in новые)
+        статус = (ex.ПОЛНОЕ if объём >= заказано - ex.ДОПУСК_ОБЪЁМА
+                  else ex.ЧАСТИЧНОЕ)
+        log.warning("%s: ответ брокера был неясен — сверка нашла позицию %s "
+                    "на %.2f из %.2f", symbol, свежая.ticket, объём, заказано)
+        return ex.Итог(статус, int(свежая.ticket), заказано, объём,
+                       пояснение="положение выяснено сверкой позиций")
+
+    # Новых позиций нет. Прежде чем сказать «не открылась», проверяем
+    # историю: позиция могла прожить меньше, чем шёл ответ.
+    сделки = _история_после(symbol, момент_сервера)
+    if сделки is None:
+        return ex.неизвестно(
+            "ответ брокера неясен, новых позиций нет, историю прочитать "
+            "не удалось", заказано)
+
+    входы = [d for d in сделки
+             if int(getattr(d, "position_id", 0) or 0) not in снимок]
+    if входы:
+        объём = sum(float(getattr(d, "volume", 0.0) or 0.0) for d in входы)
+        return ex.неизвестно(
+            f"позиция открывалась (объём {объём:.2f}) и уже закрыта — "
+            f"нужен человек, автоматика такое не разбирает", заказано)
+
+    log.info("%s: ответ брокера был неясен — сверка показала, что сделка "
+             "не открылась", symbol)
+    return ex.Итог(ex.ОТКАЗ, 0, заказано, 0.0,
+                   пояснение="сверка: позиции нет ни среди открытых, ни в истории")
+
+
+def _тип_позиции(direction: int):
+    import MetaTrader5 as mt5
+    return mt5.POSITION_TYPE_BUY if direction == 1 else mt5.POSITION_TYPE_SELL
+
+
+def _история_после(symbol: str, момент_сервера: float):
+    """Сделки ВХОДА по нашему magic начиная с указанного момента.
+
+    None — прочитать не удалось. Пустой список — читали, ничего нет."""
+    from datetime import timedelta
+    try:
+        начало = datetime.fromtimestamp(max(0.0, float(момент_сервера) - 5.0))
+    except (TypeError, ValueError, OSError):
+        return None
+    сделки = mt5c.deals_or_none(начало, начало + timedelta(hours=1))
+    if сделки is None:
+        return None
+    return [d for d in сделки
+            if getattr(d, "symbol", "") == symbol
+            and int(getattr(d, "magic", 0) or 0) == cfg.MAGIC_NUMBER
+            and int(getattr(d, "entry", -1)) == mt5c.DEAL_ENTRY_IN]
+
+
+def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point):
+    """Открыть сделку по рынку. Возвращает execution.Итог.
+
+    ЧТО ИЗМЕНИЛОСЬ И ПОЧЕМУ. Раньше отсюда возвращался номер позиции или
+    ноль, то есть ответ на вопрос «получилось?». У заявки не два исхода, а
+    четыре (см. execution.py), и два средних этот вопрос не различает:
+
+      * ЧАСТИЧНОЕ исполнение записывалось в отказ — а позиция при этом
+        есть, и она не попадала ни в учёт риска, ни в компенсацию хеджа;
+      * молчание брокера тоже записывалось в отказ — и заявка уходила
+        ПОВТОРНО, хотя первая могла исполниться.
+
+    Второе опаснее первого: это удвоение позиции без ведома владельца.
+
+    Теперь при неясном ответе повтора НЕТ. Вместо него идёт сверка с
+    терминалом (сверить_вход), и повторяем мы только то, что брокер
+    отклонил внятно: реквот и уход цены."""
     dir_txt = "BUY" if direction == 1 else "SELL"
 
     # tp_dist <= 0 означает "без TP" (см. USE_MAX_PROFIT_RIDE в config.py) —
@@ -222,51 +340,83 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
         sl = price - sl_dist if direction == 1 else price + sl_dist
         tp = 0.0 if tp_dist <= 0 else (price + tp_dist if direction == 1 else price - tp_dist)
         log_trade_csv("OPEN", symbol, dir_txt, price, sl, tp, lot, score)
-        return TICKET_НЕИЗВЕСТЕН      # проверка на истории: позиции нет
+        # Проверка на истории: позиции нет, но и отказа не было.
+        return ex.полное(TICKET_НЕИЗВЕСТЕН, lot, "проверочный режим")
 
+    итог = ex.отказ("ни одной попытки не сделано", lot)
     for attempt in range(1, cfg.ORDER_RETRY_ATTEMPTS + 1):
         tick = mt5c.get_tick(symbol)
         if tick is None:
-            return False
+            return ex.отказ("нет цены по инструменту", lot)
         price = tick.ask if direction == 1 else tick.bid
         sl = price - sl_dist if direction == 1 else price + sl_dist
         tp = 0.0 if tp_dist <= 0 else (price + tp_dist if direction == 1 else price - tp_dist)
 
         if not rm.check_stops_distance(symbol, price, sl, tp):
             log.warning("%s: SL/TP слишком близко, ордер отменён", symbol)
-            return 0
+            return ex.отказ("SL/TP слишком близко к цене", lot)
+
+        # СНИМОК И ВРЕМЯ — ДО ОТПРАВКИ. После неё снимать поздно: нельзя
+        # будет отличить нашу новую позицию от чужой уже бывшей.
+        снимок = наши_тикеты(symbol)
+        момент = float(getattr(tick, "time", 0) or 0)
 
         result = mt5c.send_market_order(symbol, direction, lot, sl, tp, cfg.MAGIC_NUMBER,
                                          comment="AI_Scalper_Standalone")
-        if result is None:
-            log.error("%s: order_send вернул None, %s", symbol, mt5c.last_error())
-            return 0
+        итог = ex.разобрать(result, lot)
 
-        if result.retcode == mt5c.RETCODE_DONE:
-            log.info("%s %s | Score %.1f | Попытка %d | тикет %s",
-                      symbol, dir_txt, score, attempt, result.order)
-            log_trade_csv("OPEN", symbol, dir_txt, price, sl, tp, lot, score)
-            # Номер позиции у рыночного ордера совпадает с номером ордера.
-            # Если брокер его почему-то не прислал — сделка всё равно
-            # открыта, и это НЕ отказ: возвращаем метку «номер неизвестен».
-            return int(getattr(result, "order", 0) or 0) or TICKET_НЕИЗВЕСТЕН
+        if итог.статус == ex.НЕИЗВЕСТНО:
+            if result is None:
+                log.error("%s: order_send вернул None, %s", symbol, mt5c.last_error())
+            итог = сверить_вход(symbol, direction, снимок, момент, lot)
 
-        log.warning("%s: ошибка %s — %s", symbol, result.retcode, result.comment)
-        transient = result.retcode in (mt5c.RETCODE_REQUOTE, mt5c.RETCODE_PRICE_CHANGED, mt5c.RETCODE_PRICE_OFF)
+        if итог.открылось:
+            log.info("%s %s | Score %.1f | Попытка %d | тикет %s | объём %.2f из %.2f",
+                      symbol, dir_txt, score, attempt, итог.тикет,
+                      итог.исполнено, итог.заказано)
+            log_trade_csv("OPEN", symbol, dir_txt, price, sl, tp, итог.исполнено, score)
+            if итог.статус == ex.ЧАСТИЧНОЕ:
+                runtime_events.record(
+                    "исполнение",
+                    f"{symbol} {dir_txt}: исполнено {итог.исполнено:.2f} из "
+                    f"{итог.заказано:.2f} лота — брокер дал не весь объём")
+            return итог
+
+        if not итог.решено:
+            # Сверка не помогла. Повторять НЕЛЬЗЯ: возможно, позиция уже
+            # есть. Наверху это обязано остановить новые входы.
+            log.error("%s: положение дел после заявки не выяснено — %s",
+                      symbol, итог.пояснение)
+            return итог
+
+        log.warning("%s: ошибка %s — %s", symbol, итог.код, итог.пояснение)
+        transient = итог.код in (mt5c.RETCODE_REQUOTE, mt5c.RETCODE_PRICE_CHANGED,
+                                 mt5c.RETCODE_PRICE_OFF)
         if not transient:
-            return 0
-    return 0
+            return итог
+    return итог
+
+
+# Сколько раз пытаться дозакрыть ногу, если брокер закрыл её не целиком.
+ПОПЫТОК_ЗАКРЫТИЯ = 3
 
 
 def close_leg(symbol: str, ticket: int, direction: int = 0,
-              volume: float = 0.0) -> bool:
-    """Закрыть одну ногу хеджа целиком. True — закрыта.
+              volume: float = 0.0):
+    """Закрыть одну ногу хеджа ЦЕЛИКОМ. Возвращает execution.Итог.
 
     ЗАЧЕМ. Хедж отправляется двумя заявками подряд, и это НЕ одна операция.
     Между ними меняется цена, свободная маржа и настроение брокера. Если
     первая нога исполнилась, а вторая нет, на счету остаётся ОДИНОЧНАЯ
     направленная позиция — не то, что просил владелец, и не то, под что
     считался риск. Такую ногу надо немедленно закрыть.
+
+    ЗАКРЫТИЕ ТОЖЕ БЫВАЕТ ЧАСТИЧНЫМ. Приказ на закрытие — такая же рыночная
+    заявка, и режим IOC разрешает исполнить её не полностью: просили
+    закрыть 0.10, закрылось 0.06, на счету осталось 0.04. Раньше здесь
+    проверялся только код DONE, и остаток никто не считал. Теперь остаток
+    дозакрывается, а если не вышло — итог ЧАСТИЧНОЕ, и наверху это
+    обязано остановить торговлю.
 
     Номер позиции может быть неизвестен (TICKET_НЕИЗВЕСТЕН): брокер не
     обязан его присылать. Тогда нога ищется по инструменту, направлению и
@@ -276,42 +426,92 @@ def close_leg(symbol: str, ticket: int, direction: int = 0,
     не существует, закрывать нечего, и это успех, а не отказ."""
     if not cfg.LIVE_TRADING:
         log.debug("[DRY-RUN] %s: закрытие ноги %s не отправляется", symbol, ticket)
-        return True
-    try:
-        позиции = mt5c.get_open_positions(symbol=symbol, magic=cfg.MAGIC_NUMBER)
-    except Exception as e:
-        log.error("%s: не удалось получить позиции для закрытия ноги: %s", symbol, e)
-        return False
+        return ex.полное(ticket, volume, "проверочный режим")
 
-    нога = None
+    закрыто_всего = 0.0
+    искомый_объём = float(volume or 0.0)
+
+    for попытка in range(1, ПОПЫТОК_ЗАКРЫТИЯ + 1):
+        позиции = mt5c.positions_or_none(symbol=symbol, magic=cfg.MAGIC_NUMBER)
+        if позиции is None:
+            return ex.неизвестно(
+                f"не удалось получить позиции для закрытия ноги {ticket}",
+                искомый_объём)
+
+        нога = _найти_ногу(позиции, ticket, direction, искомый_объём)
+        if нога is None:
+            if закрыто_всего > 0:
+                # Закрывали по частям и дозакрыли до конца.
+                return ex.полное(ticket, закрыто_всего, "нога закрыта по частям")
+            # Позиции нет и не было закрыто ничего. Её мог забрать стоп —
+            # тогда всё в порядке, но подтвердить это мы не можем.
+            log.warning("%s: нога %s для закрытия не найдена среди открытых "
+                        "позиций", symbol, ticket)
+            return ex.неизвестно(
+                f"нога {ticket} не найдена среди открытых позиций",
+                искомый_объём)
+
+        осталось = float(нога.volume)
+        result = mt5c.close_position_partial(нога, осталось)
+        итог = ex.разобрать(result, осталось)
+
+        if итог.статус == ex.ПОЛНОЕ:
+            note_manual_close(нога.ticket)
+            закрыто_всего += осталось
+            log.info("%s: нога %s закрыта (компенсация неполного хеджа)",
+                     symbol, нога.ticket)
+            return ex.полное(нога.ticket, закрыто_всего)
+
+        if итог.статус == ex.ЧАСТИЧНОЕ:
+            закрыто_всего += итог.исполнено
+            log.warning("%s: нога %s закрыта частично (%.2f из %.2f), "
+                        "попытка %d — дозакрываем остаток",
+                        symbol, нога.ticket, итог.исполнено, осталось, попытка)
+            ticket = нога.ticket        # дальше ищем ровно эту позицию
+            искомый_объём = 0.0         # объём уже не тот, искать по нему нельзя
+            continue
+
+        if итог.статус == ex.НЕИЗВЕСТНО:
+            # Закрылась нога или нет — непонятно. Следующий круг начнётся
+            # с запроса позиций, и он же ответит на этот вопрос.
+            log.warning("%s: ответ на закрытие ноги %s неясен (%s), попытка %d",
+                        symbol, нога.ticket, итог.пояснение, попытка)
+            ticket = нога.ticket
+            искомый_объём = 0.0
+            continue
+
+        log.error("%s: НЕ УДАЛОСЬ закрыть ногу %s: код %s %s",
+                  symbol, нога.ticket, итог.код, итог.пояснение)
+        if закрыто_всего > 0:
+            return ex.Итог(ex.ЧАСТИЧНОЕ, нога.ticket, закрыто_всего + осталось,
+                           закрыто_всего, итог.код,
+                           "остаток ноги закрыть не удалось")
+        return ex.Итог(ex.ОТКАЗ, нога.ticket, осталось, 0.0, итог.код,
+                       итог.пояснение)
+
+    # Попытки кончились, а нога всё ещё жива.
+    return ex.Итог(ex.ЧАСТИЧНОЕ, ticket, искомый_объём or закрыто_всего,
+                   закрыто_всего, None,
+                   f"нога не закрыта за {ПОПЫТОК_ЗАКРЫТИЯ} попытки")
+
+
+def _найти_ногу(позиции, ticket: int, direction: int, volume: float):
+    """Нужная позиция среди наших: сперва по номеру, потом по приметам."""
     if ticket and ticket != TICKET_НЕИЗВЕСТЕН:
         нога = next((p for p in позиции if p.ticket == ticket), None)
-    if нога is None and direction:
-        # Запасной путь: номера нет. Берём НАШУ позицию нужного направления,
-        # подходящую по объёму. Если таких несколько — самую свежую: именно
-        # её мы только что и открыли.
-        import MetaTrader5 as mt5
-        нужный_тип = mt5.POSITION_TYPE_BUY if direction == 1 else mt5.POSITION_TYPE_SELL
-        похожие = [p for p in позиции if p.type == нужный_тип
-                   and (volume <= 0 or abs(p.volume - volume) < 1e-9)]
-        нога = max(похожие, key=lambda p: getattr(p, "time", 0), default=None)
-
-    if нога is None:
-        # Позиции нет. Это не обязательно беда: её мог уже забрать стоп.
-        # Но и подтвердить закрытие мы не можем — отвечаем честно.
-        log.warning("%s: нога %s для закрытия не найдена среди открытых позиций",
-                    symbol, ticket)
-        return False
-
-    result = mt5c.close_position_partial(нога, нога.volume)
-    ок = result is not None and getattr(result, "retcode", None) == mt5c.RETCODE_DONE
-    if ок:
-        note_manual_close(нога.ticket)
-        log.info("%s: нога %s закрыта (компенсация неполного хеджа)",
-                 symbol, нога.ticket)
-    else:
-        log.error("%s: НЕ УДАЛОСЬ закрыть ногу %s: %s", symbol, нога.ticket, result)
-    return ок
+        if нога is not None:
+            return нога
+        if direction == 0:
+            return None
+    if not direction:
+        return None
+    # Запасной путь: номера нет. Берём НАШУ позицию нужного направления,
+    # подходящую по объёму. Если таких несколько — самую свежую: именно
+    # её мы только что и открыли.
+    нужный_тип = _тип_позиции(direction)
+    похожие = [p for p in позиции if p.type == нужный_тип
+               and (volume <= 0 or abs(p.volume - volume) < 1e-9)]
+    return max(похожие, key=lambda p: getattr(p, "time", 0), default=None)
 
 
 def cleanup_peak_profit(open_tickets: set):
@@ -776,14 +976,30 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                 elif close_volume >= vol_min and close_volume > 0:
                     if cfg.LIVE_TRADING:
                         result = mt5c.close_position_partial(p, close_volume)
-                        if result is not None and result.retcode == mt5c.RETCODE_DONE:
+                        закр = ex.разобрать(result, close_volume)
+                        # ЗАКРЫТИЕ ТОЖЕ БЫВАЕТ НЕПОЛНЫМ. Раньше код ЧАСТИЧНОГО
+                        # исполнения попадал в «else» и печаталось «не удалось
+                        # закрыть» — при том что часть объёма уже закрылась.
+                        # Хуже другое: тикет не помечался, и на следующем круге
+                        # бралось 50 % от ОСТАТКА, потом ещё 50 % от нового
+                        # остатка. Задумано было отрезать половину один раз, а
+                        # выходило, что сделку срезали почти целиком.
+                        if закр.открылось:
                             _partial_closed_tickets.add(p.ticket)
                             _position_sl_source[p.ticket] = ПРИЧИНА_ЧАСТИЧНО
-                            log.info("%s тикет %s: частичное закрытие %.2f лота (профит %.1f пт)",
-                                     symbol, p.ticket, close_volume, profit_points)
+                            if закр.статус == ex.ЧАСТИЧНОЕ:
+                                log.warning(
+                                    "%s тикет %s: частичное закрытие прошло НЕ "
+                                    "полностью — закрыто %.2f из %.2f лота. "
+                                    "Повторять не будем: цель «снять часть "
+                                    "прибыли» уже выполнена.",
+                                    symbol, p.ticket, закр.исполнено, close_volume)
+                            else:
+                                log.info("%s тикет %s: частичное закрытие %.2f лота (профит %.1f пт)",
+                                         symbol, p.ticket, close_volume, profit_points)
                         else:
-                            log.warning("%s тикет %s: не удалось частично закрыть (%s)",
-                                        symbol, p.ticket, result)
+                            log.warning("%s тикет %s: не удалось частично закрыть (%s, %s)",
+                                        symbol, p.ticket, закр.статус, закр.пояснение)
                     else:
                         log.debug("[DRY-RUN] %s тикет %s: частичное закрытие %.2f лота (профит %.1f пт)",
                                   symbol, p.ticket, close_volume, profit_points)
@@ -896,11 +1112,20 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                          "вернулась к %.1f пт, закрываю", symbol, p.ticket, trough_points, profit_points)
                 if cfg.LIVE_TRADING:
                     result = mt5c.close_position_partial(p, p.volume)
-                    if result is None or result.retcode != mt5c.RETCODE_DONE:
-                        log.warning("%s тикет %s: не удалось закрыть в безубыток (%s)",
-                                    symbol, p.ticket, result)
-                    else:
+                    закр = ex.разобрать(result, p.volume)
+                    if закр.статус == ex.ПОЛНОЕ:
                         continue          # позиции больше нет — TP ей уже не нужен
+                    if закр.статус == ex.ЧАСТИЧНОЕ:
+                        # Закрылась часть, остаток живёт. Прерывать разбор
+                        # НЕЛЬЗЯ: остатку по-прежнему нужны стоп и цель, а
+                        # закрыть его целиком попробуем на следующем круге.
+                        log.warning(
+                            "%s тикет %s: в безубыток закрыто %.2f из %.2f лота, "
+                            "остаток остаётся под управлением",
+                            symbol, p.ticket, закр.исполнено, p.volume)
+                    else:
+                        log.warning("%s тикет %s: не удалось закрыть в безубыток (%s, %s)",
+                                    symbol, p.ticket, закр.статус, закр.пояснение)
                 else:
                     log.debug("[DRY-RUN] %s тикет %s: закрытие в безубыток", symbol, p.ticket)
                     continue
