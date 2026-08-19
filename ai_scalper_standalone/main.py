@@ -798,6 +798,19 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
             # убыточная нога ограничена своим стоп-лоссом, прибыльная
             # закрывается как обычно (TP/трейлинг/Profit Lock).
             if profile.get("hedge_both_directions", False) and (buy_ok or sell_ok):
+                # ТИП СЧЁТА РЕШАЕТ, ВОЗМОЖЕН ЛИ ХЕДЖ ВООБЩЕ. На неттинговом
+                # счёте встречный ордер не создаёт вторую позицию, а закрывает
+                # или разворачивает первую — вместо хеджа вышла бы закрытая
+                # сделка. Проверка стоит ДО решения, а не перед отправкой:
+                # иначе мы бы уже посчитали лот и риск на две ноги, которых
+                # быть не может. Подробности — mt5c.hedging_block_reason().
+                нельзя_хедж = mt5c.hedging_block_reason(acc_info)
+                if нельзя_хедж:
+                    # Молча переключаться на одну сторону НЕЛЬЗЯ: это тихая
+                    # подмена того решения, которое настроил владелец. Лучше
+                    # не открыть сделку и назвать причину словами.
+                    sym_state.last_reject_reason = нельзя_хедж
+                    return
                 hedge_directions = [1, -1]
                 score = max(buy_score, sell_score)
             elif buy_ok and buy_score >= sell_score:
@@ -932,26 +945,69 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
             sym_state.last_reject_reason = no_margin
             return
 
-    opened_count = 0
+    # ОТПРАВКА. У хеджа две ноги, и это НЕ одна операция: между заявками
+    # меняются цена, свободная маржа и ответ брокера. Поэтому исполненные
+    # ноги запоминаются — если следующая не пойдёт, их придётся закрыть.
+    исполненные = []          # [(направление, номер позиции)]
+    сорвалось = False
     for d in directions_to_open:
         leg_score = (buy_score if d == 1 else sell_score) if hedge_directions is not None else score
         ok = tm.execute_market_order(symbol, d, lot, sl_dist, tp_dist, leg_score, point)
-        if ok:
-            opened_count += 1
-            acc_state.trades_today += 1
-            # БРОНЬ. Ставится ровно здесь — после подтверждения ордера и до
-            # перехода к следующему инструменту. Снимок позиций о этой сделке
-            # ещё не знает и до конца прохода не узнает, поэтому лимиты
-            # следующей пары обязаны считать её по брони.
-            acc_state.reservations.забронировать(symbol, d, new_trade_risk_money)
-            dir_txt = "BUY" if d == 1 else "SELL"
-            hedge_txt = " [хедж]" if hedge_directions is not None else ""
-            control.push_notification(
-                "Сделка открыта",
-                f"{symbol} {dir_txt} лот {lot:.2f} | score {leg_score:.1f}{hedge_txt}",
-            )
-    if opened_count > 0:
-        sym_state.last_reject_reason = "OK" if opened_count == len(directions_to_open) else "OK (частично, хедж)"
+        if not ok:
+            сорвалось = True
+            # Дальше не пытаемся: если вторая нога не пошла, третьей не
+            # бывает, а у обычной сделки нога всего одна.
+            break
+        исполненные.append((d, ok))
+        acc_state.trades_today += 1
+        # БРОНЬ. Ставится ровно здесь — после подтверждения ордера и до
+        # перехода к следующему инструменту. Снимок позиций о этой сделке
+        # ещё не знает и до конца прохода не узнает, поэтому лимиты
+        # следующей пары обязаны считать её по брони.
+        acc_state.reservations.забронировать(symbol, d, new_trade_risk_money)
+        dir_txt = "BUY" if d == 1 else "SELL"
+        hedge_txt = " [хедж]" if hedge_directions is not None else ""
+        control.push_notification(
+            "Сделка открыта",
+            f"{symbol} {dir_txt} лот {lot:.2f} | score {leg_score:.1f}{hedge_txt}",
+        )
+
+    # КОМПЕНСАЦИЯ НЕПОЛНОГО ХЕДЖА.
+    #
+    # Раньше здесь писалось «OK (частично, хедж)» — и на этом всё. То есть
+    # на счету оставалась ОДИНОЧНАЯ направленная позиция вместо хеджа:
+    # не то, что просил владелец, и не то, под что считался риск.
+    if сорвалось and исполненные:
+        не_закрылись = []
+        for d, номер in исполненные:
+            if not tm.close_leg(symbol, номер, direction=d, volume=lot):
+                не_закрылись.append(номер)
+            else:
+                # Бронь снимать нельзя: она живёт до конца прохода и
+                # ошибается только в безопасную сторону. Здесь она как раз
+                # и работает по назначению — не даёт открыть новое, пока
+                # положение дел неясно.
+                pass
+
+        if не_закрылись:
+            # ХУДШИЙ СЛУЧАЙ: нога открыта, закрыть не смогли. Своим стопом
+            # она защищена, но это уже не наша задумка, а случайность.
+            # Открывать что-то ещё в таком состоянии нельзя.
+            текст = (f"{symbol}: хедж исполнился наполовину, и закрыть "
+                     f"лишнюю ногу не удалось (тикеты {не_закрылись}). "
+                     f"Новые входы остановлены — проверьте счёт в терминале.")
+            log.error(текст)
+            runtime_events.record("хедж", текст)
+            control.push_notification("Хедж исполнился наполовину", текст)
+            control.set_paused(True)
+            sym_state.last_reject_reason = "Хедж наполовину, компенсация не удалась"
+        else:
+            sym_state.last_reject_reason = (
+                "Хедж не собрался: вторая нога не исполнилась, первая закрыта")
+        return
+
+    if исполненные:
+        sym_state.last_reject_reason = "OK"
 
 
 def _close_one_position(pos):

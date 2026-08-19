@@ -194,7 +194,20 @@ def log_exit_journal(строка: dict):
         log.warning("Не удалось записать журнал выходов (%s): %s", путь, e)
 
 
+# Что вернуть, когда сделка ТОЧНО открылась, а номер позиции брокер не
+# сообщил. Это не «не открылось»: число истинно, и вызывающий код по-прежнему
+# пишет `if ok:`. Но закрывать такую ногу придётся не по номеру, а по
+# инструменту и направлению — см. close_leg().
+TICKET_НЕИЗВЕСТЕН = -1
+
+
 def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point):
+    """Открыть сделку по рынку.
+
+    Возвращает НОМЕР ПОЗИЦИИ (истинное число) при успехе и 0 при отказе.
+    Раньше возвращалось True/False, и этого не хватало: у хеджа две ноги, и
+    если вторая не исполнилась, первую надо закрыть — а закрыть без номера
+    нечего. Проверка `if ok:` работает как прежде: ноль ложен, номер истинен."""
     dir_txt = "BUY" if direction == 1 else "SELL"
 
     # tp_dist <= 0 означает "без TP" (см. USE_MAX_PROFIT_RIDE в config.py) —
@@ -209,7 +222,7 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
         sl = price - sl_dist if direction == 1 else price + sl_dist
         tp = 0.0 if tp_dist <= 0 else (price + tp_dist if direction == 1 else price - tp_dist)
         log_trade_csv("OPEN", symbol, dir_txt, price, sl, tp, lot, score)
-        return True
+        return TICKET_НЕИЗВЕСТЕН      # проверка на истории: позиции нет
 
     for attempt in range(1, cfg.ORDER_RETRY_ATTEMPTS + 1):
         tick = mt5c.get_tick(symbol)
@@ -221,25 +234,84 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
 
         if not rm.check_stops_distance(symbol, price, sl, tp):
             log.warning("%s: SL/TP слишком близко, ордер отменён", symbol)
-            return False
+            return 0
 
         result = mt5c.send_market_order(symbol, direction, lot, sl, tp, cfg.MAGIC_NUMBER,
                                          comment="AI_Scalper_Standalone")
         if result is None:
             log.error("%s: order_send вернул None, %s", symbol, mt5c.last_error())
-            return False
+            return 0
 
         if result.retcode == mt5c.RETCODE_DONE:
             log.info("%s %s | Score %.1f | Попытка %d | тикет %s",
                       symbol, dir_txt, score, attempt, result.order)
             log_trade_csv("OPEN", symbol, dir_txt, price, sl, tp, lot, score)
-            return True
+            # Номер позиции у рыночного ордера совпадает с номером ордера.
+            # Если брокер его почему-то не прислал — сделка всё равно
+            # открыта, и это НЕ отказ: возвращаем метку «номер неизвестен».
+            return int(getattr(result, "order", 0) or 0) or TICKET_НЕИЗВЕСТЕН
 
         log.warning("%s: ошибка %s — %s", symbol, result.retcode, result.comment)
         transient = result.retcode in (mt5c.RETCODE_REQUOTE, mt5c.RETCODE_PRICE_CHANGED, mt5c.RETCODE_PRICE_OFF)
         if not transient:
-            return False
-    return False
+            return 0
+    return 0
+
+
+def close_leg(symbol: str, ticket: int, direction: int = 0,
+              volume: float = 0.0) -> bool:
+    """Закрыть одну ногу хеджа целиком. True — закрыта.
+
+    ЗАЧЕМ. Хедж отправляется двумя заявками подряд, и это НЕ одна операция.
+    Между ними меняется цена, свободная маржа и настроение брокера. Если
+    первая нога исполнилась, а вторая нет, на счету остаётся ОДИНОЧНАЯ
+    направленная позиция — не то, что просил владелец, и не то, под что
+    считался риск. Такую ногу надо немедленно закрыть.
+
+    Номер позиции может быть неизвестен (TICKET_НЕИЗВЕСТЕН): брокер не
+    обязан его присылать. Тогда нога ищется по инструменту, направлению и
+    объёму среди наших открытых позиций — иначе закрывать было бы нечего.
+
+    В режиме проверки (LIVE_TRADING=False) ничего не отправляется: позиции
+    не существует, закрывать нечего, и это успех, а не отказ."""
+    if not cfg.LIVE_TRADING:
+        log.debug("[DRY-RUN] %s: закрытие ноги %s не отправляется", symbol, ticket)
+        return True
+    try:
+        позиции = mt5c.get_open_positions(symbol=symbol, magic=cfg.MAGIC_NUMBER)
+    except Exception as e:
+        log.error("%s: не удалось получить позиции для закрытия ноги: %s", symbol, e)
+        return False
+
+    нога = None
+    if ticket and ticket != TICKET_НЕИЗВЕСТЕН:
+        нога = next((p for p in позиции if p.ticket == ticket), None)
+    if нога is None and direction:
+        # Запасной путь: номера нет. Берём НАШУ позицию нужного направления,
+        # подходящую по объёму. Если таких несколько — самую свежую: именно
+        # её мы только что и открыли.
+        import MetaTrader5 as mt5
+        нужный_тип = mt5.POSITION_TYPE_BUY if direction == 1 else mt5.POSITION_TYPE_SELL
+        похожие = [p for p in позиции if p.type == нужный_тип
+                   and (volume <= 0 or abs(p.volume - volume) < 1e-9)]
+        нога = max(похожие, key=lambda p: getattr(p, "time", 0), default=None)
+
+    if нога is None:
+        # Позиции нет. Это не обязательно беда: её мог уже забрать стоп.
+        # Но и подтвердить закрытие мы не можем — отвечаем честно.
+        log.warning("%s: нога %s для закрытия не найдена среди открытых позиций",
+                    symbol, ticket)
+        return False
+
+    result = mt5c.close_position_partial(нога, нога.volume)
+    ок = result is not None and getattr(result, "retcode", None) == mt5c.RETCODE_DONE
+    if ок:
+        note_manual_close(нога.ticket)
+        log.info("%s: нога %s закрыта (компенсация неполного хеджа)",
+                 symbol, нога.ticket)
+    else:
+        log.error("%s: НЕ УДАЛОСЬ закрыть ногу %s: %s", symbol, нога.ticket, result)
+    return ок
 
 
 def cleanup_peak_profit(open_tickets: set):
