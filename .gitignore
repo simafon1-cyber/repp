@@ -105,6 +105,10 @@ ai_scalper_standalone/incident.json.sha256
 ai_scalper_standalone/incident_log.txt
 ai_scalper_standalone/incident_log.txt.sha256
 
+# Журнал сделок исследования: получается заново прогоном, весит много
+research/
+ai_scalper_standalone/research/
+
 # Выгруженная история котировок: большая, легко получается заново
 history/
 ai_scalper_standalone/history/
