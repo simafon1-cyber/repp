@@ -17,6 +17,7 @@ from datetime import datetime
 import config as cfg
 import execution as ex
 import mt5_connector as mt5c
+import retcodes
 import risk_manager as rm
 import runtime_events
 import safe_files
@@ -569,10 +570,11 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
                       symbol, итог.пояснение)
             return итог
 
-        log.warning("%s: ошибка %s — %s", symbol, итог.код, итог.пояснение)
-        transient = итог.код in (mt5c.RETCODE_REQUOTE, mt5c.RETCODE_PRICE_CHANGED,
-                                 mt5c.RETCODE_PRICE_OFF)
-        if not transient:
+        # Повторяем только временные отказы. Список раньше был вбит
+        # прямо здесь тремя кодами; теперь решает таблица (retcodes.py),
+        # где у каждого ответа записан класс и человеческое объяснение.
+        log.warning("%s: %s", symbol, итог.пояснение)
+        if not retcodes.повторять(итог.код):
             return итог
     return итог
 
