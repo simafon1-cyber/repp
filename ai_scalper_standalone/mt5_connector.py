@@ -12,6 +12,7 @@ mt5_connector.py — тонкая обёртка над пакетом MetaTrade
 """
 
 import logging
+from datetime import datetime, timezone
 import os
 
 import MetaTrader5 as mt5
@@ -427,12 +428,48 @@ def deals_or_none(date_from, date_to, symbol: str = None):
     """История сделок за период. None — спросить не удалось.
 
     Нужна там же, где positions_or_none: позиция могла открыться и тут же
-    закрыться по стопу, и тогда среди открытых её нет, а в истории есть."""
+    закрыться по стопу, и тогда среди открытых её нет, а в истории есть.
+
+    ВРЕМЯ ЗДЕСЬ — ВСЕГДА UTC. Терминал отдаёт метки времени в UTC и
+    запросы тоже понимает как UTC. Если передать сюда «наивный» datetime,
+    построенный от местных часов, окно запроса уедет на разницу часовых
+    поясов — у брокера это обычно 2–3 часа, у пользователя может быть
+    любая. История вернётся пустой, и программа решит, что сделки не
+    было, хотя она была. Поэтому наивное время здесь ДОСТРАИВАЕТСЯ до
+    UTC, а не отдаётся терминалу как есть."""
+    date_from = _в_utc(date_from)
+    date_to = _в_utc(date_to)
     try:
         deals = (mt5.history_deals_get(date_from, date_to, group=symbol)
                  if symbol else mt5.history_deals_get(date_from, date_to))
     except Exception as e:
         log.error("history_deals_get не отработал: %s", e)
+        return None
+    if deals is None:
+        return None
+    return list(deals)
+
+
+def _в_utc(момент):
+    """datetime без часового пояса считается UTC, а не местным временем."""
+    if isinstance(момент, datetime) and момент.tzinfo is None:
+        return момент.replace(tzinfo=timezone.utc)
+    return момент
+
+
+def deals_by_order(ticket: int):
+    """Сделки ПО НОМЕРУ ОРДЕРА. None — спросить не удалось.
+
+    Единственный способ связать историю с КОНКРЕТНОЙ нашей заявкой.
+    Поиск по инструменту и magic за интервал времени такой связи не даёт:
+    в то же окно может попасть заявка второго экземпляра программы или
+    сделка, открытая руками в терминале."""
+    if not ticket or ticket <= 0:
+        return None
+    try:
+        deals = mt5.history_deals_get(ticket=int(ticket))
+    except Exception as e:
+        log.error("history_deals_get(ticket=%s) не отработал: %s", ticket, e)
         return None
     if deals is None:
         return None
