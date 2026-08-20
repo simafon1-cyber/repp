@@ -199,6 +199,32 @@
 выходили за границу отрезка. Третья — ту самую неоднородность: сделки на
 краю жили 4–6 баров вместо 100.
 
+### Результаты прогонов
+
+Все числа получены командами, а не записаны по памяти:
+
+```
+python3 tests/test_cost_model.py     Пройдено: 104    Сбоев: 0
+bash tests/run_all.sh                ИТОГ: все проверки пройдены
+                                     4240 проверок, 41 файл, код выхода 0
+python3 run_entry_search.py          126 наборов сошлись с журналом ТОЧНО
+```
+
+### Как повторить
+
+```
+git checkout claude/metatrader5-trading-system-ids42h
+git checkout d5aa886
+tar xzf data/history_M5.tar.gz -C ai_scalper_standalone/history/
+sha256sum -c <<< "$(cat data/history_M5.tar.gz.sha256)  data/history_M5.tar.gz"
+python3 tests/test_cost_model.py
+bash tests/run_all.sh
+cd ai_scalper_standalone && python3 run_entry_search.py
+```
+
+Прогон — около 25 минут. Сравнить с моими числами можно по
+`research/research_results.json` и SHA-256 журнала из раздела 6.
+
 ---
 
 ## 8. ЧТО Я МОГУ И ЧЕГО НЕ МОГУ УТВЕРЖДАТЬ
