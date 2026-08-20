@@ -513,6 +513,25 @@ def history_order_by_ticket(ticket: int):
     return list(orders)
 
 
+def deals_by_position(position_id: int):
+    """Сделки ПО НОМЕРУ ПОЗИЦИИ. None — спросить не удалось.
+
+    Нужна сверке после инцидента: по номеру позиции видно не только как
+    она открывалась, но и закрывалась ли она вообще. Без этого «позиции
+    нет» пришлось бы толковать наугад."""
+    if not position_id or position_id <= 0:
+        return None
+    try:
+        deals = mt5.history_deals_get(position=int(position_id))
+    except Exception as e:
+        log.error("history_deals_get(position=%s) не отработал: %s",
+                  position_id, e)
+        return None
+    if deals is None:
+        return None
+    return list(deals)
+
+
 def deals_by_order(ticket: int):
     """Сделки ПО НОМЕРУ ОРДЕРА. None — спросить не удалось.
 

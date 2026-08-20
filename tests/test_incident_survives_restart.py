@@ -412,6 +412,30 @@ def test_directory_is_flushed_after_replace() -> None:
         check(вызовы, "При записи инцидента каталог сбрасывается", str(вызовы))
 
 
+def test_pause_works_without_the_terminal_module() -> None:
+    """Запрет держится даже там, где терминал не установлен.
+
+    Пульт однажды уже начал тянуть за собой MetaTrader5 через сверку — и
+    этот файл тестов сразу перестал запускаться. На рабочей машине это
+    значило бы, что при недоступном терминале не работает и защита."""
+    print("\n[Остановка работает без модуля терминала]")
+    check("MetaTrader5" not in sys.modules,
+          "Терминал в этих проверках не подключён вовсе")
+
+    import ast
+    дерево = ast.parse((APP / "control.py").read_text(encoding="utf-8"))
+    верхние = []
+    for узел in дерево.body:          # только верхний уровень файла
+        if isinstance(узел, ast.Import):
+            верхние += [и.name for и in узел.names]
+        elif isinstance(узел, ast.ImportFrom):
+            верхние.append(узел.module or "")
+    check("reconcile" not in верхние,
+          "Сверка не подгружается при импорте пульта", str(верхние))
+    check("mt5_connector" not in верхние,
+          "И терминал тоже", str(верхние))
+
+
 def test_permissions_are_restricted() -> None:
     """Доступ к файлу ограничивается текущим пользователем."""
     print("\n[Доступ к файлу ограничивается]")
