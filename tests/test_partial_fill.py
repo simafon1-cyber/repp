@@ -369,6 +369,30 @@ import mt5_connector as mt5c    # noqa: E402
 import risk_manager as rm       # noqa: E402
 import trade_manager as tm      # noqa: E402
 from control import control     # noqa: E402
+
+# ФАЙЛ ИНЦИДЕНТА (И2) — ВО ВРЕМЕННУЮ ПАПКУ.
+#
+# Отметка об остановке пишется рядом с программой. Тесты не должны
+# оставлять её в рабочей папке: следующий запуск программы увидел бы
+# чужой инцидент и отказался торговать.
+import tempfile as _врем                                   # noqa: E402
+import incident as _инцидент                               # noqa: E402
+from control import control                                # noqa: E402
+
+_ПАПКА_ИНЦИДЕНТА = _врем.mkdtemp(prefix="incident_test_")
+_инцидент.путь = (lambda folder="":
+                  __import__('os').path.join(_ПАПКА_ИНЦИДЕНТА, "incident.json"))
+
+
+def _очистить_инцидент():
+    """Снять остановку между проверками.
+
+    Обычная кнопка «снять паузу» инцидент теперь НЕ снимает — в этом весь
+    смысл И2. Значит, тесты обязаны снимать его явно, иначе первый же
+    инцидент остановил бы все проверки после себя."""
+    control.снять_инцидент("тест", "очистка между проверками")
+    control.set_paused(False)
+
 from state import AccountState, SymbolState   # noqa: E402
 
 
@@ -385,7 +409,7 @@ def сброс(хедж=False):
     брокер.позиции_ломаются = False
     брокер.история_ломается = False
     брокер.следующий = 1000
-    control.set_paused(False)
+    _очистить_инцидент()
     профиль = rm.get_profile()
     профиль["hedge_both_directions"] = хедж
     профиль["min_score_to_trade"] = 0.0
@@ -601,7 +625,7 @@ def test_compensation_that_never_finishes_stops_trading() -> None:
           "ТОРГОВЛЯ ОСТАНОВЛЕНА — новых входов не будет")
     check("компенсация не удалась" in причина.lower(),
           "И причина сказана прямо", repr(причина))
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_close_leg_gives_up_after_a_bounded_number_of_tries() -> None:
@@ -684,7 +708,7 @@ def test_timeout_with_broken_terminal_stops_everything() -> None:
     check(закрытий() == 0,
           "И вслепую ничего не закрывалось: закрывать, возможно, нечего",
           f"закрытий {закрытий()}")
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_unknown_on_second_leg_reports_the_first_one() -> None:
@@ -721,7 +745,7 @@ def test_unknown_on_second_leg_reports_the_first_one() -> None:
     check(закрытий() == 0,
           "И вслепую ничего не закрывалось", f"закрытий {закрытий()}")
     check("не выяснен" in причина.lower(), "Причина названа", repr(причина))
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_unknown_answer_never_retries() -> None:
@@ -818,7 +842,7 @@ def test_history_window_is_built_in_utc() -> None:
     check(control.is_paused(),
           "Сделка найдена в истории — торговля ОСТАНОВЛЕНА, а не «отказ»")
     check("не выяснен" in причина.lower(), "И причина названа", repr(причина))
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_instantly_closed_position_is_found_not_called_a_rejection() -> None:
@@ -840,7 +864,7 @@ def test_instantly_closed_position_is_found_not_called_a_rejection() -> None:
     check("0.07" in текст, "Объём взят из найденной сделки", текст[:200])
     check("уже закрыт" in текст, "И сказано, что позиция уже закрыта",
           текст[:200])
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_two_candidates_in_the_window_are_not_guessed_between() -> None:
@@ -866,7 +890,7 @@ def test_two_candidates_in_the_window_are_not_guessed_between() -> None:
           "И сказано, что кандидатов несколько", текст[:220])
     check("0.43" not in текст, "Объёмы НЕ сложены", текст[:220])
     check("не выяснен" in причина.lower(), "Причина названа", repr(причина))
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_exact_order_ticket_beats_the_time_window() -> None:
@@ -915,7 +939,7 @@ def test_exact_order_ticket_beats_the_time_window() -> None:
           "И в сообщении назван номер заявки", текст[:220])
     check(чужая.ticket in брокер.позиции,
           "Чужая открытая позиция не тронута и за нашу не засчитана")
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_two_new_positions_are_not_guessed_between() -> None:
@@ -957,7 +981,7 @@ def test_two_new_positions_are_not_guessed_between() -> None:
     check(len(брокер.объёмы()) == 2, "Обе позиции на счету остались",
           str(брокер.объёмы()))
     check(закрытий() == 0, "И вслепую ничего не закрывалось")
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 # =====================================================================
@@ -986,7 +1010,7 @@ def test_placed_order_still_alive_is_not_a_rejection() -> None:
     check("жива на сервере" in текст,
           "И сказано, что заявка ещё жива", текст[:220])
     check("не выяснен" in причина.lower(), "Причина названа", repr(причина))
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_delayed_appearance_after_timeout_stays_locked() -> None:
@@ -1025,7 +1049,7 @@ def test_delayed_appearance_after_timeout_stays_locked() -> None:
     check(len(брокер.объёмы()) == 1,
           "На счету осталась ровно одна позиция, а не две",
           str(брокер.объёмы()))
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_proven_cancellation_is_the_only_rejection() -> None:
@@ -1045,7 +1069,7 @@ def test_proven_cancellation_is_the_only_rejection() -> None:
               f"Заявка {имя}: паузы нет, работа продолжается")
         check(брокер.объёмы() == [], f"Заявка {имя}: счёт пуст",
               str(брокер.объёмы()))
-        control.set_paused(False)
+        _очистить_инцидент()
 
 
 def test_filled_order_without_position_is_not_a_rejection() -> None:
@@ -1065,7 +1089,7 @@ def test_filled_order_without_position_is_not_a_rejection() -> None:
     check(control.is_paused(), "ТОРГОВЛЯ ОСТАНОВЛЕНА")
     check("исполнена" in текст, "И сказано, что заявка исполнена",
           текст[:220])
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_no_order_id_and_no_traces_is_not_a_rejection() -> None:
@@ -1088,7 +1112,7 @@ def test_no_order_id_and_no_traces_is_not_a_rejection() -> None:
           текст[:260])
     check(открытий() == 1, "Повторной заявки нет", str(открытий()))
     check("не выяснен" in причина.lower(), "Причина названа", repr(причина))
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_broken_order_query_is_unknown_not_a_rejection() -> None:
@@ -1104,7 +1128,7 @@ def test_broken_order_query_is_unknown_not_a_rejection() -> None:
         брокер.заявки_ломаются = False
     check(control.is_paused(), "ТОРГОВЛЯ ОСТАНОВЛЕНА")
     check("не выяснен" in причина.lower(), "Причина названа", repr(причина))
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_rejection_needs_proof_in_the_source() -> None:
@@ -1177,7 +1201,7 @@ def test_known_order_is_not_satisfied_by_a_lookalike_position() -> None:
           "Чужая позиция за нашу НЕ засчитана", текст[:240])
     check(открытий() == 1, "Новой заявки не отправлено", str(открытий()))
     check("не выяснен" in причина.lower(), "Причина названа", repr(причина))
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_position_is_taken_only_through_the_deal_of_our_order() -> None:
@@ -1231,7 +1255,7 @@ def test_lookalike_cannot_replace_our_order_on_the_next_pass() -> None:
           f"было {было}, стало {открытий()}")
     check("ауза" in причина2, "Вход отклонён паузой", repr(причина2))
     check(A in брокер.активные, "Наша заявка так и осталась активной")
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_deals_pointing_at_several_positions_are_not_guessed() -> None:
@@ -1251,7 +1275,7 @@ def test_deals_pointing_at_several_positions_are_not_guessed() -> None:
     текст = " ".join(str(з) for з in runtime_events.recent(10))
     check(control.is_paused(), "ТОРГОВЛЯ ОСТАНОВЛЕНА")
     check("разные позиции" in текст, "И причина названа", текст[:240])
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_traced_position_that_vanished_is_unknown() -> None:
@@ -1273,7 +1297,7 @@ def test_traced_position_that_vanished_is_unknown() -> None:
           "Назван номер прослеженной позиции", текст[:240])
     check("уже закрыли" in текст, "И сказано, что её уже закрыли",
           текст[:240])
-    control.set_paused(False)
+    _очистить_инцидент()
 
 
 def test_positions_are_never_matched_by_appearance_when_ticket_is_known() -> None:
@@ -1389,7 +1413,7 @@ def main() -> int:
                 ф()
     finally:
         cfg.LIVE_TRADING = было
-        control.set_paused(False)
+        _очистить_инцидент()
     print("\n" + "=" * 70)
     print(f"Пройдено: {passed}   Сбоев: {failed}")
     print("=" * 70)

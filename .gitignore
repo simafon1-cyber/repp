@@ -93,6 +93,18 @@ symbols_survey.json
 risk_state.json
 ai_scalper_standalone/risk_state.json
 
+# Отметка о незакрытом инциденте исполнения (И2) и её журнал: состояние
+# КОНКРЕТНОЙ установки, а не часть программы. В репозиторий не попадает —
+# иначе чужой инцидент приезжал бы вместе с обновлением.
+incident.json
+incident.json.sha256
+incident_log.txt
+incident_log.txt.sha256
+ai_scalper_standalone/incident.json
+ai_scalper_standalone/incident.json.sha256
+ai_scalper_standalone/incident_log.txt
+ai_scalper_standalone/incident_log.txt.sha256
+
 # Выгруженная история котировок: большая, легко получается заново
 history/
 ai_scalper_standalone/history/

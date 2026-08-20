@@ -145,6 +145,30 @@ import mt5_connector as mt5c  # noqa: E402
 import risk_manager as rm     # noqa: E402
 from state import AccountState, SymbolState   # noqa: E402
 
+# ФАЙЛ ИНЦИДЕНТА (И2) — ВО ВРЕМЕННУЮ ПАПКУ.
+#
+# Отметка об остановке пишется рядом с программой. Тесты не должны
+# оставлять её в рабочей папке: следующий запуск программы увидел бы
+# чужой инцидент и отказался торговать.
+import tempfile as _врем                                   # noqa: E402
+import incident as _инцидент                               # noqa: E402
+from control import control                                # noqa: E402
+
+_ПАПКА_ИНЦИДЕНТА = _врем.mkdtemp(prefix="incident_test_")
+_инцидент.путь = (lambda folder="":
+                  __import__('os').path.join(_ПАПКА_ИНЦИДЕНТА, "incident.json"))
+
+
+def _очистить_инцидент():
+    """Снять остановку между проверками.
+
+    Обычная кнопка «снять паузу» инцидент теперь НЕ снимает — в этом весь
+    смысл И2. Значит, тесты обязаны снимать его явно, иначе первый же
+    инцидент остановил бы все проверки после себя."""
+    control.снять_инцидент("тест", "очистка между проверками")
+    control.set_paused(False)
+
+
 ИСХОДНИК_MAIN = (APP / "main.py").read_text(encoding="utf-8")
 
 
@@ -406,7 +430,7 @@ def test_failed_compensation_stops_new_entries() -> None:
     # Закрыть не удалось — и это ОТКАЗ, а не частичное закрытие.
     tm.close_leg = lambda *a, **k: ex.отказ("брокер не принял закрытие")
 
-    control.set_paused(False)
+    _очистить_инцидент()
     try:
         причина = прогнать("EURUSD", _Счёт(margin_mode=ХЕДЖ))
         check(control.is_paused(),
@@ -414,7 +438,7 @@ def test_failed_compensation_stops_new_entries() -> None:
         check("компенсация не удалась" in причина.lower(),
               "И причина сказана прямо", f"причина: {причина!r}")
     finally:
-        control.set_paused(False)
+        _очистить_инцидент()
         tm.execute_market_order, tm.close_leg = ордер, нога
         профиль["hedge_both_directions"], профиль["min_score_to_trade"] = было
 
