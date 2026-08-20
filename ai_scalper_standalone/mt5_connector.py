@@ -457,6 +457,62 @@ def _в_utc(момент):
     return момент
 
 
+def orders_or_none(symbol: str = None, magic: int = None):
+    """АКТИВНЫЕ заявки. None — спросить не удалось.
+
+    Заявка живёт отдельно от позиции. Между «отправлено» и «исполнено»
+    она какое-то время просто ЛЕЖИТ на сервере, и в этот момент позиции
+    ещё нет, сделки в истории ещё нет — а отменять или считать отказом
+    нечего: заявка жива и вот-вот сработает.
+
+    Без этого запроса отсутствие позиции и сделки выглядело как
+    доказательство отказа. Это не доказательство, а наблюдение."""
+    try:
+        orders = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()
+    except Exception as e:
+        log.error("orders_get не отработал: %s", e)
+        return None
+    if orders is None:
+        return None
+    if magic is not None:
+        orders = [o for o in orders if getattr(o, "magic", None) == magic]
+    return list(orders)
+
+
+def order_by_ticket(ticket: int):
+    """Активная заявка по номеру. None — спросить не удалось.
+
+    Пустой список — заявки среди активных нет. Это НЕ значит «отменена»:
+    она могла и исполниться. За ответом на это идут в историю заявок."""
+    if not ticket or ticket <= 0:
+        return None
+    try:
+        orders = mt5.orders_get(ticket=int(ticket))
+    except Exception as e:
+        log.error("orders_get(ticket=%s) не отработал: %s", ticket, e)
+        return None
+    if orders is None:
+        return None
+    return list(orders)
+
+
+def history_order_by_ticket(ticket: int):
+    """Завершённая заявка по номеру. None — спросить не удалось.
+
+    Здесь и только здесь лежит окончательный ответ «чем всё кончилось»:
+    исполнена, отменена, отклонена или истекла."""
+    if not ticket or ticket <= 0:
+        return None
+    try:
+        orders = mt5.history_orders_get(ticket=int(ticket))
+    except Exception as e:
+        log.error("history_orders_get(ticket=%s) не отработал: %s", ticket, e)
+        return None
+    if orders is None:
+        return None
+    return list(orders)
+
+
 def deals_by_order(ticket: int):
     """Сделки ПО НОМЕРУ ОРДЕРА. None — спросить не удалось.
 
@@ -706,3 +762,41 @@ RETCODE_HEDGE_PROHIBITED = getattr(mt5, "TRADE_RETCODE_HEDGE_PROHIBITED", 10046)
 # Тип сделки в истории: 0 — вход в позицию, 1 — выход. Нужен сверке
 # (trade_manager.сверить_вход): среди истории ищется именно ВХОД.
 DEAL_ENTRY_IN = getattr(mt5, "DEAL_ENTRY_IN", 0)
+
+
+# =====================================================================
+# СОСТОЯНИЯ ЗАЯВКИ
+# =====================================================================
+# Числа заданы платформой (ENUM_ORDER_STATE) и не меняются. Нужны, чтобы
+# отличить «заявка кончилась ничем» от «заявка кончилась сделкой» и от
+# «заявка ещё жива». Раньше этого различия в программе не было вообще:
+# отсутствие позиции считалось отказом, хотя заявка могла спокойно лежать
+# на сервере и вот-вот исполниться.
+ORDER_STATE_STARTED = getattr(mt5, "ORDER_STATE_STARTED", 0)
+ORDER_STATE_PLACED = getattr(mt5, "ORDER_STATE_PLACED", 1)
+ORDER_STATE_CANCELED = getattr(mt5, "ORDER_STATE_CANCELED", 2)
+ORDER_STATE_PARTIAL = getattr(mt5, "ORDER_STATE_PARTIAL", 3)
+ORDER_STATE_FILLED = getattr(mt5, "ORDER_STATE_FILLED", 4)
+ORDER_STATE_REJECTED = getattr(mt5, "ORDER_STATE_REJECTED", 5)
+ORDER_STATE_EXPIRED = getattr(mt5, "ORDER_STATE_EXPIRED", 6)
+
+# Заявка ЗАКОНЧИЛАСЬ, и закончилась ничем. Только это доказывает отказ.
+СОСТОЯНИЯ_БЕЗ_ИСПОЛНЕНИЯ = (ORDER_STATE_CANCELED, ORDER_STATE_REJECTED,
+                            ORDER_STATE_EXPIRED)
+
+# Заявка закончилась СДЕЛКОЙ — целиком или частью.
+СОСТОЯНИЯ_С_ИСПОЛНЕНИЕМ = (ORDER_STATE_FILLED, ORDER_STATE_PARTIAL)
+
+ИМЕНА_СОСТОЯНИЙ = {
+    ORDER_STATE_STARTED: "проверяется",
+    ORDER_STATE_PLACED: "размещена",
+    ORDER_STATE_CANCELED: "отменена",
+    ORDER_STATE_PARTIAL: "исполнена частично",
+    ORDER_STATE_FILLED: "исполнена",
+    ORDER_STATE_REJECTED: "отклонена",
+    ORDER_STATE_EXPIRED: "истекла",
+}
+
+
+def имя_состояния(состояние) -> str:
+    return ИМЕНА_СОСТОЯНИЙ.get(состояние, f"неизвестное ({состояние})")
