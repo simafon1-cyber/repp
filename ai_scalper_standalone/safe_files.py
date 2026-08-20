@@ -104,6 +104,7 @@ def atomic_write_text(path: str, content: str, encoding: str = "utf-8",
             _rotate_backups(path)
 
         os.replace(tmp_path, path)  # атомарно и на Windows, и на POSIX
+        _fsync_directory(directory)
     except Exception:
         try:
             os.remove(tmp_path)
@@ -112,6 +113,32 @@ def atomic_write_text(path: str, content: str, encoding: str = "utf-8",
         raise
 
     _update_integrity_sidecar(path)
+
+
+def _fsync_directory(directory: str):
+    """Сбросить на диск САМУ ЗАПИСЬ О ФАЙЛЕ в каталоге.
+
+    os.replace атомарен, но атомарность и долговечность — разные вещи.
+    После замены новое имя файла может ещё лежать в кэше каталога: при
+    внезапном отключении питания система вернётся к состоянию, где нового
+    файла нет. Для отметки об остановке (incident.json) это значило бы,
+    что запрет исчез именно после того сбоя, из-за которого он и появился.
+
+    На Windows каталог как файл не открывается, и такого вызова там нет —
+    молча пропускаем: это дополнительная защита, а не обязательная."""
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except (OSError, AttributeError):
+        return
+    try:
+        os.fsync(fd)
+    except OSError as e:
+        log.debug("fsync каталога %s не удался: %s", directory, e)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def append_line_safely(path: str, write_fn, encoding: str = "utf-8"):

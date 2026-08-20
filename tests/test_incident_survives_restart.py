@@ -320,6 +320,98 @@ def test_a_failed_write_still_stops_trading() -> None:
               "И отдельно видно, что отметка не легла на диск")
 
 
+def test_missing_hash_file_is_damage_not_normality() -> None:
+    """Хэш-файл удалили — это повреждение, а не «всё в порядке».
+
+    Общая проверка safe_files считает отсутствующий хэш нормой и создаёт
+    его заново. Для отметки об остановке так нельзя: тогда достаточно
+    удалить хэш-файл, и подмена содержимого прошла бы незамеченной."""
+    print("\n[Удалённый хэш-файл — это повреждение]")
+    with Папка() as f:
+        c = Control()
+        c.открыть_инцидент(СВЕДЕНИЯ, f)
+        os.remove(incident.путь(f) + incident.ХЭШ_СУФФИКС)
+
+        стало = перезапуск(f)
+        check(стало.is_paused(), "ТОРГОВЛЯ ОСТАНОВЛЕНА")
+        check(стало.инцидент().get("состояние") == incident.ПОВРЕЖДЁН,
+              "И это названо повреждением", str(стало.инцидент()))
+        check("хэш-файл отсутствует" in стало.инцидент().get("причина", ""),
+              "Причина названа словами", str(стало.инцидент()))
+
+
+def test_hash_removal_cannot_hide_a_substitution() -> None:
+    """ГЛАВНОЕ ИЗ ЭТОЙ ПАРЫ. Подменить файл и стереть хэш — не поможет."""
+    print("\n[Подмена со стиранием хэша не проходит]")
+    with Папка() as f:
+        c = Control()
+        c.открыть_инцидент(СВЕДЕНИЯ, f)
+        подделка = {"version": 1, "открыт": "2020-01-01 00:00:00",
+                    "сведения": {"причина": "всё в порядке, торгуйте"}}
+        Path(incident.путь(f)).write_text(
+            json.dumps(подделка, ensure_ascii=False), encoding="utf-8")
+        os.remove(incident.путь(f) + incident.ХЭШ_СУФФИКС)
+
+        стало = перезапуск(f)
+        check(стало.is_paused(), "ТОРГОВЛЯ ОСТАНОВЛЕНА")
+        check(стало.инцидент().get("состояние") == incident.ПОВРЕЖДЁН,
+              "Подмена всё равно замечена", str(стало.инцидент()))
+
+
+def test_empty_hash_file_is_damage() -> None:
+    print("\n[Пустой хэш-файл — тоже повреждение]")
+    with Папка() as f:
+        c = Control()
+        c.открыть_инцидент(СВЕДЕНИЯ, f)
+        Path(incident.путь(f) + incident.ХЭШ_СУФФИКС).write_text(
+            "", encoding="utf-8")
+        check(перезапуск(f).инцидент().get("состояние") == incident.ПОВРЕЖДЁН,
+              "Замечено")
+
+
+def test_hash_suffix_matches_safe_files() -> None:
+    """Суффикс хэш-файла обязан совпадать с тем, что пишет safe_files.
+
+    Разойдутся — строгая проверка будет искать не тот файл и всегда
+    говорить «хэша нет». Инцидент навсегда станет «повреждённым»."""
+    print("\n[Суффикс хэш-файла совпадает с safe_files]")
+    import safe_files
+    check(incident.ХЭШ_СУФФИКС == safe_files._INTEGRITY_SUFFIX,
+          f"Суффикс один и тот же: {incident.ХЭШ_СУФФИКС}",
+          f"{incident.ХЭШ_СУФФИКС} против {safe_files._INTEGRITY_SUFFIX}")
+
+
+def test_directory_is_flushed_after_replace() -> None:
+    """После замены файла сбрасывается и запись о нём в каталоге.
+
+    os.replace атомарен, но атомарность и долговечность — разные вещи.
+    Без этого при внезапном отключении питания система могла вернуться к
+    состоянию, где нового файла нет, — то есть запрет исчез бы именно
+    после того сбоя, из-за которого он и появился."""
+    print("\n[После записи сбрасывается и каталог]")
+    import safe_files
+    check(hasattr(safe_files, "_fsync_directory"),
+          "Сброс каталога есть")
+    исходник = (APP / "safe_files.py").read_text(encoding="utf-8")
+    без_комментариев = "\n".join(
+        с.split("#", 1)[0] for с in исходник.splitlines())
+    место_replace = без_комментариев.index("os.replace(tmp_path, path)")
+    место_fsync = без_комментариев.index("_fsync_directory(directory)")
+    check(место_fsync > место_replace,
+          "И он идёт ПОСЛЕ замены, а не до неё")
+
+    # Вызов действительно происходит при записи.
+    with Папка() as f:
+        вызовы = []
+        было = safe_files._fsync_directory
+        safe_files._fsync_directory = lambda d: вызовы.append(d)
+        try:
+            Control().открыть_инцидент(СВЕДЕНИЯ, f)
+        finally:
+            safe_files._fsync_directory = было
+        check(вызовы, "При записи инцидента каталог сбрасывается", str(вызовы))
+
+
 def test_permissions_are_restricted() -> None:
     """Доступ к файлу ограничивается текущим пользователем."""
     print("\n[Доступ к файлу ограничивается]")
