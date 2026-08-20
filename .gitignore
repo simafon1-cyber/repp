@@ -109,6 +109,10 @@ ai_scalper_standalone/incident_log.txt.sha256
 research/
 ai_scalper_standalone/research/
 
-# Выгруженная история котировок: большая, легко получается заново
+# Выгруженная история котировок: большая, легко получается заново.
+# ИСКЛЮЧЕНИЕ — data/history_M5.tar.gz: без него опубликованный прогон
+# нельзя повторить, а значит и проверить (см. docs/ENTRY_SEARCH.md).
 history/
 ai_scalper_standalone/history/
+!data/history_M5.tar.gz
+!data/history_M5.tar.gz.sha256
