@@ -54,15 +54,44 @@ OPTIONAL_PACKAGES = {
 }
 
 
+def _есть_на_самом_деле(name: str) -> bool:
+    """Установлен ли пакет ПО-НАСТОЯЩЕМУ.
+
+    Для MetaTrader5 обычная проверка не годится. На компьютере без Windows
+    слой platform_support подставляет заглушку — иначе не запустилась бы ни
+    одна часть программы, даже та, которой терминал не нужен. Заглушка
+    полноценно занимает место пакета, и `find_spec` честно отвечает «есть».
+
+    Но в ОТЧЁТЕ ЧЕЛОВЕКУ это была бы ложь: связи с терминалом нет и быть не
+    может. Поэтому здесь спрашивается сам слой, а не список модулей."""
+    if name == "MetaTrader5":
+        try:
+            import platform_support
+            return platform_support.настоящий_терминал_есть()
+        except Exception:  # noqa: BLE001
+            pass
+    return importlib.util.find_spec(name) is not None
+
+
 def check_packages() -> list:
     """Наличие библиотек. В собранной программе они уже внутри."""
     frozen = getattr(sys, "frozen", False)
     results = []
 
     for name, why in REQUIRED_PACKAGES.items():
-        present = importlib.util.find_spec(name) is not None
+        present = _есть_на_самом_деле(name)
         if present:
             results.append(_check(name, OK, why))
+        elif name == "MetaTrader5" and sys.platform != "win32":
+            # Не «поставьте пакет»: ставить нечего. Говорим правду.
+            try:
+                import platform_support
+                причина = platform_support.почему_нельзя()
+            except Exception:  # noqa: BLE001
+                причина = "MetaTrader5 собран только под Windows"
+            results.append(_check(
+                name, FAIL, f"недоступен на этой системе ({why})",
+                причина.splitlines()[0]))
         elif frozen:
             results.append(_check(name, FAIL, f"нет в сборке ({why})",
                                   "Пересоберите программу — это ошибка сборки"))
@@ -71,7 +100,7 @@ def check_packages() -> list:
                                   f"pip install {name}"))
 
     for name, why in OPTIONAL_PACKAGES.items():
-        present = importlib.util.find_spec(name) is not None
+        present = _есть_на_самом_деле(name)
         if present:
             results.append(_check(name, OK, why))
         else:
