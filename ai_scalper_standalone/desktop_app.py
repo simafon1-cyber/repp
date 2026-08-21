@@ -5345,20 +5345,38 @@ def main():
     # ОДНА КОМАНДА ДЛЯ ВЫГРУЗКИ ИСТОРИИ. То же самое делает кнопка на вкладке
     # «Система»; ключ нужен тем, кому удобнее из командной строки.
     if "--export-history" in sys.argv:
+        # ОДНА СЕРДЦЕВИНА НА ОБА ПУТИ ЗАПУСКА.
+        #
+        # Раньше здесь лежала своя копия выгрузки, похожая на ту, что в
+        # history_export.py. Копии разошлись, и аудит это поймал: здесь не
+        # ограничивались таймфреймы, терминал не отпускался в finally, а код
+        # возврата был нулевым даже когда не выгрузилось ничего.
+        #
+        # Две похожие копии расходятся всегда — вопрос только в том, когда
+        # это заметят. Теперь обе дороги идут через history_export.выгрузить.
         import history_export
-        mt5c.connect()
-        снимок = history_export.новый_снимок()
-        print(f"Снимок: {снимок}")
-        print(history_export.describe(history_export.export_all(
-            progress=lambda t: print(t, flush=True), folder=снимок)))
-        history_export.записать_манифест(снимок)
+
+        # Таймфреймы называются ЯВНО, как и в основной команде. Раньше ключ
+        # молча тянул все четыре: это минуты работы терминала и место на
+        # диске там, где обычно нужен один.
+        тфы = [sys.argv[i + 1] for i, а in enumerate(sys.argv)
+               if а in ("--timeframe", "-t") and i + 1 < len(sys.argv)]
+        if not тфы:
+            print("Назовите таймфрейм: --timeframe H1 (можно повторять).")
+            print("Известные: " + ", ".join(sorted(history_export.БАРОВ_ПО_ТФ)))
+            sys.exit(2)
+
+        код, снимок, _ = history_export.выгрузить(
+            тфы, печать=lambda t: print(t, flush=True))
+
         # По умолчанию файлы сразу уезжают на GitHub — ради этого всё и
         # затевалось. Ключ --no-upload оставляет их только на диске.
-        if "--no-upload" not in sys.argv:
+        # Отправляем только то, что действительно выгрузилось.
+        if код == 0 and "--no-upload" not in sys.argv:
             import history_upload
             print(history_upload.describe(history_upload.upload_all(
                 progress=lambda t: print(t, flush=True), folder=снимок)))
-        sys.exit(0)
+        sys.exit(код)
 
     # КРИТИЧНО для собранного .exe: процессы счетов используют multiprocessing,
     # а на Windows дочерний процесс запускается повторным вызовом этого же
