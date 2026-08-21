@@ -252,6 +252,11 @@ class AccountRunner:
 
     # ---------- закрытие позиций ----------
     def close_ticket(self, ticket: int) -> bool:
+        # ПРЕДТОРГОВЫЙ БАРЬЕР. Этот модуль ведёт ЧУЖИЕ счета, и барьер здесь
+        # нужен не меньше, чем в основном пути: закрытие позиции — такой же
+        # торговый вызов, как открытие. См. pretrade_gate.py.
+        import pretrade_gate
+        pretrade_gate.требовать("закрытие позиции по номеру")
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
             return False

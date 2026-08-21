@@ -182,6 +182,12 @@ FORBIDDEN = {
     "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_PATH",
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "FINNHUB_API_KEY",
     "LOG_CSV_PATH", "LOG_FILE_PATH",
+    # Предторговый барьер. Менять его удалённо нельзя ни в какую сторону:
+    # тот, кто может выключить барьер или подставить другой номер счёта,
+    # может увести заявки на чужой счёт — а это ровно то, от чего барьер
+    # и поставлен. Задаётся только руками, в config.py, на своём компьютере.
+    "DEMO_ACCEPTANCE_MODE", "DEMO_ACCEPTANCE_LOGIN",
+    "DEMO_ACCEPTANCE_SERVER", "DEMO_ACCEPTANCE_REQUIRE_DEMO",
 }
 
 

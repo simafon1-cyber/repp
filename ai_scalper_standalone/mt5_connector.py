@@ -18,6 +18,7 @@ import os
 import MetaTrader5 as mt5
 
 import config as cfg
+import pretrade_gate
 
 log = logging.getLogger("mt5_connector")
 
@@ -674,6 +675,11 @@ def hedging_block_reason(account=None) -> str:
 
 def send_market_order(symbol: str, direction: int, lot: float, sl_price: float, tp_price: float,
                        magic: int, comment: str = "", deviation: int = 20):
+    # ПРЕДТОРГОВЫЙ БАРЬЕР. Стоит ПЕРВОЙ строкой, до чтения цены и до сборки
+    # заявки: проверка, которую можно обойти, добравшись до кода ниже, —
+    # не проверка. Бросает, а не возвращает None: возвращённое значение
+    # можно не посмотреть, брошенную ошибку — нельзя. См. pretrade_gate.py.
+    pretrade_gate.требовать("открытие позиции")
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         return None
@@ -712,6 +718,7 @@ def send_market_order(symbol: str, direction: int, lot: float, sl_price: float, 
 
 
 def modify_position(ticket: int, sl: float, tp: float):
+    pretrade_gate.требовать("изменение стопа или тейка")
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
         "position": ticket,
@@ -722,6 +729,7 @@ def modify_position(ticket: int, sl: float, tp: float):
 
 
 def close_position_partial(position, volume: float):
+    pretrade_gate.требовать("закрытие позиции")
     direction_close = mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
     tick = mt5.symbol_info_tick(position.symbol)
     if tick is None:

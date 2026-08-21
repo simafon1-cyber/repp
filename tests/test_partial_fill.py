@@ -59,6 +59,13 @@ cfg = types.ModuleType("config")
 cfg.__file__ = str(APP / "config.py.example")
 exec((APP / "config.py.example").read_text(encoding="utf-8"), cfg.__dict__)
 cfg.LIVE_TRADING = False
+# Режим демо-приёмки здесь выключен НАРОЧНО. Эти тесты про частичное
+# исполнение и неясные ответы брокера, а не про то, на каком счёте мы
+# работаем. Предторговый барьер проверяется отдельно, в
+# tests/test_pretrade_gate.py — там он и должен запрещать.
+# Если оставить режим включённым, барьер (справедливо) не выпустит ни одной
+# заявки, и эти тесты перестанут проверять то, ради чего написаны.
+cfg.DEMO_ACCEPTANCE_MODE = False
 sys.modules["config"] = cfg
 
 НЕТТИНГ, БИРЖА, ХЕДЖ = 0, 1, 2
