@@ -2321,8 +2321,25 @@ class App:
         def работа():
             try:
                 import history_export
-                отчёты = history_export.export_all(progress=скажи)
+                # КАЖДАЯ ВЫГРУЗКА — В СВОЙ КАТАЛОГ, И НИКОГДА ПОВЕРХ ПРЕЖНЕЙ.
+                #
+                # Раньше кнопка писала в постоянную папку history/raw поверх
+                # старого. Казалось безобидным: «обновили данные». На деле
+                # терминал отдаёт не всю историю, а ФИКСИРОВАННОЕ ЧИСЛО
+                # ПОСЛЕДНИХ баров, поэтому каждая выгрузка сдвигает окно
+                # вперёд и теряет НАЧАЛО. Проверено на живых данных:
+                # EURUSD_M5 при повторной выгрузке потерял шесть дней начала,
+                # вернуть которые нельзя ничем.
+                снимок = history_export.новый_снимок()
+                скажи(f"Снимок: {снимок}")
+                отчёты = history_export.export_all(progress=скажи,
+                                                   folder=снимок)
                 текст = history_export.describe(отчёты)
+                текст += f"\n\nСнимок: {снимок}"
+                try:
+                    history_export.записать_манифест(снимок)
+                except Exception:  # noqa: BLE001
+                    log.exception("Манифест снимка не записался")
             except Exception as e:  # noqa: BLE001
                 log.exception("Выгрузка истории не удалась")
                 скажи(f"Не получилось: {e}. Проверьте, что терминал "
@@ -2334,7 +2351,8 @@ class App:
             if send:
                 try:
                     import history_upload
-                    итог = history_upload.upload_all(progress=скажи)
+                    итог = history_upload.upload_all(progress=скажи,
+                                                     folder=снимок)
                     текст += "\n" + history_upload.describe(итог)
                 except Exception as e:  # noqa: BLE001
                     log.exception("Отправка истории на GitHub не удалась")
@@ -5329,14 +5347,17 @@ def main():
     if "--export-history" in sys.argv:
         import history_export
         mt5c.connect()
+        снимок = history_export.новый_снимок()
+        print(f"Снимок: {снимок}")
         print(history_export.describe(history_export.export_all(
-            progress=lambda t: print(t, flush=True))))
+            progress=lambda t: print(t, flush=True), folder=снимок)))
+        history_export.записать_манифест(снимок)
         # По умолчанию файлы сразу уезжают на GitHub — ради этого всё и
         # затевалось. Ключ --no-upload оставляет их только на диске.
         if "--no-upload" not in sys.argv:
             import history_upload
             print(history_upload.describe(history_upload.upload_all(
-                progress=lambda t: print(t, flush=True))))
+                progress=lambda t: print(t, flush=True), folder=снимок)))
         sys.exit(0)
 
     # КРИТИЧНО для собранного .exe: процессы счетов используют multiprocessing,
