@@ -134,6 +134,7 @@ import single_instance
 import runtime_events
 import settings_backup
 import trade_journal
+import ui_indicator
 import ui_status
 import incident
 import pending_orders
@@ -787,6 +788,49 @@ class App:
         self.colors = ui_theme.from_config(cfg)
         ui_theme.apply(self.root, style, self.colors)
 
+    # ---- огоньки у кнопок ---------------------------------------------------
+    # Сколько секунд горит огонёк одноразовой кнопки после нажатия.
+    # Меньше секунды человек не заметит, больше пяти — начнёт думать, что
+    # что-то зависло.
+    ВСПЫШКА_СЕКУНД = 3
+
+    def _огонёк(self, родитель, имя: str, сторона: str = "left"):
+        """Создать огонёк рядом с кнопкой и запомнить его под именем."""
+        точка = ttk.Label(родитель, text=ui_indicator.ЗНАК,
+                          font=("Segoe UI", 11))
+        точка.pack(side=сторона, padx=(3, 6))
+        self._огоньки[имя] = точка
+        return точка
+
+    def отметить_нажатие(self, имя: str):
+        """Зажечь огонёк одноразовой кнопки.
+
+        Вызывается из обработчика САМОЙ кнопки, а не из общего цикла:
+        цикл видит длящееся состояние, а «щёлкнули только что» — нет."""
+        self._недавно_нажато[имя] = time.time()
+        self._обновить_огоньки()
+
+    def _обновить_огоньки(self):
+        """Перекрасить огоньки по нынешнему положению дел.
+
+        Ошибка здесь не имеет права уронить обновление окна: огонёк —
+        украшение поверх правды, а не сама правда."""
+        try:
+            сейчас = time.time()
+            недавно = [имя for имя, когда in self._недавно_нажато.items()
+                       if сейчас - когда < self.ВСПЫШКА_СЕКУНД]
+            запущен = bool(self.bot_thread and self.bot_thread.is_alive())
+            состояния = ui_indicator.состояния_кнопок(
+                бот_запущен=запущен,
+                на_паузе=control.is_paused(),
+                недавно_нажато=недавно)
+            for имя, точка in self._огоньки.items():
+                вид = состояния.get(имя, ui_indicator.ОТЖАТА)
+                точка.configure(
+                    foreground=ui_indicator.цвет(вид, self.colors))
+        except Exception as e:  # noqa: BLE001
+            log.debug("Огоньки кнопок не обновились: %s", e)
+
     # ---- интерфейс: вкладки -------------------------------------------------
     def _build_ui(self):
         # ---------- Панель управления СВЕРХУ ----------
@@ -797,16 +841,40 @@ class App:
         top = ttk.Frame(self.root)
         top.pack(side="top", fill="x", padx=8, pady=(8, 0))
 
+        # ОГОНЬКИ РЯДОМ С КНОПКАМИ.
+        #
+        # Владелец: «сделай маленький индикатор зелёный, когда кнопка
+        # нажата, чтобы видно было нажатие; когда не работает — красный».
+        #
+        # У обычной кнопки нет памяти: нажал «Пауза» — она вернулась в
+        # прежний вид, и через минуту уже не помнишь, включил ты паузу
+        # или только собирался. Подпись «Старт» выглядит одинаково и до
+        # запуска, и после.
+        #
+        # Огонёк показывает не «щёлкали ли мышью», а ДЕЙСТВУЕТ ЛИ сейчас
+        # то, что кнопка делает: иначе после перезапуска программы он
+        # врал бы — нажатия не было, а бот работает. У одноразовых кнопок
+        # (перезапуск, сохранение, выход) длящегося состояния нет, и они
+        # зажигаются на несколько секунд после щелчка — ровно чтобы было
+        # видно нажатие. Правило выбора цвета — в ui_indicator.py, оно
+        # проверяется тестом без запуска окна.
+        self._огоньки = {}
+        self._недавно_нажато = {}
+
         self.btn_start = ttk.Button(top, text="▶ Старт", command=self.start_bot)
         self.btn_start.pack(side="left")
+        self._огонёк(top, "старт")
         self.btn_stop = ttk.Button(top, text="■ Стоп", command=self.stop_bot,
                                    state="disabled")
-        self.btn_stop.pack(side="left", padx=6)
+        self.btn_stop.pack(side="left", padx=(6, 0))
+        self._огонёк(top, "стоп")
         self.btn_pause = ttk.Button(top, text="⏸ Пауза", command=self.toggle_pause)
-        self.btn_pause.pack(side="left", padx=(0, 6))
+        self.btn_pause.pack(side="left", padx=(6, 0))
+        self._огонёк(top, "пауза")
         self.btn_restart = ttk.Button(top, text="⟳ Перезапуск",
                                       command=self.restart_bot)
-        self.btn_restart.pack(side="left")
+        self.btn_restart.pack(side="left", padx=(6, 0))
+        self._огонёк(top, "перезапуск")
 
         # Прежние имена — на те же кнопки: код запуска, остановки и сторожа
         # обращается к ним по-старому, и переписывать его незачем.
@@ -824,6 +892,7 @@ class App:
         # Выход — справа внизу, как просил владелец: «полностью выходит из
         # всего, что запускалось».
         ttk.Button(bottom, text="Выход", command=self.full_exit).pack(side="right")
+        self._огонёк(bottom, "выход", сторона="right")
         ttk.Label(bottom, text="made by Viacheslav.Y.",
                   foreground=self.colors["dim"], font=("Segoe UI", 8)
                   ).pack(side="right", padx=10)
@@ -833,6 +902,7 @@ class App:
         # и сохранил ли он вообще всё.
         ttk.Button(bottom, text="💾 Сохранить все настройки",
                    command=self.save_everything).pack(side="left")
+        self._огонёк(bottom, "сохранить")
         self.save_all_status_var = tk.StringVar(value="")
         ttk.Label(bottom, textvariable=self.save_all_status_var,
                   foreground=self.colors["muted"]).pack(side="left", padx=10)
@@ -2126,13 +2196,23 @@ class App:
         if default is not None:
             body.insert("end", "Значение по умолчанию\n", "head")
             body.insert("end", f"{default!r}\n\n")
-        if item["more"]:
+        # ЧЕРЕЗ .get(), А НЕ ПО КЛЮЧУ НАПРЯМУЮ.
+        #
+        # Раньше здесь стояло item["warn"]. У четырёх параметров этого
+        # поля не оказалось — и кнопка «?» рядом с ними просто НЕ
+        # РАБОТАЛА: обработчик падал с KeyError, окошко справки не
+        # открывалось, а человек видел, что нажатие ничего не даёт.
+        # Найдено перебором: тест нажал все 210 кнопок подряд.
+        #
+        # Необязательное поле не имеет права ломать кнопку. Нет текста —
+        # раздела просто не будет.
+        if item.get("more"):
             body.insert("end", "Если увеличить / включить\n", "head")
             body.insert("end", item["more"] + "\n\n")
-        if item["less"]:
+        if item.get("less"):
             body.insert("end", "Если уменьшить / выключить\n", "head")
             body.insert("end", item["less"] + "\n\n")
-        if item["warn"]:
+        if item.get("warn"):
             body.insert("end", "Внимание\n", "head")
             body.insert("end", item["warn"] + "\n", "warn")
         body.configure(state="disabled")
@@ -4758,6 +4838,9 @@ class App:
         """Перезапуск торгового цикла — то, что владелец делал руками,
         закрывая и открывая программу. Окно и настройки при этом остаются
         на месте, перезапускается только сам цикл."""
+        # Огонёк: у этой кнопки нет длящегося состояния, и
+        # показать она может только сам факт нажатия.
+        self.отметить_нажатие("перезапуск")
         runtime_events.record("управление", "перезапуск цикла по кнопке")
         self._bot_should_run = False
         try:
@@ -4829,6 +4912,9 @@ class App:
         всё сразу: брокера, параметры, профиль, контекст, источники,
         систему. Каждый раздел сохраняется своим кодом, как и раньше —
         меняется только то, откуда это запускается."""
+        # Огонёк: у этой кнопки нет длящегося состояния, и
+        # показать она может только сам факт нажатия.
+        self.отметить_нажатие("сохранить")
         savers = [
             ("брокер", getattr(self, "save_broker_settings", None)),
             ("параметры", getattr(self, "save_advanced_params", None)),
@@ -4980,6 +5066,7 @@ class App:
             snap = ds.get_snapshot()
             состояние = self._состояние_торговли(snap)
             self._обновить_состояние_выгрузки()
+            self._обновить_огоньки()
             problems = []
             if snap:
                 acc = snap.get("account", {})
@@ -5243,6 +5330,9 @@ class App:
                 self._hard_quit()
 
     def full_exit(self):
+        # Огонёк: у этой кнопки нет длящегося состояния, и
+        # показать она может только сам факт нажатия.
+        self.отметить_нажатие("выход")
         if messagebox.askyesno(APP_TITLE, "Полностью закрыть программу? Бот (если запущен) будет остановлен, "
                                             "процесс исчезнет из Диспетчера задач."):
             self._hard_quit()
