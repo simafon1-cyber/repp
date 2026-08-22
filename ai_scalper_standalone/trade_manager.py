@@ -16,6 +16,7 @@ from datetime import datetime
 
 import config as cfg
 import execution as ex
+import trade_journal as tj
 import mt5_connector as mt5c
 import retcodes
 import risk_manager as rm
@@ -556,6 +557,8 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
                       symbol, dir_txt, score, attempt, итог.тикет,
                       итог.исполнено, итог.заказано)
             log_trade_csv("OPEN", symbol, dir_txt, price, sl, tp, итог.исполнено, score)
+            _записать_решение(symbol, direction, dir_txt, tick, price, sl, tp,
+                              lot, score, point, итог)
             if итог.статус == ex.ЧАСТИЧНОЕ:
                 runtime_events.record(
                     "исполнение",
@@ -577,6 +580,46 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
         if not retcodes.повторять(итог.код):
             return итог
     return итог
+
+
+def _записать_решение(symbol, direction, dir_txt, tick, цена_ожидаемая,
+                      sl, tp, лот_заказан, score, point, итог):
+    """Записать в журнал, что программа знала и решила в момент входа.
+
+    Регламент демо-приёмки требует по каждой сделке различать ошибку
+    исполнения и слабую стратегию. Без цен у решения и фактического
+    исполнения это неразличимо: и то и другое выглядит как убыток.
+
+    Ничего не считает и не решает — только записывает. Исключения сюда
+    не долетают: см. trade_journal.записать()."""
+    if not tj.ведётся():
+        return
+    # ФАКТИЧЕСКОЙ цены исполнения здесь НЕТ. Ответ брокера её не
+    # содержит, а подставить сюда ожидаемую значило бы записать
+    # проскальзывание нулём — то есть заявить, что исполнили ровно по
+    # цене решения. Поле остаётся пустым; настоящая цена берётся из
+    # выгрузки истории сделок и сводится сверкой (trade_journal.сверить).
+    tj.записать({
+        "символ": symbol,
+        "направление": dir_txt,
+        "событие": "ВХОД",
+        "bid_у_решения": getattr(tick, "bid", ""),
+        "ask_у_решения": getattr(tick, "ask", ""),
+        "спред_пунктов": (round((tick.ask - tick.bid) / point, 1)
+                          if tick is not None and point else ""),
+        "цена_ожидаемая": цена_ожидаемая,
+        "цена_фактическая": "",
+        "проскальзывание_пунктов": "",
+        "точка_цены": point,
+        "стоп_план": sl,
+        "цель_план": tp,
+        "лот_заказан": лот_заказан,
+        "лот_исполнен": итог.исполнено,
+        "счёт_сигнала": score,
+        "тикет": итог.тикет,
+        "статус_заявки": итог.статус,
+        "пояснение": getattr(итог, "пояснение", ""),
+    })
 
 
 # Сколько раз пытаться дозакрыть ногу, если брокер закрыл её не целиком.
