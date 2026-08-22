@@ -77,19 +77,36 @@ def _key(login) -> str:
     return str(value) if value > 0 else ""
 
 
-def snapshot(acc_state) -> dict:
+def snapshot(acc_state, sym_states=None) -> dict:
     """Что именно сохраняется. Отдельная функция — чтобы сравнивать с уже
-    записанным и не трогать диск, когда ничего не изменилось."""
+    записанным и не трогать диск, когда ничего не изменилось.
+
+    sym_states — паузы по инструментам после серии убытков. Раньше они
+    жили только в памяти: перезапуск снимал наказание, и программа шла
+    торговать тем же инструментом, на котором только что получила серию
+    убытков. Перезапуск в такой момент как раз и вероятен — его делают,
+    когда результат не нравится.
+
+    None означает «про паузы ничего не известно», а не «пауз нет»:
+    записанные ранее в этом случае сохраняются (см. save)."""
     day = getattr(acc_state, "last_trade_day", None)
-    return {
+    итог = {
         "peak_equity": round(float(getattr(acc_state, "peak_equity", 0) or 0), 2),
         "day_start_equity": round(float(getattr(acc_state, "day_start_equity", 0) or 0), 2),
         "day": day.strftime("%Y-%m-%d") if isinstance(day, datetime) else "",
         "trades_today": int(getattr(acc_state, "trades_today", 0) or 0),
     }
+    if sym_states is not None:
+        паузы = {}
+        for имя, st in (sym_states or {}).items():
+            до = getattr(st, "pause_until", None)
+            if isinstance(до, datetime):
+                паузы[str(имя)] = до.isoformat()
+        итог["паузы"] = паузы
+    return итог
 
 
-def save(acc_state, login, path: str = "") -> bool:
+def save(acc_state, login, path: str = "", sym_states=None) -> bool:
     """Записать состояние счёта. True — записано."""
     key = _key(login)
     if not key:
@@ -105,7 +122,15 @@ def save(acc_state, login, path: str = "") -> bool:
     except Exception as e:  # noqa: BLE001
         log.warning("Файл %s не читается (%s) — перезапишу заново", target, e)
 
-    data["accounts"][key] = snapshot(acc_state)
+    новое = snapshot(acc_state, sym_states)
+    # НЕ СТИРАЕМ ТО, ЧЕГО НЕ ЗНАЕМ. Вызов без sym_states означает «про
+    # паузы сведений нет». Записать при этом пустой список пауз значило бы
+    # снять их — то есть отменить наказание молча, за счёт того, что
+    # вызывающий просто не передал параметр.
+    прежнее = data["accounts"].get(key) or {}
+    if "паузы" not in новое and isinstance(прежнее.get("паузы"), dict):
+        новое["паузы"] = прежнее["паузы"]
+    data["accounts"][key] = новое
     try:
         # backup=False: файл маленький и восстановимый. В худшем случае
         # программа начнёт считать пик заново — ровно как было до этой правки.
@@ -119,7 +144,7 @@ def save(acc_state, login, path: str = "") -> bool:
         return False
 
 
-def save_if_changed(acc_state, login, path: str = "") -> bool:
+def save_if_changed(acc_state, login, path: str = "", sym_states=None) -> bool:
     """Записать, только если что-то изменилось с прошлого раза.
 
     Главный цикл крутится каждые несколько секунд, а пик счёта обновляется
@@ -128,12 +153,52 @@ def save_if_changed(acc_state, login, path: str = "") -> bool:
     key = _key(login)
     if not key:
         return False
-    if _последнее.get(key) == snapshot(acc_state):
+    if _последнее.get(key) == snapshot(acc_state, sym_states):
         return False
-    return save(acc_state, login, path)
+    return save(acc_state, login, path, sym_states)
 
 
-def load(acc_state, login, path: str = "") -> str:
+def восстановить_паузы(sym_states, login, path: str = "") -> str:
+    """Вернуть паузы по инструментам после перезапуска.
+
+    ОТДЕЛЬНОЙ функцией, а не параметром load(), намеренно. load()
+    вызывается сразу после подключения к счёту, а список инструментов
+    (sym_states) к тому моменту ещё не построен — его строит отбор пар,
+    который идёт позже. Передать туда sym_states означало бы передать
+    пустой словарь и молча ничего не восстановить.
+
+    Это я и сделал с первого раза; поймано перед коммитом."""
+    key = _key(login)
+    if not key or not sym_states:
+        return ""
+    target = path or store_path()
+    if not os.path.exists(target):
+        return ""
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            saved = (json.load(f).get("accounts") or {}).get(key) or {}
+    except Exception as e:  # noqa: BLE001
+        log.warning("Паузы не восстановлены, файл %s не читается: %s", target, e)
+        return ""
+
+    восстановлено = []
+    for имя, когда in (saved.get("паузы") or {}).items():
+        st = sym_states.get(имя)
+        if st is None:
+            continue
+        try:
+            до = datetime.fromisoformat(str(когда))
+        except (TypeError, ValueError):
+            continue
+        # Только те, что ещё не истекли: вчерашняя пауза сегодня ничего
+        # не значит, а сегодняшняя значит ровно то же, что до перезапуска.
+        if до > datetime.now():
+            st.pause_until = до
+            восстановлено.append(f"{имя} до {до.strftime('%H:%M %d.%m')}")
+    return ", ".join(восстановлено)
+
+
+def load(acc_state, login, path: str = "", sym_states=None) -> str:
     """Восстановить состояние счёта. Возвращает, что именно восстановлено.
 
     ПИК НИКОГДА НЕ ОПУСКАЕТСЯ. Берётся большее из сохранённого и текущего:
@@ -183,5 +248,25 @@ def load(acc_state, login, path: str = "") -> str:
         except (TypeError, ValueError):
             pass
 
-    _последнее[key] = snapshot(acc_state)
+    # ПАУЗЫ ПО ИНСТРУМЕНТАМ. Восстанавливаются только те, что ещё не
+    # истекли: вчерашняя пауза сегодня ничего не значит, а вот сегодняшняя
+    # значит ровно то же, что и до перезапуска.
+    if sym_states is not None:
+        восстановлено = []
+        for имя, когда in (saved.get("паузы") or {}).items():
+            st = sym_states.get(имя)
+            if st is None:
+                continue
+            try:
+                до = datetime.fromisoformat(str(когда))
+            except (TypeError, ValueError):
+                continue
+            if до > datetime.now():
+                st.pause_until = до
+                восстановлено.append(f"{имя} до {до.strftime('%H:%M %d.%m')}")
+        if восстановлено:
+            вести.append("паузы после серии убытков: "
+                         + ", ".join(восстановлено))
+
+    _последнее[key] = snapshot(acc_state, sym_states)
     return ", ".join(вести)

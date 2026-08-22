@@ -673,6 +673,40 @@ def hedging_block_reason(account=None) -> str:
             f"бы первую. Выключите «хедж в обе стороны» в профиле риска.")
 
 
+def режим_исполнения(symbol: str):
+    """Какой режим исполнения принимает ЭТОТ символ у ЭТОГО брокера.
+
+    Автоопределение — частая причина «тихих» отказов: символ не умеет
+    запрошенный режим, брокер отвечает INVALID_FILL, и заявка не уходит.
+
+    ВАЖНО: SYMBOL_FILLING_FOK/SYMBOL_FILLING_IOC — флаги из MQL5
+    (ENUM_SYMBOL_TRADE_EXECUTION), в Python-модуле MetaTrader5 их нет
+    (там только ORDER_FILLING_*). Поэтому используются сами значения
+    флагов, 1 = FOK и 2 = IOC, а не несуществующие константы модуля.
+
+    ЗАЧЕМ ОТДЕЛЬНОЙ ФУНКЦИЕЙ. Раньше этот выбор был только в
+    send_market_order, а close_position_partial всегда просил IOC —
+    жёстко, не спрашивая символ. На символе, который IOC не принимает,
+    ЗАКРЫТИЕ отклонялось брокером, и позиция оставалась открытой. То
+    есть открыться программа могла, а закрыться — нет. Это прямее всего
+    бьёт по деньгам: стоп-лосс у брокера ещё сработает, а вот
+    закрытие по нашему решению — нет.
+    """
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        # Символ не описан — оставляем прежнее поведение по умолчанию.
+        # Гадать здесь нельзя: неверный режим это отказ заявки.
+        return mt5.ORDER_FILLING_IOC
+    SYMBOL_FILLING_FOK = 1
+    SYMBOL_FILLING_IOC = 2
+    режим = getattr(info, "filling_mode", 0) or 0
+    if режим & SYMBOL_FILLING_FOK:
+        return mt5.ORDER_FILLING_FOK
+    if режим & SYMBOL_FILLING_IOC:
+        return mt5.ORDER_FILLING_IOC
+    return mt5.ORDER_FILLING_IOC
+
+
 def send_market_order(symbol: str, direction: int, lot: float, sl_price: float, tp_price: float,
                        magic: int, comment: str = "", deviation: int = 20):
     # ПРЕДТОРГОВЫЙ БАРЬЕР. Стоит ПЕРВОЙ строкой, до чтения цены и до сборки
@@ -686,19 +720,7 @@ def send_market_order(symbol: str, direction: int, lot: float, sl_price: float, 
     price = tick.ask if direction == 1 else tick.bid
     order_type = mt5.ORDER_TYPE_BUY if direction == 1 else mt5.ORDER_TYPE_SELL
 
-    info = mt5.symbol_info(symbol)
-    filling = mt5.ORDER_FILLING_IOC
-    if info is not None:
-        # Автоопределение filling mode — та же идея, что и в EA (частая причина "тихих" отказов).
-        # ВАЖНО: SYMBOL_FILLING_FOK/SYMBOL_FILLING_IOC — это флаги из MQL5 (ENUM_SYMBOL_TRADE_EXECUTION),
-        # их НЕТ в Python-модуле MetaTrader5 (там только ORDER_FILLING_*), поэтому используем сами значения
-        # флагов (1 = FOK, 2 = IOC) напрямую, а не несуществующий mt5.SYMBOL_FILLING_FOK/IOC.
-        SYMBOL_FILLING_FOK = 1
-        SYMBOL_FILLING_IOC = 2
-        if info.filling_mode & SYMBOL_FILLING_FOK:
-            filling = mt5.ORDER_FILLING_FOK
-        elif info.filling_mode & SYMBOL_FILLING_IOC:
-            filling = mt5.ORDER_FILLING_IOC
+    filling = режим_исполнения(symbol)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -745,7 +767,10 @@ def close_position_partial(position, volume: float):
         "deviation": 20,
         "magic": position.magic,
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        # Режим спрашивается у символа, а не берётся жёстко IOC: см.
+        # режим_исполнения(). Жёсткий IOC отклонялся брокером на символах,
+        # которые его не принимают, и позиция оставалась открытой.
+        "type_filling": режим_исполнения(position.symbol),
     }
     return mt5.order_send(request)
 

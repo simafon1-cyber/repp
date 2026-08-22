@@ -16,6 +16,7 @@ from datetime import datetime
 
 import config as cfg
 import execution as ex
+import pending_orders as pending
 import trade_journal as tj
 import mt5_connector as mt5c
 import retcodes
@@ -34,6 +35,18 @@ _partial_impossible_tickets: set = set()
 # Тикеты, по которым брокер отказался переносить стоп/цель. Нужны, чтобы
 # сказать об этом ОДИН раз на сделку, а не каждую секунду.
 _modify_failed_tickets: set = set()
+
+# Сколько раз подряд брокер должен отказать в переносе стопа, прежде чем
+# владельца потревожат отдельным уведомлением.
+#
+# Одна запись в ленте (она была и раньше) легко теряется среди прочего, а
+# неработающий перенос стопа — это не мелочь: сделка едет без защиты,
+# которую человек считает включённой. Три отказа подряд означают, что дело
+# не в случайной цене, а в чём-то постоянном: запрет брокера, слишком
+# близкий уровень, счёт только для чтения.
+ПОРОГ_ОТКАЗОВ_ПЕРЕНОСА = 3
+_modify_failed_count: dict = {}
+_modify_notified: set = set()
 # ticket -> изначальный риск сделки (price_open<->SL при первом же взгляде на
 # позицию, до того как BE/трейлинг/лок успели её подтянуть), в пунктах — она
 # же "1R". См. update_position_risk() и диагноз в manage_open_positions().
@@ -542,6 +555,21 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
         снимок = наши_тикеты(symbol)
         момент = float(getattr(tick, "time", 0) or 0)
 
+        # ЖУРНАЛ ОЖИДАЕМОЙ ЗАЯВКИ — НА ДИСК, ДО ОТПРАВКИ.
+        #
+        # После отправки — поздно. Между order_send и ответом программу
+        # могут закрыть, она может упасть или потерять связь, а заявка к
+        # этому моменту уже ушла брокеру. Без записи следа не осталось бы
+        # вовсе: следующий запуск считал бы, что мы ничего не отправляли.
+        #
+        # Запись снимается только по ДОКАЗАННОМУ исходу — ниже.
+        риск_денег = 0.0
+        try:
+            риск_денег = rm.money_risk_per_lot(symbol, abs(sl_dist)) * lot
+        except Exception:  # noqa: BLE001
+            риск_денег = 0.0
+        ожидание = pending.записать(symbol, direction, lot, риск_денег)
+
         result = mt5c.send_market_order(symbol, direction, lot, sl, tp, cfg.MAGIC_NUMBER,
                                          comment="AI_Scalper_Standalone")
         итог = ex.разобрать(result, lot)
@@ -553,6 +581,8 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
                                 подсказка_тикет=итог.тикет)
 
         if итог.открылось:
+            # Позиция доказана: есть номер и объём. Запись снимается.
+            pending.подтвердить(ожидание, итог.тикет, итог.исполнено)
             log.info("%s %s | Score %.1f | Попытка %d | тикет %s | объём %.2f из %.2f",
                       symbol, dir_txt, score, attempt, итог.тикет,
                       итог.исполнено, итог.заказано)
@@ -569,6 +599,12 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
         if not итог.решено:
             # Сверка не помогла. Повторять НЕЛЬЗЯ: возможно, позиция уже
             # есть. Наверху это обязано остановить новые входы.
+            #
+            # Запись в журнале ожидаемых заявок НЕ снимается намеренно.
+            # «Не вижу позиции» — не доказательство отказа: заявка может
+            # быть ещё активна, исполниться позже или появиться в истории
+            # с задержкой. Пока исход не доказан, риск считается так,
+            # будто позиция есть.
             log.error("%s: положение дел после заявки не выяснено — %s",
                       symbol, итог.пояснение)
             return итог
@@ -576,6 +612,10 @@ def execute_market_order(symbol, direction, lot, sl_dist, tp_dist, score, point)
         # Повторяем только временные отказы. Список раньше был вбит
         # прямо здесь тремя кодами; теперь решает таблица (retcodes.py),
         # где у каждого ответа записан класс и человеческое объяснение.
+        # ВНЯТНЫЙ отказ брокера — единственный случай, когда запись можно
+        # снять без позиции. Код ответа назван, причина известна.
+        pending.отменить(ожидание, f"брокер отказал: {итог.пояснение}")
+
         log.warning("%s: %s", symbol, итог.пояснение)
         if not retcodes.повторять(итог.код):
             return итог
@@ -834,6 +874,8 @@ def cleanup_peak_profit(open_tickets: set):
     for ticket in list(_modify_failed_tickets):
         if ticket not in open_tickets:
             _modify_failed_tickets.discard(ticket)
+            _modify_failed_count.pop(ticket, None)
+            _modify_notified.discard(ticket)
     for ticket in list(_position_risk_points.keys()):
         if ticket not in open_tickets:
             _position_risk_points.pop(ticket, None)
@@ -1210,6 +1252,18 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
         trough_points = update_position_trough(p.ticket, profit_points)
         risk_points = update_position_risk(p.ticket, p.price_open, p.sl, point)
 
+        # ПРОСТОЙ ВЫХОД (черновик С-001): дальше программа к сделке НЕ
+        # прикасается. Работают только стоп и цель, уже стоящие у брокера.
+        #
+        # Почему выход именно ЗДЕСЬ, а не в начале функции. Выше уже
+        # посчитаны возраст, пик, дно и риск в пунктах. Эти замеры нужны
+        # журналу выхода независимо от того, ведём мы позицию или нет:
+        # без них в карточке закрытой сделки будут пустые MFE/MAE, и
+        # сравнить простой выход со сложным станет нечем. Наблюдение —
+        # не вмешательство.
+        if getattr(cfg, "USE_SIMPLE_EXIT", False):
+            continue
+
         # 0) Частичное закрытие при достижении профита (один раз за сделку) —
         # как "Partial Close" в MQL5-советнике. Не мешает BE/трейлингу ниже —
         # они продолжают вести остаток позиции как обычно.
@@ -1442,6 +1496,25 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                 # Пишем один раз на сделку: попытка повторяется каждую
                 # секунду, и без этого журнал был бы залит.
                 if result is None or getattr(result, "retcode", None) != mt5c.RETCODE_DONE:
+                    сколько = _modify_failed_count.get(p.ticket, 0) + 1
+                    _modify_failed_count[p.ticket] = сколько
+                    if (сколько >= ПОРОГ_ОТКАЗОВ_ПЕРЕНОСА
+                            and p.ticket not in _modify_notified):
+                        _modify_notified.add(p.ticket)
+                        текст = (
+                            f"{symbol}, сделка {p.ticket}: брокер отказал в "
+                            f"переносе стопа {сколько} раза подряд. Защита, "
+                            f"которую вы считаете включённой, по этой сделке "
+                            f"НЕ работает — стоп остался там, где был. "
+                            f"Проверьте в терминале.")
+                        log.error(текст)
+                        runtime_events.record("стоп", текст)
+                        try:
+                            import control
+                            control.push_notification(
+                                "Стоп не переносится", текст)
+                        except Exception as e:  # noqa: BLE001
+                            log.error("Уведомление о переносе стопа не ушло: %s", e)
                     if p.ticket not in _modify_failed_tickets:
                         _modify_failed_tickets.add(p.ticket)
                         log.warning(
@@ -1451,7 +1524,12 @@ def manage_open_positions(symbol: str, atr_value: float, point: float, positions
                         runtime_events.record(
                             "стоп", f"{symbol}: брокер не принял перенос стопа — трейлинг не работает")
                 else:
+                    # Получилось — счётчик обнуляется. Иначе три отказа за
+                    # всю жизнь сделки, разделённые успехами, копились бы в
+                    # «три подряд», и уведомление уходило бы зря.
                     _modify_failed_tickets.discard(p.ticket)
+                    _modify_failed_count.pop(p.ticket, None)
+                    _modify_notified.discard(p.ticket)
             else:
                 log.debug("[DRY-RUN] %s тикет %s: SL -> %.5f, TP -> %.5f",
                           symbol, p.ticket, best_sl, best_tp)

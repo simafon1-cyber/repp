@@ -322,6 +322,25 @@ def get_open_risk_percent(account, positions=None) -> float:
     total_risk_money = 0.0
     for p in positions:
         if p.sl <= 0:
+            # ПОЗИЦИЯ БЕЗ СТОПА. Раньше здесь стоял continue — то есть
+            # такая позиция считалась риском НОЛЬ. Это неправда, и
+            # неправда в опасную сторону: у позиции без стопа убыток не
+            # ограничен ничем, кроме размера счёта. Программа видела
+            # «свободного риска много» и открывала новые сделки поверх
+            # той, что и так может съесть депозит.
+            #
+            # Как стоп может пропасть: брокер отклонил его установку,
+            # позицию открыли руками, стоп сняли в терминале, или наша же
+            # заявка на изменение не дошла.
+            #
+            # Считаем консервативно — В БОЛЬШУЮ СТОРОНУ, как требует
+            # правило проекта о неясных исходах: одна такая позиция
+            # занимает ВЕСЬ потолок совокупного риска. Точное число всё
+            # равно неизвестно, а из двух ошибок дешевле «зря не вошли»,
+            # чем «вошли поверх неограниченного убытка».
+            профиль = get_profile()
+            потолок = abs(float(профиль.get("max_total_risk_pct", 0) or 0))
+            total_risk_money += equity * потолок / 100.0
             continue
         dist = abs(p.price_open - p.sl)
         # Тот же точный расчёт, что и при открытии сделки (money_risk_per_lot),
@@ -333,6 +352,20 @@ def get_open_risk_percent(account, positions=None) -> float:
             continue
         total_risk_money += per_lot * p.volume
     return total_risk_money / equity * 100.0
+
+
+def позиции_без_стопа(positions=None) -> list:
+    """Наши открытые позиции, у которых стоп-лосса нет.
+
+    Отдельной функцией, а не флагом внутри расчёта риска: решение «не
+    входить» должно опираться на список конкретных номеров позиций, а не
+    на догадку по итоговому проценту. Оператору нужно знать, ЧТО
+    проверять в терминале."""
+    if positions is None:
+        positions = mt5c.get_open_positions(magic=cfg.MAGIC_NUMBER)
+    else:
+        positions = [p for p in positions if p.magic == cfg.MAGIC_NUMBER]
+    return [p for p in positions if float(getattr(p, "sl", 0) or 0) <= 0]
 
 
 def count_open_positions(symbol: str = None, positions=None) -> int:
