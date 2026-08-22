@@ -28,6 +28,7 @@ import execution
 import mt5_connector as mt5c
 import risk_manager as rm
 import trade_manager as tm
+import trade_journal as tj
 import signal_engine as se
 import market_regime as mr
 import ai_signal as ai
@@ -1930,6 +1931,50 @@ def _fast_position_monitor(sym_states, stop_event, total_seconds: float):
             log.exception("Ошибка быстрого мониторинга позиций: %s", e)
 
 
+def выгрузить_сделки_по_расписанию(acc_info):
+    """Каждые два часа сложить историю сделок брокера в отдельный файл.
+
+    ЗАЧЕМ. Регламент демо-приёмки требует разбирать каждую сделку по
+    фактам БРОКЕРА, а не по нашей записи. Владелец потребовал, чтобы это
+    происходило само: кнопку нажимать не надо.
+
+    ПОЧЕМУ ЭТО БЕЗОПАСНО ДЛЯ ТОРГОВЛИ. Функция ничего не решает и не
+    отправляет. Любая её ошибка гасится здесь и не доходит до цикла:
+    выгрузка — наблюдатель, а наблюдатель не имеет права уронить
+    наблюдаемого.
+
+    ПОЧЕМУ НЕУДАЧА НЕ МОЛЧИТ. «Терминал не ответил» и «сделок не было» —
+    разные вещи, и вторую нельзя выдать за первую. Неудача попадает в
+    ленту событий, которую владелец видит в окне программы."""
+    try:
+        итог = tj.выгрузить_если_пора(
+            mt5c,
+            magic=cfg.MAGIC_NUMBER,
+            счёт=getattr(acc_info, "login", None),
+            сервер=getattr(acc_info, "server", ""))
+    except Exception as e:  # noqa: BLE001
+        log.error("Выгрузка сделок по расписанию сорвалась: %s", e)
+        return
+
+    состояние = итог.get("состояние")
+    if состояние == "сделано":
+        сообщение = (f"выгружена история сделок у брокера: "
+                     f"{итог['сделок']} строк")
+        if итог.get("неопознанные"):
+            сообщение += (f"; БЕЗ НОМЕРОВ: {len(итог['неопознанные'])} — "
+                          f"такие сделки нельзя сверить")
+        runtime_events.record("выгрузка", сообщение)
+    elif состояние == tj.НЕИЗВЕСТНО:
+        runtime_events.record(
+            "выгрузка",
+            "историю сделок у брокера получить НЕ удалось. Это не значит, "
+            "что сделок не было: терминал мог быть недоступен. Повторю "
+            "через несколько минут.")
+    elif состояние == "ошибка":
+        runtime_events.record(
+            "выгрузка", f"выгрузка сделок не состоялась: {итог.get('почему')}")
+
+
 def main(stop_event=None, start_dashboard: bool = True):
     """
     stop_event: threading.Event | None — передаётся desktop_app.py (GUI), чтобы
@@ -2121,6 +2166,7 @@ def main(stop_event=None, start_dashboard: bool = True):
                 equity = acc_info.equity
                 check_new_day(acc_state, equity)
                 process_closed_deals(acc_state, sym_states)
+                выгрузить_сделки_по_расписанию(acc_info)
 
                 # Пик счёта и начало дня — на диск, но ТОЛЬКО когда они
                 # изменились: цикл крутится каждые несколько секунд, а пик
