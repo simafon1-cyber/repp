@@ -133,6 +133,11 @@ import news_autostart
 import single_instance
 import runtime_events
 import settings_backup
+import trade_journal
+import ui_indicator
+import ui_status
+import incident
+import pending_orders
 import ui_theme
 import ui_layout
 import version as app_version
@@ -783,6 +788,49 @@ class App:
         self.colors = ui_theme.from_config(cfg)
         ui_theme.apply(self.root, style, self.colors)
 
+    # ---- огоньки у кнопок ---------------------------------------------------
+    # Сколько секунд горит огонёк одноразовой кнопки после нажатия.
+    # Меньше секунды человек не заметит, больше пяти — начнёт думать, что
+    # что-то зависло.
+    ВСПЫШКА_СЕКУНД = 3
+
+    def _огонёк(self, родитель, имя: str, сторона: str = "left"):
+        """Создать огонёк рядом с кнопкой и запомнить его под именем."""
+        точка = ttk.Label(родитель, text=ui_indicator.ЗНАК,
+                          font=("Segoe UI", 11))
+        точка.pack(side=сторона, padx=(3, 6))
+        self._огоньки[имя] = точка
+        return точка
+
+    def отметить_нажатие(self, имя: str):
+        """Зажечь огонёк одноразовой кнопки.
+
+        Вызывается из обработчика САМОЙ кнопки, а не из общего цикла:
+        цикл видит длящееся состояние, а «щёлкнули только что» — нет."""
+        self._недавно_нажато[имя] = time.time()
+        self._обновить_огоньки()
+
+    def _обновить_огоньки(self):
+        """Перекрасить огоньки по нынешнему положению дел.
+
+        Ошибка здесь не имеет права уронить обновление окна: огонёк —
+        украшение поверх правды, а не сама правда."""
+        try:
+            сейчас = time.time()
+            недавно = [имя for имя, когда in self._недавно_нажато.items()
+                       if сейчас - когда < self.ВСПЫШКА_СЕКУНД]
+            запущен = bool(self.bot_thread and self.bot_thread.is_alive())
+            состояния = ui_indicator.состояния_кнопок(
+                бот_запущен=запущен,
+                на_паузе=control.is_paused(),
+                недавно_нажато=недавно)
+            for имя, точка in self._огоньки.items():
+                вид = состояния.get(имя, ui_indicator.ОТЖАТА)
+                точка.configure(
+                    foreground=ui_indicator.цвет(вид, self.colors))
+        except Exception as e:  # noqa: BLE001
+            log.debug("Огоньки кнопок не обновились: %s", e)
+
     # ---- интерфейс: вкладки -------------------------------------------------
     def _build_ui(self):
         # ---------- Панель управления СВЕРХУ ----------
@@ -793,16 +841,40 @@ class App:
         top = ttk.Frame(self.root)
         top.pack(side="top", fill="x", padx=8, pady=(8, 0))
 
+        # ОГОНЬКИ РЯДОМ С КНОПКАМИ.
+        #
+        # Владелец: «сделай маленький индикатор зелёный, когда кнопка
+        # нажата, чтобы видно было нажатие; когда не работает — красный».
+        #
+        # У обычной кнопки нет памяти: нажал «Пауза» — она вернулась в
+        # прежний вид, и через минуту уже не помнишь, включил ты паузу
+        # или только собирался. Подпись «Старт» выглядит одинаково и до
+        # запуска, и после.
+        #
+        # Огонёк показывает не «щёлкали ли мышью», а ДЕЙСТВУЕТ ЛИ сейчас
+        # то, что кнопка делает: иначе после перезапуска программы он
+        # врал бы — нажатия не было, а бот работает. У одноразовых кнопок
+        # (перезапуск, сохранение, выход) длящегося состояния нет, и они
+        # зажигаются на несколько секунд после щелчка — ровно чтобы было
+        # видно нажатие. Правило выбора цвета — в ui_indicator.py, оно
+        # проверяется тестом без запуска окна.
+        self._огоньки = {}
+        self._недавно_нажато = {}
+
         self.btn_start = ttk.Button(top, text="▶ Старт", command=self.start_bot)
         self.btn_start.pack(side="left")
+        self._огонёк(top, "старт")
         self.btn_stop = ttk.Button(top, text="■ Стоп", command=self.stop_bot,
                                    state="disabled")
-        self.btn_stop.pack(side="left", padx=6)
+        self.btn_stop.pack(side="left", padx=(6, 0))
+        self._огонёк(top, "стоп")
         self.btn_pause = ttk.Button(top, text="⏸ Пауза", command=self.toggle_pause)
-        self.btn_pause.pack(side="left", padx=(0, 6))
+        self.btn_pause.pack(side="left", padx=(6, 0))
+        self._огонёк(top, "пауза")
         self.btn_restart = ttk.Button(top, text="⟳ Перезапуск",
                                       command=self.restart_bot)
-        self.btn_restart.pack(side="left")
+        self.btn_restart.pack(side="left", padx=(6, 0))
+        self._огонёк(top, "перезапуск")
 
         # Прежние имена — на те же кнопки: код запуска, остановки и сторожа
         # обращается к ним по-старому, и переписывать его незачем.
@@ -820,6 +892,7 @@ class App:
         # Выход — справа внизу, как просил владелец: «полностью выходит из
         # всего, что запускалось».
         ttk.Button(bottom, text="Выход", command=self.full_exit).pack(side="right")
+        self._огонёк(bottom, "выход", сторона="right")
         ttk.Label(bottom, text="made by Viacheslav.Y.",
                   foreground=self.colors["dim"], font=("Segoe UI", 8)
                   ).pack(side="right", padx=10)
@@ -829,6 +902,7 @@ class App:
         # и сохранил ли он вообще всё.
         ttk.Button(bottom, text="💾 Сохранить все настройки",
                    command=self.save_everything).pack(side="left")
+        self._огонёк(bottom, "сохранить")
         self.save_all_status_var = tk.StringVar(value="")
         ttk.Label(bottom, textvariable=self.save_all_status_var,
                   foreground=self.colors["muted"]).pack(side="left", padx=10)
@@ -991,19 +1065,34 @@ class App:
                   ).grid(row=0, column=1, sticky="nw", padx=(30, 0))
         inner.columnconfigure(1, weight=1)
 
-        # ---------- Что мешает торговать ----------
-        # Одна рамка на все предупреждения: разрешение на торговлю, причины
-        # молчания по парам и недавние происшествия. Раньше это было
-        # разбросано, а часть не показывалась вовсе.
+        # ---------- Что сейчас с торговлей ----------
+        #
+        # ОДНА рамка, и она видна ВСЕГДА.
+        #
+        # Раньше здесь была рамка «Внимание», которая пряталась, когда
+        # сказать нечего. Звучит разумно, но выходило плохо: у программы
+        # несколько защит, из-за которых сделок не будет — происшествие,
+        # позиция без стопа, потерянная отметка, пауза, проверочный
+        # режим, — и узнать о них можно было только из журнала или из
+        # ленты последних ТРЁХ событий, откуда причину вытесняло
+        # следующее сообщение. Человек видел «Работает» и отсутствие
+        # сделок и решал, что программа зависла.
+        #
+        # Теперь здесь всегда написано либо «торговля разрешена», либо
+        # чем именно она закрыта — а следом прежние предупреждения.
+        #
+        # Второй рамкой это делать нельзя: две соседние рамки об одном и
+        # том же — ровно то повторение, на которое жаловался владелец
+        # («переделай обзор, чтобы ничего не повторялось»). Это же
+        # поймал тест на число рамок.
+        #
+        # Что показывать — решает ui_status.py, и это проверяется тестом
+        # без запуска окна.
         self.trade_warning_var = tk.StringVar(value="")
-        # Место под предупреждение зарезервировано всегда — так рамка при
-        # появлении встаёт РОВНО СЮДА, а не в конец страницы. Сама рамка
-        # показывается только когда есть что сказать (см. _refresh_loop):
-        # пустая рамка «Внимание» на пол-экрана пугает без причины.
         self.trade_warning_slot = ttk.Frame(parent)
         self.trade_warning_slot.pack(fill="x")
-        self.trade_warning_frame = ttk.LabelFrame(self.trade_warning_slot,
-                                                  text=" Внимание ")
+        self.trade_warning_frame = ttk.LabelFrame(
+            self.trade_warning_slot, text=" Что сейчас с торговлей ")
         # НЕБОЛЬШОЕ ОКНО С ПОЛЗУНКОМ, А НЕ РАСТУЩАЯ НАДПИСЬ. Владелец прислал
         # снимок: рамка «Внимание» заняла ПОЛ-ЭКРАНА и была целиком красной —
         # потому что в неё попал список из 497 отобранных пар. Из-за этого
@@ -1023,6 +1112,15 @@ class App:
         self.trade_warning_text.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.trade_warning_text.pack(side="left", fill="both", expand=True)
+        # Виды строк состояния — на том же поле, что и предупреждения.
+        self.trade_warning_text.tag_configure(
+            "стоп", foreground=self.colors["loss"], font=("Segoe UI", 9, "bold"))
+        self.trade_warning_text.tag_configure(
+            "внимание", foreground=self.colors["warning"])
+        self.trade_warning_text.tag_configure(
+            "спокойно", foreground=self.colors["profit"])
+        self.trade_warning_text.tag_configure(
+            "пояснение", foreground=self.colors["muted"])
         self.trade_warning_text.tag_configure("важно",
                                               foreground=self.colors["loss"])
         self.trade_warning_text.tag_configure("обычное",
@@ -1392,12 +1490,17 @@ class App:
         btn_row.pack(fill="x", padx=10, pady=6)
         ttk.Button(btn_row, text="Закрыть выбранную сделку", command=self.close_selected_position).pack(
             side="left")
-        ttk.Button(btn_row, text="Закрыть ВСЕ сделки", command=self.close_all_positions).pack(
-            side="left", padx=(8, 0))
-        ttk.Button(btn_row, text="Закрыть прибыльные", command=self.close_profitable_positions).pack(
-            side="left", padx=(8, 0))
-        ttk.Button(btn_row, text="Закрыть убыточные", command=self.close_losing_positions).pack(
-            side="left", padx=(8, 0))
+        # Подпись кнопки говорит, ЧТО она закроет. «Закрыть ВСЕ сделки»
+        # было неправдой: по умолчанию закрываются только сделки бота.
+        ttk.Button(btn_row, text=f"Закрыть все ({self._что_закроется()[1]})",
+                   command=self.close_all_positions).pack(side="left", padx=(8, 0))
+        ttk.Button(btn_row, text="Закрыть прибыльные",
+                   command=self.close_profitable_positions).pack(side="left", padx=(8, 0))
+        ttk.Button(btn_row, text="Закрыть убыточные",
+                   command=self.close_losing_positions).pack(side="left", padx=(8, 0))
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=820,
+                  justify="left", text=self._что_закроется()[2]
+                  ).pack(anchor="w", padx=10, pady=(0, 6))
 
     def _refresh_positions_tab(self):
         snap = ds.get_snapshot()
@@ -1421,16 +1524,73 @@ class App:
         if messagebox.askyesno(APP_TITLE, f"Закрыть позицию #{ticket} по рынку?"):
             control.request_close(ticket)
 
+    @staticmethod
+    def _что_закроется() -> tuple:
+        """(кого трогаем, короткая подпись, длинное пояснение).
+
+        ЗАЧЕМ. С ревизии bc3dd08 массовые кнопки по умолчанию закрывают
+        ТОЛЬКО сделки бота (CLOSE_BOT_POSITIONS_ONLY). А окна подтверждения
+        по-прежнему обещали закрыть «АБСОЛЮТНО ВСЕ позиции счёта, и сделки
+        бота, и открытые вручную».
+
+        То есть окно ВРАЛО. Человек читает «закроется всё», нажимает «да»,
+        уходит — и его ручная сделка остаётся открытой, хотя он уверен в
+        обратном. Это худший вид ошибки в окне: не непонятно, а неверно.
+
+        Текст теперь берётся из настройки, а не написан на бумаге."""
+        только_свои = bool(getattr(cfg, "CLOSE_BOT_POSITIONS_ONLY", True))
+        if только_свои:
+            return (True, "сделки бота",
+                    "Ваши сделки, открытые вручную в терминале или другим "
+                    "советником, НЕ закроются. Закрыть их можно по одной — "
+                    "выбрав сделку в таблице.")
+        return (False, "ВСЕ сделки счёта",
+                "Это касается и сделок бота, и открытых вручную в "
+                "терминале MT5. Отменить нельзя.")
+
+    def _посчитать_к_закрытию(self, только_свои: bool, отбор=None) -> int:
+        """Сколько строк таблицы РЕАЛЬНО закроется.
+
+        Раньше в подтверждении стояло общее число позиций, а закрывалась
+        часть. Число в вопросе обязано совпадать с тем, что произойдёт."""
+        сколько = 0
+        for iid in self.positions_tree.get_children():
+            значения = self.positions_tree.item(iid, "values")
+            if только_свои:
+                # Колонка «Источник» — последняя, см. cols в
+                # _build_tab_positions: "Бот" или "Ручная".
+                if not значения or str(значения[-1]) != "Бот":
+                    continue
+            if отбор is not None:
+                try:
+                    профит = float(значения[8])
+                except (IndexError, ValueError, TypeError):
+                    continue
+                if not отбор(профит):
+                    continue
+            сколько += 1
+        return сколько
+
     def close_all_positions(self):
-        count = len(self.positions_tree.get_children())
+        только_свои, кого, пояснение = self._что_закроется()
+        count = self._посчитать_к_закрытию(только_свои)
         if count == 0:
-            messagebox.showinfo(APP_TITLE, "Нет открытых сделок.")
+            всего = len(self.positions_tree.get_children())
+            # Разница важна: «сделок нет вовсе» и «нет НАШИХ сделок, а
+            # чужие есть» — разные ответы, и второй человек обязан
+            # услышать, иначе решит, что кнопка сломалась.
+            if всего == 0:
+                messagebox.showinfo(APP_TITLE, "Открытых сделок нет.")
+            else:
+                messagebox.showinfo(
+                    APP_TITLE,
+                    f"Сделок бота нет. Открытых позиций на счёте: {всего} — "
+                    f"но они не наши.\n\n{пояснение}")
             return
         if messagebox.askyesno(
             APP_TITLE,
-            f"Закрыть АБСОЛЮТНО ВСЕ открытые позиции счёта ({count} шт.) по рынку? "
-            f"Это касается и сделок бота, и открытых вручную в терминале MT5. "
-            f"Действие нельзя отменить.",
+            f"Закрыть по рынку {кого} — {count} шт.?\n\n"
+            f"{пояснение}\n\nДействие нельзя отменить.",
         ):
             control.request_close_all()
 
@@ -1447,27 +1607,30 @@ class App:
         return count
 
     def close_profitable_positions(self):
-        count = self._count_positions_by_profit(want_profitable=True)
+        только_свои, кого, пояснение = self._что_закроется()
+        count = self._посчитать_к_закрытию(только_свои, lambda п: п >= 0)
         if count == 0:
-            messagebox.showinfo(APP_TITLE, "Нет прибыльных сделок сейчас.")
+            messagebox.showinfo(APP_TITLE,
+                                "Прибыльных сделок сейчас нет.\n\n" + пояснение)
             return
         if messagebox.askyesno(
             APP_TITLE,
-            f"Закрыть ВСЕ прибыльные сейчас позиции счёта ({count} шт.) по рынку? "
-            f"Это касается и сделок бота, и открытых вручную в терминале MT5.",
+            f"Закрыть по рынку прибыльные сейчас — {кого}, {count} шт.?\n\n"
+            f"{пояснение}",
         ):
             control.request_close_profitable()
 
     def close_losing_positions(self):
-        count = self._count_positions_by_profit(want_profitable=False)
+        только_свои, кого, пояснение = self._что_закроется()
+        count = self._посчитать_к_закрытию(только_свои, lambda п: п < 0)
         if count == 0:
-            messagebox.showinfo(APP_TITLE, "Нет убыточных сделок сейчас.")
+            messagebox.showinfo(APP_TITLE,
+                                "Убыточных сделок сейчас нет.\n\n" + пояснение)
             return
         if messagebox.askyesno(
             APP_TITLE,
-            f"Закрыть ВСЕ убыточные сейчас позиции счёта ({count} шт.) по рынку? "
-            f"Это касается и сделок бота, и открытых вручную в терминале MT5. "
-            f"Действие зафиксирует текущий убыток по ним.",
+            f"Закрыть по рынку убыточные сейчас — {кого}, {count} шт.?\n\n"
+            f"Это зафиксирует текущий убыток по ним.\n\n{пояснение}",
         ):
             control.request_close_losing()
 
@@ -2033,13 +2196,23 @@ class App:
         if default is not None:
             body.insert("end", "Значение по умолчанию\n", "head")
             body.insert("end", f"{default!r}\n\n")
-        if item["more"]:
+        # ЧЕРЕЗ .get(), А НЕ ПО КЛЮЧУ НАПРЯМУЮ.
+        #
+        # Раньше здесь стояло item["warn"]. У четырёх параметров этого
+        # поля не оказалось — и кнопка «?» рядом с ними просто НЕ
+        # РАБОТАЛА: обработчик падал с KeyError, окошко справки не
+        # открывалось, а человек видел, что нажатие ничего не даёт.
+        # Найдено перебором: тест нажал все 210 кнопок подряд.
+        #
+        # Необязательное поле не имеет права ломать кнопку. Нет текста —
+        # раздела просто не будет.
+        if item.get("more"):
             body.insert("end", "Если увеличить / включить\n", "head")
             body.insert("end", item["more"] + "\n\n")
-        if item["less"]:
+        if item.get("less"):
             body.insert("end", "Если уменьшить / выключить\n", "head")
             body.insert("end", item["less"] + "\n\n")
-        if item["warn"]:
+        if item.get("warn"):
             body.insert("end", "Внимание\n", "head")
             body.insert("end", item["warn"] + "\n", "warn")
         body.configure(state="disabled")
@@ -2441,7 +2614,21 @@ class App:
                   foreground=self.colors["muted"]).pack(side="left", padx=8)
 
         # ---------- Выгрузка истории для проверки ----------
-        hist = ttk.LabelFrame(parent, text=" История для проверки стратегии ")
+        # ТРИ РАЗНЫЕ ВЕЩИ С ПОХОЖИМИ НАЗВАНИЯМИ.
+        #
+        # На этой вкладке живут «выгрузка истории», «журнал сделок в
+        # облаке» и (с недавних пор) автоматическая выгрузка сделок у
+        # брокера. Названия были так близки, что перепутать их — вопрос
+        # времени, а делают они совершенно разное:
+        #
+        #   1) СВЕЧИ — котировки для проверки стратегии на прошлом;
+        #   2) СДЕЛКИ У БРОКЕРА — что реально произошло на счёте, сама
+        #      каждые два часа;
+        #   3) ЖУРНАЛ В ОБЛАКО — копия наших записей на GitHub.
+        #
+        # Теперь в названии каждой рамки сказано, ЧТО именно выгружается.
+        hist = ttk.LabelFrame(
+            parent, text=" 1. Свечи (котировки) — для проверки стратегии на прошлом ")
         hist.pack(fill="x", padx=12, pady=(6, 4))
         ttk.Label(hist, foreground=self.colors["muted"], wraplength=780,
                   justify="left", text=
@@ -2470,6 +2657,36 @@ class App:
                   foreground=self.colors["muted"], wraplength=520,
                   justify="left").pack(side="left", padx=8)
 
+        # ---------- 2. Сделки у брокера: выгрузка сама ----------
+        #
+        # Раздела не было вовсе. Программа с ревизии 4117ac4 сама
+        # выгружает историю сделок у брокера каждые два часа, а в окне об
+        # этом не говорилось ни слова: узнать, работает ли выгрузка и где
+        # лежат файлы, было неоткуда.
+        сд = ttk.LabelFrame(
+            parent, text=" 2. Сделки у брокера — выгружаются сами, каждые 2 часа ")
+        сд.pack(fill="x", padx=12, pady=(6, 4))
+        ttk.Label(сд, foreground=self.colors["muted"], wraplength=780,
+                  justify="left", text=
+                  "Это НЕ котировки и НЕ наш журнал. Это то, что записал сам "
+                  "терминал: номер сделки, номер заявки, номер позиции, "
+                  "комиссия, своп и фактическая цена. По этим файлам можно "
+                  "разобрать каждую сделку по фактам брокера, а не по нашей "
+                  "записи.\n"
+                  "Нажимать ничего не нужно: выгрузка идёт сама, в чётные "
+                  "часы (00:00, 02:00 и так далее). Файлы ложатся рядом с "
+                  "программой, в папку «сделки_демо», каждая выгрузка — в "
+                  "свой каталог, и прежние не переписываются.\n"
+                  "Если терминал в этот момент недоступен, окно НЕ считается "
+                  "закрытым: программа скажет об этом в «Событиях» и "
+                  "повторит через несколько минут. Пустой выгрузки, выданной "
+                  "за «сделок не было», не появится."
+                  ).pack(anchor="w", padx=8, pady=(4, 2))
+        self.deals_export_var = tk.StringVar(value="Состояние: смотрю…")
+        ttk.Label(сд, textvariable=self.deals_export_var,
+                  foreground=self.colors["muted"], wraplength=780,
+                  justify="left").pack(anchor="w", padx=8, pady=(0, 6))
+
         # ---------- Мост для советников ----------
         br = ttk.LabelFrame(parent, text=" Мост для советников MetaTrader ")
         br.pack(fill="x", padx=12, pady=(6, 4))
@@ -2495,7 +2712,7 @@ class App:
             row=2, column=0, columnspan=3, sticky="w", padx=8, pady=(2, 6))
 
         # ---------- Обновление ----------
-        up = ttk.LabelFrame(parent, text=" Обновление из GitHub ")
+        up = ttk.LabelFrame(parent, text=" Обновление программы из GitHub ")
         up.pack(fill="x", padx=12, pady=(6, 4))
 
         ttk.Label(up, foreground=self.colors["muted"], wraplength=780, justify="left", text=
@@ -2579,7 +2796,7 @@ class App:
             row=14, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
 
         # ---------- Журнал сделок в облаке ----------
-        jr = ttk.LabelFrame(parent, text=" Журнал сделок в облаке ")
+        jr = ttk.LabelFrame(parent, text=" 3. Наш журнал сделок — копия в облако (GitHub) ")
         jr.pack(fill="x", padx=12, pady=(6, 4))
 
         ttk.Label(jr, foreground=self.colors["muted"], wraplength=780, justify="left", text=
@@ -4621,6 +4838,9 @@ class App:
         """Перезапуск торгового цикла — то, что владелец делал руками,
         закрывая и открывая программу. Окно и настройки при этом остаются
         на месте, перезапускается только сам цикл."""
+        # Огонёк: у этой кнопки нет длящегося состояния, и
+        # показать она может только сам факт нажатия.
+        self.отметить_нажатие("перезапуск")
         runtime_events.record("управление", "перезапуск цикла по кнопке")
         self._bot_should_run = False
         try:
@@ -4692,6 +4912,9 @@ class App:
         всё сразу: брокера, параметры, профиль, контекст, источники,
         систему. Каждый раздел сохраняется своим кодом, как и раньше —
         меняется только то, откуда это запускается."""
+        # Огонёк: у этой кнопки нет длящегося состояния, и
+        # показать она может только сам факт нажатия.
+        self.отметить_нажатие("сохранить")
         savers = [
             ("брокер", getattr(self, "save_broker_settings", None)),
             ("параметры", getattr(self, "save_advanced_params", None)),
@@ -4758,14 +4981,27 @@ class App:
         text = str(line or "").lower()
         return "важно" if any(w in text for w in App.CRITICAL_WORDS) else "обычное"
 
-    def _show_warnings(self, problems) -> None:
-        """Заполнить рамку «Внимание». Длинные строки подрезаются.
+    def _show_warnings(self, problems, состояние=None) -> None:
+        """Заполнить рамку. Сначала состояние торговли, потом остальное.
 
-        ПОЧЕМУ ПОДРЕЗАЮТСЯ. В рамку однажды попал список из 497 отобранных
-        пар одной строкой — и занял пол-экрана, вытеснив всё остальное.
-        Место сообщения — рамка, место списка пар — вкладка «Символы»."""
+        ПОРЯДОК НЕ СЛУЧАЕН. «Почему нет сделок» человек ищет первым, и
+        оно обязано стоять выше причин молчания по отдельным парам и
+        ленты недавних событий.
+
+        ПОЧЕМУ ДЛИННОЕ ПОДРЕЗАЕТСЯ. В рамку однажды попал список из 497
+        отобранных пар одной строкой — и занял пол-экрана, вытеснив всё
+        остальное. Место сообщения — рамка, место списка пар — вкладка
+        «Символы»."""
         self.trade_warning_text.configure(state="normal")
         self.trade_warning_text.delete("1.0", "end")
+        for с in состояние or ():
+            self.trade_warning_text.insert(
+                "end", с["заголовок"] + "\n", с["важность"])
+            if с.get("пояснение"):
+                self.trade_warning_text.insert(
+                    "end", "    " + с["пояснение"] + "\n", "пояснение")
+        if состояние and problems:
+            self.trade_warning_text.insert("end", "\n", "пояснение")
         for line in problems or ():
             text = str(line)
             if len(text) > 300:
@@ -4774,9 +5010,63 @@ class App:
                                            self._warning_severity(text))
         self.trade_warning_text.configure(state="disabled")
 
+    def _обновить_состояние_выгрузки(self):
+        """Написать, когда сделки выгружались в последний раз.
+
+        Читается файл состояния самой выгрузки — тот же, по которому она
+        решает, наступило ли новое окно. Ходить за этим к терминалу окно
+        не должно."""
+        try:
+            состояние = trade_journal.прочитать_состояние()
+        except Exception as e:  # noqa: BLE001
+            self.deals_export_var.set(f"Состояние прочитать не удалось: {e}")
+            return
+        if not состояние:
+            self.deals_export_var.set(
+                "Выгрузок ещё не было. Первая произойдёт в ближайший чётный "
+                "час после запуска программы.")
+            return
+        if состояние.get("неудачная_попытка") and not состояние.get("слот"):
+            self.deals_export_var.set(
+                f"Последняя попытка НЕ удалась: "
+                f"{состояние.get('почему', 'причина не записана')} "
+                f"Окно не закрыто — программа повторит.")
+            return
+        self.deals_export_var.set(
+            f"Последняя выгрузка: {состояние.get('когда_utc', '?')} (UTC), "
+            f"строк: {состояние.get('сделок', '?')}, "
+            f"каталог: {состояние.get('каталог', '?')}")
+
+    def _состояние_торговли(self, snap):
+        """Строки о состоянии торговли. Никогда не пустые.
+
+        Все сведения берутся из того, что окну уже доступно: снимок
+        состояния и общий объект control. К терминалу здесь не
+        обращаемся — окно не должно ходить за данными само."""
+        try:
+            строки = ui_status.собрать(
+                snap,
+                инцидент_открыт=control.инцидент_открыт(),
+                инцидент_причина=str(control.инцидент().get("причина", "")),
+                запись_терялась=incident.запись_терялась(),
+                ожидающих_заявок=len(pending_orders.открытые()),
+                на_паузе=control.is_paused(),
+                бот_запущен=bool(self.bot_thread and self.bot_thread.is_alive()))
+        except Exception as e:  # noqa: BLE001
+            # Показать нечего — но молчать нельзя: молчание владелец уже
+            # однажды принял за зависание.
+            log.error("Состояние торговли собрать не удалось: %s", e)
+            return [{"важность": ui_status.ВНИМАНИЕ,
+                     "заголовок": "Состояние торговли определить не удалось",
+                     "пояснение": f"{type(e).__name__}: {e}"}]
+        return строки
+
     def _refresh_loop(self):
         try:
             snap = ds.get_snapshot()
+            состояние = self._состояние_торговли(snap)
+            self._обновить_состояние_выгрузки()
+            self._обновить_огоньки()
             problems = []
             if snap:
                 acc = snap.get("account", {})
@@ -4812,16 +5102,15 @@ class App:
             events = runtime_events.describe(3)
             if events:
                 problems.append("Недавние события:\n  " + events.replace("\n", "\n  "))
-            if problems:
-                self._show_warnings(problems)
-                # Рамка появляется, ТОЛЬКО когда есть что сказать: пустая
-                # рамка «Внимание» на пол-экрана пугает без причины.
-                if not self.trade_warning_frame.winfo_ismapped():
-                    self.trade_warning_frame.pack(fill="x", padx=12, pady=6)
-            else:
-                self._show_warnings([])
-                if self.trade_warning_frame.winfo_ismapped():
-                    self.trade_warning_frame.pack_forget()
+            # РАМКА НЕ ПРЯЧЕТСЯ БОЛЬШЕ НИКОГДА.
+            #
+            # Раньше она появлялась, только когда было что сказать, а
+            # пустое место человек читал как «программа молчит». Молчание
+            # он уже однажды принял за зависание. Теперь в ней всегда
+            # есть хотя бы одна строка — «торговля разрешена».
+            self._show_warnings(problems, состояние)
+            if not self.trade_warning_frame.winfo_ismapped():
+                self.trade_warning_frame.pack(fill="x", padx=12, pady=6)
 
             if self.bot_thread and self.bot_thread.is_alive():
                 pause_txt = " (пауза)" if control.is_paused() else ""
@@ -5041,6 +5330,9 @@ class App:
                 self._hard_quit()
 
     def full_exit(self):
+        # Огонёк: у этой кнопки нет длящегося состояния, и
+        # показать она может только сам факт нажатия.
+        self.отметить_нажатие("выход")
         if messagebox.askyesno(APP_TITLE, "Полностью закрыть программу? Бот (если запущен) будет остановлен, "
                                             "процесс исчезнет из Диспетчера задач."):
             self._hard_quit()

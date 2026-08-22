@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import sys
 import tempfile
 import types
@@ -248,9 +249,23 @@ def test_warning_box_is_small_and_not_all_red() -> None:
     print("\n[Рамка «Внимание» небольшая, красным — только важное]")
     src = (APP / "desktop_app.py").read_text(encoding="utf-8")
 
-    build = src.split("Что мешает торговать", 1)[1].split("---------- Действия", 1)[0]
-    check("tk.Text(" in build, "Это окошко с текстом, а не растущая надпись")
-    check("height=6" in build, "Высота ограничена", build[:60])
+    # ОПОРА НА КОД, А НЕ НА КОММЕНТАРИЙ.
+    #
+    # Раньше кусок вырезался по тексту комментария «Что мешает
+    # торговать». Комментарий переименовали при правке интерфейса — и
+    # тест не просто упал, а РУХНУЛ с IndexError, потому что split не
+    # нашёл разделителя. Проверка, которую ломает переименование
+    # пояснения, проверяет пояснение, а не программу.
+    #
+    # Теперь опора — на имя самого поля, которое и создаёт рамку.
+    build = src.split("self.trade_warning_text = tk.Text(", 1)[1][:600]
+    check("wrap=" in build, "Это окошко с текстом, а не растущая надпись")
+    высота = re.search(r"height=(\d+)", build)
+    check(высота is not None, "Высота задана числом")
+    if высота:
+        check(int(высота.group(1)) <= 8,
+              "И она ограничена — рамка не займёт пол-экрана",
+              высота.group(1))
     check("Scrollbar" in build, "И есть ползунок")
 
     # Цвет по важности — проверяем ВЫЗОВОМ

@@ -410,7 +410,7 @@ class AccountsTab:
         tk.Frame(actions, bg=_C["border"], width=1).pack(side="left", fill="y", padx=6, pady=2)
         self._action(actions, "Закрыть прибыльные", self._close_profit, BG_CARD)
         self._action(actions, "Закрыть убыточные", self._close_loss, BG_CARD)
-        self._action(actions, "Закрыть все", self._close_all, BG_CARD)
+        self._action(actions, "Закрыть все сделки бота", self._close_all, BG_CARD)
 
         tk.Label(right, text="ОТКРЫТЫЕ ПОЗИЦИИ", bg=BG, fg=FG_DIM,
                  font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=(4, 4))
@@ -591,16 +591,53 @@ class AccountsTab:
             self.supervisor.stop(self.selected_login)
 
     # ---------- закрытие позиций ----------
+    #
+    # У всех трёх кнопок раньше НЕ БЫЛО ПОДТВЕРЖДЕНИЯ ВООБЩЕ: одно
+    # нажатие — и позиции закрывались по рынку, без вопроса и без
+    # возможности отменить. Соседняя кнопка «Закрыть всё на всех счетах»
+    # спрашивала, а эти три — нет, хотя последствия те же.
+    #
+    # И отдельно: с ревизии bc3dd08 закрываются ТОЛЬКО сделки бота
+    # (CLOSE_BOT_POSITIONS_ONLY). Об этом надо сказать заранее, а не
+    # после — иначе человек уйдёт, считая счёт пустым.
+    @staticmethod
+    def _кого_закрываем() -> str:
+        try:
+            import config as cfg
+            только_свои = bool(getattr(cfg, "CLOSE_BOT_POSITIONS_ONLY", True))
+        except Exception:  # noqa: BLE001
+            только_свои = True
+        if только_свои:
+            return ("Закроются только сделки бота. Ваши сделки, открытые "
+                    "вручную в терминале, останутся — их закрывают по одной, "
+                    "двойным щелчком по строке в таблице.")
+        return ("Закроются ВСЕ позиции счёта, включая открытые вручную в "
+                "терминале.")
+
+    def _спросить(self, что: str, добавка: str = "") -> bool:
+        текст = f"{что} по рынку на счёте {self.selected_login}?\n\n"
+        if добавка:
+            текст += добавка + "\n\n"
+        текст += self._кого_закрываем() + "\n\nОтменить это нельзя."
+        return messagebox.askyesno("Закрытие позиций", текст)
+
     def _close_profit(self):
-        if self.selected_login is not None:
+        if self.selected_login is None:
+            return
+        if self._спросить("Закрыть прибыльные сейчас сделки"):
             self.supervisor.close_profitable(self.selected_login)
 
     def _close_loss(self):
-        if self.selected_login is not None:
+        if self.selected_login is None:
+            return
+        if self._спросить("Закрыть убыточные сейчас сделки",
+                          "Это зафиксирует текущий убыток по ним."):
             self.supervisor.close_losing(self.selected_login)
 
     def _close_all(self):
-        if self.selected_login is not None:
+        if self.selected_login is None:
+            return
+        if self._спросить("Закрыть все открытые сделки"):
             self.supervisor.close_all(self.selected_login)
 
     def _close_one(self, _event=None):
@@ -615,7 +652,8 @@ class AccountsTab:
     def _panic(self):
         if not messagebox.askyesno(
             "Закрыть всё",
-            "Закрыть ВСЕ позиции на ВСЕХ запущенных счетах?\n\n"
+            "Закрыть открытые сделки на ВСЕХ запущенных счетах?\n\n"
+            + self._кого_закрываем() + "\n\n"
             "Это действие нельзя отменить."
         ):
             return
