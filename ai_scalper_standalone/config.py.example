@@ -796,6 +796,13 @@ MIN_RISK_REWARD_RATIO = 3.0
 # забрать любую прибыль, какую даст движение рынка, а не только фиксированную
 # небольшую цель. Выключи (False), чтобы вернуть прежнее поведение с TP_* /
 # RISK_REWARD_RATIO / target_profit_money (см. process_symbol в main.py).
+# Простой выход — черновик стратегии С-001. По умолчанию ВЫКЛЮЧЕН:
+# поведение программы не меняется. Подробности — в справке параметра.
+USE_SIMPLE_EXIT = False
+
+# Массовые кнопки «закрыть все» трогают только сделки бота.
+CLOSE_BOT_POSITIONS_ONLY = True
+
 USE_MAX_PROFIT_RIDE = True
 
 USE_BREAK_EVEN = True
