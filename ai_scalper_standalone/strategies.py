@@ -205,6 +205,11 @@ STRATEGIES: list[Strategy] = [
             "USE_PROFIT_LOCK_TRAILING": False,
             "USE_R_TRAIL_LADDER": False,
             "USE_PARTIAL_CLOSE": False,
+            # Спасение в безубыток — тоже вмешательство в открытую
+            # сделку, и в списке его не было по недосмотру. Указал
+            # проверяющий.
+            "USE_BREAK_EVEN_RESCUE": False,
+            "USE_TP_TIGHTEN": False,
             # Цель равна риску. Это НЕ подбор «под прибыль»: единица
             # выбрана как самое простое из возможных значений, чтобы
             # сравнение со сложным выходом не зависело ещё и от того,
@@ -242,8 +247,27 @@ def by_key(key: str) -> Strategy | None:
     return None
 
 
-def titles() -> list[str]:
-    return [s.title for s in STRATEGIES]
+def черновик(strategy_or_key) -> bool:
+    """Черновик ли это. Принимает и стратегию, и ключ."""
+    ключ = getattr(strategy_or_key, "key", strategy_or_key)
+    return str(ключ) in ЧЕРНОВИКИ
+
+
+def рабочие() -> list:
+    """Стратегии, которые можно предлагать наравне. Без черновиков."""
+    return [s for s in STRATEGIES if not черновик(s)]
+
+
+def titles(включая_черновики: bool = False) -> list[str]:
+    """Названия для списка выбора.
+
+    Черновики по умолчанию НЕ показываются. Стратегия в общем списке
+    выглядит как готовый вариант: выбрал — применил. С-001 таким не
+    является — у неё нет ни заверённого паспорта, ни демо-приёмки, и
+    прибыльность её не проверена. Показать её рядом с остальными значит
+    предложить владельцу то, что предлагать нельзя."""
+    источник = STRATEGIES if включая_черновики else рабочие()
+    return [s.title for s in источник]
 
 
 def by_title(title: str) -> Strategy | None:
