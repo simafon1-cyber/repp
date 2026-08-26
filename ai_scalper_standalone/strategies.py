@@ -22,6 +22,10 @@
 
 from __future__ import annotations
 
+import json
+import os
+import sys
+
 from dataclasses import dataclass, field
 
 
@@ -240,6 +244,63 @@ PROTECTED_PARAMS = frozenset({
 })
 
 
+# У какого черновика какой паспорт. Пока паспорта нет — черновик остаётся
+# черновиком и кнопкой не применяется.
+ПАСПОРТА = {"c001_simple": "strategy_c001.json"}
+
+
+def _корень_данных() -> str:
+    """Где искать папку preregistration.
+
+    В собранной программе PyInstaller распаковывает вложенные файлы во
+    временную папку и кладёт путь в sys._MEIPASS; при запуске из
+    исходников поднимаемся на уровень выше — в корень репозитория."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return meipass
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def путь_паспорта(strategy_or_key) -> str:
+    """Полный путь к паспорту черновика. Пусто — паспорта не предусмотрено."""
+    ключ = str(getattr(strategy_or_key, "key", strategy_or_key))
+    имя = ПАСПОРТА.get(ключ)
+    if not имя:
+        return ""
+    return os.path.join(_корень_данных(), "preregistration", имя)
+
+
+def паспорт_заверен(strategy_or_key) -> tuple:
+    """(можно_ли_применять, почему_нет).
+
+    Проверяются ТРИ вещи, и каждая по отдельности закрывает кнопку:
+    файл на месте, в нём стоит печать, и печать сходится с содержимым.
+    Последнее важнее всего: без сверки печати паспорт можно было бы
+    отредактировать в блокноте и «разрешить» себе что угодно."""
+    путь = путь_паспорта(strategy_or_key)
+    if not путь:
+        return False, "для этого черновика паспорт не предусмотрен"
+    if not os.path.exists(путь):
+        return False, f"паспорт не найден: {os.path.basename(путь)}"
+    try:
+        with open(путь, "r", encoding="utf-8") as f:
+            паспорт = json.load(f)
+    except (OSError, ValueError) as e:
+        return False, f"паспорт не читается ({type(e).__name__})"
+
+    записанная = str(паспорт.get("хеш_паспорта", "")).strip()
+    if not записанная:
+        return False, "паспорт не заверен: печати нет"
+
+    # Считаем печать тем же способом, что и при заверении.
+    import research_manifest
+    если_бы = research_manifest.хеш(паспорт)
+    if если_бы != записанная:
+        return False, ("печать паспорта НЕ СХОДИТСЯ с его содержимым — "
+                       "паспорт меняли после заверения")
+    return True, ""
+
+
 def by_key(key: str) -> Strategy | None:
     for strategy in STRATEGIES:
         if strategy.key == key:
@@ -266,7 +327,14 @@ def titles(включая_черновики: bool = False) -> list[str]:
     является — у неё нет ни заверённого паспорта, ни демо-приёмки, и
     прибыльность её не проверена. Показать её рядом с остальными значит
     предложить владельцу то, что предлагать нельзя."""
-    источник = STRATEGIES if включая_черновики else рабочие()
+    if включая_черновики:
+        источник = STRATEGIES
+    else:
+        # Черновик с ЗАВЕРЕННЫМ паспортом показывать можно: регламент
+        # пройден, и прятать его дальше значило бы мешать работе. Без
+        # паспорта — по-прежнему нет.
+        источник = [s for s in STRATEGIES
+                    if not черновик(s) or паспорт_заверен(s)[0]]
     return [s.title for s in источник]
 
 

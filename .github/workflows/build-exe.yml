@@ -129,6 +129,7 @@ jobs:
           --add-data "config.py.example;."
           --add-data "../mql5;mql5"
           --add-data "../ai_scalper_pro;ai_scalper_pro"
+          --add-data "../preregistration;preregistration"
           --collect-all telethon
           --collect-all MetaTrader5
           --collect-all anthropic
@@ -166,6 +167,7 @@ jobs:
           --add-data "config.py.example;."
           --add-data "../mql5;mql5"
           --add-data "../ai_scalper_pro;ai_scalper_pro"
+          --add-data "../preregistration;preregistration"
           --collect-all telethon
           --collect-all MetaTrader5
           --collect-all anthropic

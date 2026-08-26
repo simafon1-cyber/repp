@@ -394,6 +394,14 @@ echo "==================================================="
 python3 test_buttons.py || FAILED=1
 
 echo
+echo "--- Почему нет сделок: программа говорит сама ---"
+python3 test_silence_diagnosis.py || FAILED=1
+
+echo
+echo "--- С-001 открывается только заверенным паспортом ---"
+python3 test_c001_passport.py || FAILED=1
+
+echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ИТОГ: все проверки пройдены."
 else
