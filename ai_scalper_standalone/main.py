@@ -1733,6 +1733,16 @@ def survey_symbol(symbol: str) -> dict:
         "stop_points": max(atr_floor, spread_floor, broker_floor),
         "money_per_point": (point / tick_size) * tick_value,
         "trade_mode": getattr(info, "trade_mode", None),
+        # РАЗДЕЛ БРОКЕРА СОХРАНЯЕТСЯ ВМЕСТЕ С ЗАМЕРОМ.
+        #
+        # Без него фильтр AUTO_PICK_GROUPS работал только на первом этапе —
+        # он решал, что ЗАМЕРЯТЬ. А окончательный выбор берёт файл замеров,
+        # и проверить по нему раздел было нечем. Инструмент, однажды попавший
+        # в файл, выбирался дальше всегда: у владельца при AUTO_PICK_GROUPS
+        # = ["Forex"] торговались американские акции (AUPH, CDW, BMNR, ARVN,
+        # BHVN, CNH, CHYM) — 7 акций по 16 долларов на счёте 384. Вся логика
+        # размера сделки считалась на валютных парах.
+        "path": str(getattr(info, "path", "") or ""),
     }
 
 
@@ -1897,8 +1907,17 @@ def auto_pick_symbols(equity: float, deadline: float = None,
     if len(cached) < len(passed):
         runtime_events.record("пары", line)
 
+    # ОТСЕВ ПО РАЗДЕЛУ — ПЕРЕД ОКОНЧАТЕЛЬНЫМ ВЫБОРОМ, А НЕ ТОЛЬКО ПЕРЕД
+    # ЗАМЕРОМ. Иначе запрет обходится через файл замеров, см. survey_symbol.
+    пригодные, чужой_раздел = symbol_picker.only_allowed_groups(
+        symbol_cache.usable_rows(cached, available),
+        tuple(getattr(cfg, "AUTO_PICK_GROUPS", symbol_picker.DEFAULT_GROUPS) or ()))
+    if чужой_раздел:
+        log.warning("Отбор пар: отброшено не из разрешённого раздела: %d (%s)",
+                    len(чужой_раздел), ", ".join(чужой_раздел[:5]))
+
     result = symbol_picker.pick(
-        symbol_cache.usable_rows(cached, available), equity,
+        пригодные, equity,
         limit=int(getattr(cfg, "AUTO_PICK_LIMIT", symbol_picker.DEFAULT_LIMIT)),
         max_risk_percent=float(getattr(cfg, "MAX_TRADE_RISK_PERCENT_OF_EQUITY", 2.0) or 0),
         max_spread_ratio=float(getattr(cfg, "AUTO_PICK_MAX_SPREAD_RATIO", 0.25) or 0),

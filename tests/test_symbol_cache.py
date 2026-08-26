@@ -234,8 +234,23 @@ def test_wired_into_startup() -> None:
     check(len(pick_call) == 1, "Отбор вызывается один раз")
     if pick_call:
         first = ast.unparse(pick_call[0].args[0])
-        check("usable_rows" in first,
-              "И отбирает из сохранённых замеров, а не только из свежих", first)
+        # Между хранилищем и отбором теперь стоит отсев по разделу брокера:
+        # без него запрет на акции обходился через файл замеров (см.
+        # test_symbol_groups). Поэтому проверяем не имя вызова, а ЦЕПОЧКУ:
+        # то, что уходит в pick, должно быть получено из usable_rows.
+        источник = ""
+        for узел in ast.walk(func):
+            if isinstance(узел, ast.Assign):
+                цели = [ast.unparse(t) for t in узел.targets]
+                части = [ч.strip(" ()") for ц in цели for ч in ц.split(",")]
+                if first in части:
+                    источник = ast.unparse(узел.value)
+        check("usable_rows" in источник or "usable_rows" in first,
+              "И отбирает из сохранённых замеров, а не только из свежих",
+              f"{first} <- {источник[:80]}")
+        check("only_allowed_groups" in источник or not источник,
+              "Между хранилищем и отбором стоит отсев по разделу брокера",
+              источник[:80])
 
 
 def test_file_is_not_committed() -> None:

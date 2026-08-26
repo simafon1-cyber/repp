@@ -200,6 +200,34 @@ def in_allowed_group(path: str, groups) -> bool:
     return any(text.startswith(str(g).lower()) for g in groups if str(g).strip())
 
 
+def only_allowed_groups(rows, groups) -> tuple:
+    """Оставить только инструменты из разрешённых разделов брокера.
+
+    ЗАЧЕМ ОТДЕЛЬНО ОТ prefilter. prefilter решает, что ЗАМЕРЯТЬ, и работает
+    с описанием контракта, где раздел есть. Окончательный выбор работает с
+    файлом замеров — и раздел там появился только сейчас. Пока его не было,
+    инструмент, однажды попавший в файл, выбирался всегда, чем бы ни была
+    настроена AUTO_PICK_GROUPS.
+
+    ОТКАЗОБЕЗОПАСНО: замер без раздела (старый файл, неизвестный формат)
+    считается НЕподходящим. Ошибка в эту сторону стоит одного лишнего
+    замера. Ошибка в другую — торговли инструментом, на котором ничего не
+    считалось.
+
+    Возвращает (оставленные, [имена отброшенных])."""
+    if not groups:
+        return list(rows or ()), []
+    оставили, убрали = [], []
+    for row in rows or ():
+        if not isinstance(row, dict):
+            continue
+        if in_allowed_group(row.get("path"), groups):
+            оставили.append(row)
+        else:
+            убрали.append(str(row.get("symbol") or "?"))
+    return оставили, убрали
+
+
 def prefilter(candidates: list, equity: float, max_risk_percent: float,
               assumed_stop_points: float = STAGE1_STOP_POINTS,
               limit: int = DEFAULT_SURVEY_LIMIT,

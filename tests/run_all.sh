@@ -402,6 +402,14 @@ echo "--- С-001 открывается только заверенным пас
 python3 test_c001_passport.py || FAILED=1
 
 echo
+echo "--- Отбор пар: только разрешённые разделы ---"
+python3 test_symbol_groups.py || FAILED=1
+
+echo
+echo "--- Кнопка разбора происшествия ---"
+python3 test_incident_button.py || FAILED=1
+
+echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ИТОГ: все проверки пройдены."
 else
