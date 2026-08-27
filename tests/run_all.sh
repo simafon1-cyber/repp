@@ -410,6 +410,14 @@ echo "--- Кнопка разбора происшествия ---"
 python3 test_incident_button.py || FAILED=1
 
 echo
+echo "--- Сверка заявок с историей сделок ---"
+python3 test_pending_history.py || FAILED=1
+
+echo
+echo "--- Запрет по инструменту, а не по всему счёту ---"
+python3 test_incident_scope.py || FAILED=1
+
+echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ИТОГ: все проверки пройдены."
 else

@@ -16,7 +16,7 @@ import logging
 import socket
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import MetaTrader5 as mt5
 
@@ -506,8 +506,14 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
 
     mr.update_market_regime(sym_state, df_ind)
 
-    if control.is_paused():
-        sym_state.last_reject_reason = "Пауза (управление с дашборда/телефона)"
+    # ЗАПРЕТ СПРАШИВАЕТСЯ ПО ЭТОМУ ИНСТРУМЕНТУ, А НЕ ВООБЩЕ.
+    # Незакрытая заявка по одной паре не должна останавливать торговлю по
+    # остальным: опасность — открыть вторую позицию поверх возможной
+    # неучтённой, и она касается только той самой пары. См.
+    # control.вход_запрещён.
+    _запрещён, _почему = control.вход_запрещён(symbol)
+    if _запрещён:
+        sym_state.last_reject_reason = _почему
         return
 
     if not control.is_symbol_enabled(symbol):
@@ -1151,6 +1157,40 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
             sym_state.last_reject_reason = "OK"
 
 
+def _история_для_сверки(ожидаемые):
+    """Сделки за окно, покрывающее время отправки самых старых заявок.
+
+    ЗАЧЕМ. Сверка смотрела только на ОТКРЫТЫЕ позиции. Заявка, успевшая
+    открыться и закрыться по стопу до следующего круга, среди открытых не
+    находилась и объявлялась пропавшей — открывался инцидент и торговля
+    вставала. У владельца так вышло три дня без единой сделки, при том
+    что заявки отработали штатно.
+
+    None здесь означает «спросить не удалось». Возвращаем именно None, а
+    не пустой список: пустой список — это утверждение «сделок не было», а
+    такого утверждения из неполученного ответа делать нельзя."""
+    самая_старая = None
+    for з in ожидаемые or ():
+        когда = з.get("когда_utc")
+        if not когда:
+            continue
+        try:
+            t = datetime.fromisoformat(str(когда))
+        except (TypeError, ValueError):
+            continue
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        if самая_старая is None or t < самая_старая:
+            самая_старая = t
+    if самая_старая is None:
+        # Времени нет ни у одной записи — берём заведомо широкое окно.
+        самая_старая = datetime.now(timezone.utc) - timedelta(days=30)
+    # Час запаса назад: часы терминала и наши могут расходиться.
+    начало = самая_старая - timedelta(hours=1)
+    конец = datetime.now(timezone.utc) + timedelta(hours=1)
+    return mt5c.deals_or_none(начало, конец)
+
+
 def _открыть_инцидент(symbol: str, вид: str, текст: str, ещё: dict = None):
     """Остановить торговлю ДО РАЗБИРАТЕЛЬСТВА, пережив перезапуск.
 
@@ -1248,7 +1288,10 @@ def _сверить_ожидаемые_заявки(all_positions):
     истории с задержкой. Пока это не выяснено, риск учитывается так,
     будто позиция есть."""
     try:
-        итог = pending.сверить(all_positions or [], magic=cfg.MAGIC_NUMBER)
+        _ждём = pending.открытые()
+        итог = pending.сверить(
+            all_positions or [], magic=cfg.MAGIC_NUMBER,
+            сделки=(_история_для_сверки(_ждём) if _ждём else None))
     except Exception as e:  # noqa: BLE001
         # Журнал сломался — считаем, что неподтверждённые заявки ЕСТЬ.
         # Пустой список означал бы «ничего не отправляли», а это ровно то
@@ -2236,7 +2279,13 @@ def main(stop_event=None, start_dashboard: bool = True):
         _ожидаемые = pending.открытые()
         if _ожидаемые:
             _позиции_сейчас = mt5c.get_open_positions() or []
-            _сверка = pending.сверить(_позиции_сейчас, magic=cfg.MAGIC_NUMBER)
+            _сверка = pending.сверить(
+                _позиции_сейчас, magic=cfg.MAGIC_NUMBER,
+                сделки=_история_для_сверки(_ожидаемые))
+            for _н in _сверка["нашлись"]:
+                log.info("Ожидаемая заявка подтверждена (%s): %s тикет %s",
+                         _н.get("где", "?"), _н["запись"].get("символ"),
+                         _н.get("тикет"))
             if _сверка["пропали"]:
                 текст = (f"ОСТАНОВКА: в журнале осталось "
                          f"{len(_сверка['пропали'])} отправленных заявок, "
