@@ -418,6 +418,10 @@ echo "--- Запрет по инструменту, а не по всему сч
 python3 test_incident_scope.py || FAILED=1
 
 echo
+echo "--- Диспетчер очереди стратегий ---"
+python3 test_dispatcher.py || FAILED=1
+
+echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ИТОГ: все проверки пройдены."
 else
