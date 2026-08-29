@@ -135,3 +135,6 @@ history/
 ai_scalper_standalone/history/
 !data/history_M5.tar.gz
 !data/history_M5.tar.gz.sha256
+# Таблица замера настроек: числа, на которые ссылается отчёт
+# docs/НА_ПРОВЕРКУ_СЕТКА_НАСТРОЕК.md. Без неё отчёт не самодостаточен.
+!research/сетка_настроек_*.txt
