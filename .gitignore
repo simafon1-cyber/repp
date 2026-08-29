@@ -144,3 +144,5 @@ ai_scalper_standalone/history/
 strategy_run_state.json
 strategy_run_state.json.sha256
 strategy_run_state.json.bak*
+!research/сетка_без_ворот_*.txt
+!research/ширина_стопа_*.txt
