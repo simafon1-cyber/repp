@@ -252,6 +252,8 @@ ADVANCED_PARAMS = [
      "Имя сервера этого счёта (пусто = не задано, торговля запрещена)", None),
     ("DEMO_ACCEPTANCE_REQUIRE_DEMO", "bool", "Демо-приёмка",
      "Требовать, чтобы счёт был ДЕМОНСТРАЦИОННЫМ", None),
+    ("DEMO_ACCEPTANCE_ANY_DEMO", "bool", "Демо-приёмка",
+     "Работать на ЛЮБОМ демо-счёте, к которому подключён терминал", None),
     ("MIN_BARS_BETWEEN_REVERSAL", "int", "Защитные проверки",
      "Анти-дребезг: баров ожидания перед разворотом (0 = без ожидания)", None),
     ("USE_SPREAD_FILTER", "bool", "Защитные проверки", "Фильтр по спреду", None),
@@ -1815,25 +1817,28 @@ class App:
                        "«Защита»."
                   ).pack(anchor="w", padx=12, pady=(0, 12))
 
-        cards = ttk.Frame(parent)
-        cards.pack(fill="x", padx=8)
-
-        self.quick_choice = tk.StringVar(value="balanced")
-        current = (control.get_risk_profile() or cfg.RISK_PROFILE).value
-        for _, value, _, _ in self.QUICK_PRESETS:
-            if value == current:
-                self.quick_choice.set(value)
-
-        for title, value, summary, details in self.QUICK_PRESETS:
-            card = ttk.LabelFrame(cards, text=title)
-            card.pack(side="left", fill="both", expand=True, padx=6, pady=4)
-            ttk.Radiobutton(card, text="Выбрать", value=value,
-                            variable=self.quick_choice).pack(anchor="w", padx=8, pady=(6, 2))
-            ttk.Label(card, text=summary, wraplength=230, justify="left").pack(
-                anchor="w", padx=8, pady=(0, 4))
-            ttk.Label(card, text=details, wraplength=230, justify="left",
-                      foreground=self.colors["muted"], font=("Segoe UI", 8)).pack(
-                anchor="w", padx=8, pady=(0, 8))
+        # ВЫБОРА РИСКА ЗДЕСЬ БОЛЬШЕ НЕТ.
+        #
+        # Владелец: «убрать выбор совсем», страница должна быть максимально
+        # простой. Раньше риск задавался в ДВУХ местах сразу — тремя
+        # карточками и отдельным списком «Профиль риска» ниже, — и это
+        # путало сильнее всего остального на вкладке.
+        #
+        # Значение риска при этом НЕ изменилось: какое стояло, такое и
+        # осталось. Оно просто перестало быть кнопкой на виду и правится
+        # теперь настройками, а не одним щелчком.
+        текущий = (control.get_risk_profile() or cfg.RISK_PROFILE).value
+        self.quick_choice = tk.StringVar(value=текущий)
+        карточка = self._quick_preset_by_value(текущий)
+        риск = ttk.LabelFrame(parent, text=" Риск — задан, менять здесь нельзя ")
+        риск.pack(fill="x", padx=12, pady=(0, 6))
+        ttk.Label(риск, text=f"{карточка[0]}: {карточка[3]}",
+                  wraplength=800, justify="left").pack(anchor="w", padx=10, pady=(6, 2))
+        ttk.Label(риск, foreground=self.colors["muted"], wraplength=800,
+                  justify="left",
+                  text="Меняется в «Настройка» → «Риск». Здесь показано, чтобы "
+                       "было видно, с каким риском идёт торговля.").pack(
+                           anchor="w", padx=10, pady=(0, 8))
 
         # ---- Стратегия: чем именно торгуем ----
         ttk.Label(parent, text="Стратегия", font=("Segoe UI", 12, "bold")).pack(
@@ -1847,11 +1852,14 @@ class App:
 
         strat_row = ttk.Frame(parent)
         strat_row.pack(fill="x", padx=12)
-        self.strategy_combo = ttk.Combobox(strat_row, values=strategies_mod.titles(),
+        self.strategy_combo = ttk.Combobox(strat_row, values=strategies_mod.пронумерованные(),
                                            state="readonly", width=28)
         current_key = getattr(cfg, "ACTIVE_STRATEGY", "") or ""
         current_strategy = strategies_mod.by_key(current_key) or strategies_mod.STRATEGIES[0]
-        self.strategy_combo.set(current_strategy.title)
+        self.strategy_combo.set(
+            next((т for т in strategies_mod.пронумерованные()
+                  if т.endswith(current_strategy.title)),
+                 current_strategy.title))
         self.strategy_combo.pack(side="left")
         self.strategy_combo.bind("<<ComboboxSelected>>", self._on_strategy_pick)
         ttk.Button(strat_row, text="Применить стратегию",
@@ -1864,8 +1872,7 @@ class App:
 
         actions = ttk.Frame(parent)
         actions.pack(fill="x", padx=12, pady=(14, 6))
-        ttk.Button(actions, text="Применить режим",
-                   command=self._apply_quick_preset).pack(side="left")
+        # Кнопки «Применить режим» нет: режим не выбирается.
         ttk.Button(actions, text="Применить и запустить бота",
                    command=self._apply_quick_and_start).pack(side="left", padx=8)
 
@@ -1879,13 +1886,13 @@ class App:
         self._build_tab_settings(parent)
 
     def _on_strategy_pick(self, _event=None):
-        strategy = strategies_mod.by_title(self.strategy_combo.get())
+        strategy = strategies_mod.по_названию_с_номером(self.strategy_combo.get())
         if strategy is not None:
             self.strategy_desc.configure(text=strategies_mod.describe(strategy))
 
     def _apply_strategy(self):
         """Записывает параметры стратегии в config.py и применяет на лету."""
-        strategy = strategies_mod.by_title(self.strategy_combo.get())
+        strategy = strategies_mod.по_названию_с_номером(self.strategy_combo.get())
         if strategy is None:
             return
 
@@ -1964,10 +1971,8 @@ class App:
         """Ставит профиль риска и режим торговли одним действием."""
         title, value, _, details = self._quick_preset_by_value(self.quick_choice.get())
         try:
-            for label, pv in PROFILE_OPTIONS:
-                if pv == value:
-                    self.profile_combo.set(label)
-            self._apply_profile()
+            # Профиль больше не выбирается в окне: ставим тот, что уже задан.
+            control.set_risk_profile(cfg.RiskProfile(value))
         except Exception as e:  # noqa: BLE001
             log.exception("Не удалось применить быстрый режим")
             messagebox.showerror(APP_TITLE, f"Не удалось применить режим: {e}")
@@ -1992,15 +1997,22 @@ class App:
         parent = self._scrollable(parent)   # боковой ползунок
         pad = {"padx": 10, "pady": 8}
 
-        ttk.Label(parent, text="Профиль риска", font=("Segoe UI", 11, "bold")).pack(anchor="w", **pad)
-        self.profile_combo = ttk.Combobox(parent, values=[label for label, _ in PROFILE_OPTIONS],
-                                           state="readonly", width=30)
-        self.profile_combo.pack(anchor="w", padx=10)
+        # ВТОРОЕ МЕСТО, ГДЕ ЗАДАВАЛСЯ РИСК, УБРАНО.
+        #
+        # Список «Профиль риска» и карточки выше делали одно и то же. Два
+        # органа управления на один параметр — это не удобство, а способ
+        # однажды поставить одно, увидеть другое и не понять, что
+        # действует. Осталась надпись: видно, что действует, а менять —
+        # настройками.
         current_profile = (control.get_risk_profile() or cfg.RISK_PROFILE).value
-        for label, value in PROFILE_OPTIONS:
-            if value == current_profile:
-                self.profile_combo.set(label)
-        ttk.Button(parent, text="Применить профиль", command=self._apply_profile).pack(anchor="w", **pad)
+        подпись = next((l for l, v in PROFILE_OPTIONS if v == current_profile),
+                       current_profile)
+        ttk.Label(parent, text=f"Профиль риска: {подпись}",
+                  font=("Segoe UI", 11, "bold")).pack(anchor="w", **pad)
+        ttk.Label(parent, foreground=self.colors["muted"], wraplength=800,
+                  justify="left",
+                  text="Меняется в «Настройка» → «Риск». Здесь только "
+                       "показано.").pack(anchor="w", padx=10)
 
         self.pause_btn = ttk.Button(parent, text="Пауза (новые сделки)", command=self._toggle_pause)
         self.pause_btn.pack(anchor="w", **pad)
@@ -2015,13 +2027,6 @@ class App:
             _reload_cfg()
         except Exception:
             pass
-
-    def _apply_profile(self):
-        label = self.profile_combo.get()
-        value = next((v for l, v in PROFILE_OPTIONS if l == label), None)
-        if value:
-            control.set_risk_profile(cfg.RiskProfile(value))
-            messagebox.showinfo(APP_TITLE, f"Профиль риска изменён на «{label}».")
 
     def _toggle_pause(self):
         control.set_paused(not control.is_paused())
