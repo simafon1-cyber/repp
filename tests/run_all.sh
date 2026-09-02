@@ -394,6 +394,14 @@ echo "==================================================="
 python3 test_buttons.py || FAILED=1
 
 echo
+echo "--- Окно: минимализм, чего владелец видеть не должен ---"
+python3 test_ui_minimalism.py || FAILED=1
+
+echo
+echo "--- Диагностика: доходит ли она до репозитория ---"
+python3 test_diag_wiring.py || FAILED=1
+
+echo
 echo "--- Почему нет сделок: программа говорит сама ---"
 python3 test_silence_diagnosis.py || FAILED=1
 

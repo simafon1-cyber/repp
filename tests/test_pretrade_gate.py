@@ -37,7 +37,9 @@
 from __future__ import annotations
 
 import ast
+import os
 import sys
+import tempfile
 import types
 from pathlib import Path
 
@@ -608,6 +610,104 @@ def test_настройки_барьера_нельзя_менять_удалё�
     for имя in ("DEMO_ACCEPTANCE_MODE", "DEMO_ACCEPTANCE_LOGIN",
                 "DEMO_ACCEPTANCE_SERVER", "DEMO_ACCEPTANCE_REQUIRE_DEMO"):
         check(any(имя in с for с in отброшено), f"{имя} названа в отказе")
+
+
+# =====================================================================
+# ПЕРЕНОС РЕШЕНИЯ ВЛАДЕЛЬЦА В УЖЕ СУЩЕСТВУЮЩИЙ config.py
+# =====================================================================
+def _барьер_на_файле(путь):
+    """Загрузить настройки ИЗ ФАЙЛА и спросить барьер про реальный счёт.
+
+    Проверяется факт: пропустит барьер счёт или нет. Не «какое значение
+    лежит в переменной», а что барьер РЕШИЛ."""
+    cfg = types.ModuleType("config")
+    cfg.__file__ = путь
+    exec(open(путь, encoding="utf-8").read(), cfg.__dict__)
+    sys.modules["config"] = cfg
+    g, _ = собрать(cfg, ПоддельныйТерминал(счёт=счёт()))
+    можно, причина = g.проверить(cfg, счёт(login=7000001,
+                                            server="MetaQuotes-Demo",
+                                            trade_mode=2))
+    return можно, причина
+
+
+def test_старый_конфиг_переносится_на_решение_все_счета_реальные():
+    """Решение владельца 01.09.2026 обязано доехать до УЖЕ УСТАНОВЛЕННОЙ
+    программы, а не только до новой установки.
+
+    config.py — личный файл, он не перезаписывается при обновлении. Без
+    одноразового переноса владелец получил бы новую сборку, в которой
+    ничего не изменилось, и снова написал бы «сделки не открывает»."""
+    print("\n[Решение доезжает до установленной программы]")
+    import config_migrate as cm
+
+    основа = ("LIVE_TRADING = True\n"
+              "DEMO_ACCEPTANCE_MODE = True\n"
+              "DEMO_ACCEPTANCE_LOGIN = 7000001\n"
+              'DEMO_ACCEPTANCE_SERVER = "MetaQuotes-Demo"\n'
+              "SYMBOLS = ['EURUSD']\n")
+
+    with tempfile.TemporaryDirectory() as d:
+        путь = os.path.join(d, "config.py")
+
+        def записать(тело):
+            with open(путь, "w", encoding="utf-8") as f:
+                f.write(тело)
+
+        # ДО переноса: требование демо стоит, счёт реальный — барьер закрыт.
+        записать(основа + "DEMO_ACCEPTANCE_REQUIRE_DEMO = True\n")
+        можно, причина = _барьер_на_файле(путь)
+        check(not можно, "До переноса реальный счёт не пропускается", причина)
+
+        # Перенос.
+        пояснения = cm.apply_one_time(путь)
+        check(any("все счета считать за реал" in x for x in пояснения),
+              "Человеку сказано, что именно изменилось и почему",
+              str(пояснения)[:80])
+
+        можно, причина = _барьер_на_файле(путь)
+        check(можно, "После переноса барьер пропускает счёт владельца", причина)
+
+        # Повторный запуск ничего не делает заново.
+        пояснения2 = cm.apply_one_time(путь)
+        check(not any("все счета считать за реал" in x for x in пояснения2),
+              "Второй раз перенос не повторяется", str(пояснения2)[:80])
+
+        # Владелец передумал и вернул требование — оно остаётся.
+        записать(основа + "DEMO_ACCEPTANCE_REQUIRE_DEMO = True\n"
+                 "MIGRATED_ACCOUNTS_ARE_ALL_REAL = True\n")
+        cm.apply_one_time(путь)
+        можно, причина = _барьер_на_файле(путь)
+        check(not можно,
+              "Вернул требование сам — программа с ним не спорит", причина)
+
+
+def test_перенос_не_трогает_защиту_счёта_и_пульт():
+    """Послабление касается ОДНОГО признака — «счёт демонстрационный».
+
+    Всё остальное обязано остаться на месте: сверка номера счёта, сверка
+    сервера и запрет включать LIVE_TRADING удалённо."""
+    print("\n[Перенос не расширен сверх сказанного]")
+    import config_migrate as cm
+
+    марка = "MIGRATED_ACCOUNTS_ARE_ALL_REAL"
+    пункт = [x for x in cm.ONE_TIME if x[0] == марка]
+    check(len(пункт) == 1, "Перенос записан ровно одним пунктом", str(len(пункт)))
+    if not пункт:
+        return
+    _, изменения, _ = пункт[0]
+    check(set(изменения) == {"DEMO_ACCEPTANCE_REQUIRE_DEMO"},
+          "Перенос меняет ровно одну настройку и никакую больше",
+          str(sorted(изменения)))
+    check(изменения["DEMO_ACCEPTANCE_REQUIRE_DEMO"] is False,
+          "И меняет её именно на False")
+
+    запрещено = ("LIVE_TRADING", "UPDATE_REPO", "UPDATE_BRANCH",
+                 "UPDATE_ENABLED", "REQUIRE_LOGIN",
+                 "DEMO_ACCEPTANCE_LOGIN", "DEMO_ACCEPTANCE_SERVER")
+    for имя in запрещено:
+        check(имя not in изменения, f"Перенос не трогает {имя}")
+
 
 
 def main() -> int:

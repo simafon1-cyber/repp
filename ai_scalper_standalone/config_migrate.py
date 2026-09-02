@@ -93,14 +93,29 @@ def _top_level_assignments(text: str) -> dict:
     except SyntaxError as e:
         log.warning("Не удалось разобрать файл настроек: %s", e)
         return out
+    # ПОЧЕМУ НЕ ast.get_source_segment.
+    #
+    # Он режет исходник заново ДЛЯ КАЖДОГО узла: разбивает весь файл на
+    # строки, потом берёт нужный кусок. На config.py в тысячу строк и при
+    # тринадцати переносах это давало 88 СЕКУНД — программа при первом
+    # запуске после установки просто стояла и молчала полторы минуты, и
+    # выглядело это как «зависла».
+    #
+    # Здесь смещения строк считаются ОДИН раз на файл, а кусок берётся
+    # обычным срезом. Результат тот же, время — доли секунды.
+    offsets = _line_start_offsets(text)
     for node in tree.body:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         target = node.targets[0]
         if not isinstance(target, ast.Name):
             continue
-        segment = ast.get_source_segment(text, node)
-        if segment is None:
+        try:
+            начало, конец = _node_span(text, node, offsets)
+        except (IndexError, TypeError, AttributeError):
+            continue
+        segment = text[начало:конец]
+        if not segment:
             continue
         out[target.id] = {"source": segment, "value": node.value}
     return out
@@ -173,6 +188,18 @@ def _replace_or_append(text: str, name: str, value_literal: str) -> str:
 #
 # Формат: (ключ-отметка, {имя настройки: новое значение}, пояснение).
 ONE_TIME = [
+    (
+        "MIGRATED_ACCOUNTS_ARE_ALL_REAL",
+        {"DEMO_ACCEPTANCE_REQUIRE_DEMO": False},
+        "снято требование «счёт обязан быть демонстрационным». Решение "
+        "владельца 01.09.2026, дословно: «не важно какой это счет демо или "
+        "реал, так как деньги одни ..все счета считать за реал!». Раньше "
+        "барьер отказывал на не-демо счёте, и заявки не уходили вовсе. "
+        "Что НЕ снято: заявки по-прежнему уходят только на тот счёт, номер "
+        "которого вписан вами; LIVE_TRADING включает человек руками; "
+        "удалённо LIVE_TRADING можно ставить только False. Правка "
+        "одноразовая: вернёте требование обратно — оно так и останется",
+    ),
     (
         "MIGRATED_DAILY_LOSS_LIMIT_OFF",
         {"USE_DAILY_LOSS_LIMIT": False},
