@@ -422,6 +422,10 @@ echo "--- Диспетчер очереди стратегий ---"
 python3 test_dispatcher.py || FAILED=1
 
 echo
+echo "--- Состояние программы в репозитории ---"
+python3 test_cloud_diag.py || FAILED=1
+
+echo
 if [ "$FAILED" -eq 0 ]; then
     echo "ИТОГ: все проверки пройдены."
 else
