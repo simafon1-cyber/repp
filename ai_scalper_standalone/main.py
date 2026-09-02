@@ -1568,6 +1568,9 @@ def build_snapshot(acc_info, acc_state: AccountState, sym_states: dict, all_posi
             "balance": acc_info.balance,
             "equity": equity,
             "currency": acc_info.currency,
+            # Режим счёта нужен окну, чтобы кнопка «Разрешить этот счёт»
+            # могла отказать на РЕАЛЬНОМ счёте, не спрашивая терминал сама.
+            "trade_mode": getattr(acc_info, "trade_mode", None),
         },
         "live_trading": cfg.LIVE_TRADING,
         "risk_profile": effective_profile.value,
