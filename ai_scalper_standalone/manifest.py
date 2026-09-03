@@ -59,8 +59,10 @@ def ревизия() -> dict:
     """Какая версия кода считала. Без неё повтор бессмыслен."""
     def команда(*аргументы):
         try:
+            import quiet_run
             из = subprocess.run(аргументы, capture_output=True, timeout=10,
-                                text=True, check=False)
+                                text=True, check=False,
+                                **quiet_run.без_окна())
             return из.stdout.strip()
         except Exception:  # noqa: BLE001
             return ""

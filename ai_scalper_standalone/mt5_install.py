@@ -189,9 +189,11 @@ def compile_one(metaeditor: str, mq5_path: str, timeout: int = 120) -> str:
     поэтому 0 и 1 (только предупреждения) считаем успехом."""
     log_path = mq5_path + ".log"
     try:
+        import quiet_run
         result = subprocess.run(
             [metaeditor, f"/compile:{mq5_path}", f"/log:{log_path}"],
             capture_output=True, timeout=timeout,
+            **quiet_run.без_окна(),
         )
     except subprocess.TimeoutExpired:
         return f"{os.path.basename(mq5_path)}: компиляция не уложилась в {timeout} с"

@@ -1528,7 +1528,11 @@ def restart_program() -> str:
         else:
             command = [sys.executable, os.path.abspath(sys.argv[0])]
         command.extend(sys.argv[1:])
-        subprocess.Popen(command, close_fds=True)
+        import quiet_run
+        # Перезапуск. Если программа запущена из исходников, командой
+        # будет python.exe — консольная программа, и без этого флага
+        # человек получил бы чёрное окно вдобавок к своему.
+        subprocess.Popen(command, close_fds=True, **quiet_run.без_окна())
     except Exception as e:  # noqa: BLE001
         log.warning("Не удалось перезапустить программу: %s", e)
         return f"Не удалось перезапустить программу: {e}"

@@ -143,6 +143,7 @@ import ui_layout
 import version as app_version
 import cloud_journal
 import cloud_diag
+import strategies_feed
 import bridge_host
 import diagnostics
 import updater
@@ -5514,9 +5515,62 @@ class App:
                 self._show_toast(title, message)
 
             self._upload_journal_if_due()
+            self._подтянуть_стратегии_если_пора()
         except Exception:
             log.exception("Ошибка обновления интерфейса")
         self.root.after(3000, self._refresh_loop)
+
+    def _подтянуть_стратегии_если_пора(self):
+        """Раз в несколько часов забрать список стратегий из репозитория.
+
+        Владелец: «пускай она просто подтягивает… раз в пять часов»,
+        чтобы новая стратегия не требовала пересборки программы.
+
+        Сама отправка в сеть — в отдельном потоке: этот цикл рисует
+        окно, и ждать в нём ответа GitHub нельзя.
+
+        НИЧЕГО НЕ ПРИМЕНЯЕТСЯ. Скачанный список только пополняет выбор в
+        окне; включает стратегию по-прежнему человек."""
+        if getattr(self, "_feed_busy", False):
+            return
+        try:
+            if not strategies_feed.пора(cfg):
+                return
+        except Exception:  # noqa: BLE001
+            return
+
+        self._feed_busy = True
+
+        def worker():
+            try:
+                итог = strategies_feed.обновить(cfg)
+            except Exception as e:  # noqa: BLE001
+                log.debug("Подтягивание стратегий сорвалось: %s", e)
+                итог = None
+
+            def finish():
+                self._feed_busy = False
+                if not итог:
+                    return
+                if итог.get("скачано"):
+                    log.info("Стратегий подтянуто из репозитория: %s",
+                             итог.get("стратегий"))
+                    # Список выбора перечитывается сам при следующем
+                    # открытии; насильно переключать выбранное нельзя.
+                    try:
+                        if getattr(self, "strategy_combo", None) is not None:
+                            self.strategy_combo.configure(
+                                values=strategies_mod.пронумерованные())
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif итог.get("почему") not in ("ещё не время", "выключено"):
+                    log.info("Стратегии не подтянулись: %s", итог.get("почему"))
+                for з in (итог.get("замечаний") or [])[:5]:
+                    log.warning("Стратегия из репозитория отброшена: %s", з)
+            self.root.after(0, finish)
+
+        threading.Thread(target=worker, daemon=True,
+                         name="strategies-feed").start()
 
     def _upload_journal_if_due(self):
         """Плановая выгрузка журнала в облако. Сама отправка — в отдельном

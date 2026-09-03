@@ -212,9 +212,14 @@ def restrict_to_current_user(path: str):
         if not username:
             return
         domain_user = username if "\\" in username else f"{os.environ.get('USERDOMAIN', '')}\\{username}".lstrip("\\")
+        import quiet_run
+        # Права переписываются при КАЖДОМ сохранении настроек. Без
+        # без_окна() это был главный источник чёрных окон: одно на
+        # каждое сохранение.
         subprocess.run(
             ["icacls", path, "/inheritance:r", "/grant:r", f"{domain_user}:F"],
             capture_output=True, timeout=5, check=False,
+            **quiet_run.без_окна(),
         )
     except Exception as e:
         log.debug("Не удалось ограничить доступ к файлу %s: %s", path, e)

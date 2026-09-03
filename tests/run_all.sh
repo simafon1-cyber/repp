@@ -406,6 +406,14 @@ echo "--- З-001 «Зеркало»: вход в противоположную 
 python3 test_mirror.py || FAILED=1
 
 echo
+echo "--- Чёрные окна: ни одна команда не показывает консоль ---"
+python3 test_no_console_windows.py || FAILED=1
+
+echo
+echo "--- Стратегии из репозитория: что файлу из сети позволено ---"
+python3 test_strategies_feed.py || FAILED=1
+
+echo
 echo "--- Почему нет сделок: программа говорит сама ---"
 python3 test_silence_diagnosis.py || FAILED=1
 

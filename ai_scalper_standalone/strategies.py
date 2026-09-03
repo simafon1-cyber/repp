@@ -23,10 +23,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 
 from dataclasses import dataclass, field
+
+log = logging.getLogger("strategies")
 
 
 @dataclass
@@ -329,8 +332,40 @@ def паспорт_заверен(strategy_or_key) -> tuple:
     return True, ""
 
 
+def загруженные() -> list:
+    """Стратегии, подтянутые из репозитория. Пусто — значит пусто.
+
+    Владелец: «пускай она просто подтягивает… раз в пять часов», чтобы
+    новые стратегии не требовали пересборки программы.
+
+    Ошибка здесь НЕ имеет права лишить человека встроенных стратегий:
+    нет сети, нет кэша, битый файл — возвращаем пустой список и работаем
+    как раньше."""
+    try:
+        import strategies_feed
+        return strategies_feed.из_кэша()
+    except Exception:  # noqa: BLE001
+        log.debug("Скачанные стратегии не прочитаны", exc_info=True)
+        return []
+
+
+def все() -> list:
+    """Встроенные плюс скачанные. Встроенная всегда побеждает по ключу.
+
+    Совпадение ключей отбрасывается ещё в strategies_feed, здесь стоит
+    вторая проверка того же: защита, которую снимает одна правка в
+    другом файле, — не защита."""
+    свои = list(STRATEGIES)
+    занято = {s.key for s in свои}
+    for s in загруженные():
+        if s.key not in занято:
+            занято.add(s.key)
+            свои.append(s)
+    return свои
+
+
 def by_key(key: str) -> Strategy | None:
-    for strategy in STRATEGIES:
+    for strategy in все():
         if strategy.key == key:
             return strategy
     return None
@@ -344,7 +379,7 @@ def черновик(strategy_or_key) -> bool:
 
 def рабочие() -> list:
     """Стратегии, которые можно предлагать наравне. Без черновиков."""
-    return [s for s in STRATEGIES if not черновик(s)]
+    return [s for s in все() if not черновик(s)]
 
 
 def пронумерованные(включая_черновики: bool = False) -> list[str]:
@@ -373,18 +408,18 @@ def titles(включая_черновики: bool = False) -> list[str]:
     прибыльность её не проверена. Показать её рядом с остальными значит
     предложить владельцу то, что предлагать нельзя."""
     if включая_черновики:
-        источник = STRATEGIES
+        источник = все()
     else:
         # Черновик с ЗАВЕРЕННЫМ паспортом показывать можно: регламент
         # пройден, и прятать его дальше значило бы мешать работе. Без
         # паспорта — по-прежнему нет.
-        источник = [s for s in STRATEGIES
+        источник = [s for s in все()
                     if not черновик(s) or паспорт_заверен(s)[0]]
     return [s.title for s in источник]
 
 
 def by_title(title: str) -> Strategy | None:
-    for strategy in STRATEGIES:
+    for strategy in все():
         if strategy.title == title:
             return strategy
     return None

@@ -663,9 +663,11 @@ def main(аргументы=None) -> int:
 
 def _ревизия() -> str:
     try:
+        import quiet_run
         return subprocess.check_output(
             ["git", "-C", КОРЕНЬ, "rev-parse", "HEAD"],
-            stderr=subprocess.DEVNULL).decode().strip()
+            stderr=subprocess.DEVNULL, timeout=10,
+            **quiet_run.без_окна()).decode().strip()
     except Exception:  # noqa: BLE001
         return "неизвестна"
 

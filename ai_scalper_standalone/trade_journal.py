@@ -621,9 +621,15 @@ def отпечаток_файла(путь: str) -> str:
 
 def ревизия(корень: str = "") -> str:
     try:
+        import quiet_run
+        # ТАЙМАУТА ЗДЕСЬ НЕ БЫЛО ВОВСЕ. Зависший git подвесил бы всю
+        # программу: check_output ждёт столько, сколько потребуется.
+        # Ревизия — сведение для паспорта выгрузки, ради него ждать
+        # нельзя ни минуты.
         return subprocess.check_output(
             ["git", "-C", корень or os.path.dirname(ЗДЕСЬ), "rev-parse", "HEAD"],
-            stderr=subprocess.DEVNULL).decode().strip()
+            stderr=subprocess.DEVNULL, timeout=10,
+            **quiet_run.без_окна()).decode().strip()
     except Exception:  # noqa: BLE001
         return "неизвестна"
 
