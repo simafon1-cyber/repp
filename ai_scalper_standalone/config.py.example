@@ -676,6 +676,13 @@ REQUIRE_LOGIN = False
 PRIVATE_MODE = False
 
 
+# ЗЕРКАЛО: входить в СТОРОНУ, ПРОТИВОПОЛОЖНУЮ сигналу.
+# True = сигнал на покупку -> уходит заявка на продажу, и наоборот.
+# Стоп, цель, лот и все фильтры считаются как обычно, уже от
+# перевёрнутого направления. Включается стратегией «Зеркало».
+# Это НЕ обещание прибыли: смотри docs и паспорт версии.
+MIRROR_SIGNALS = False
+
 ACTIVE_STRATEGY = "balanced_hybrid"   # balanced_hybrid | trend_follow | mean_reversion | breakout | careful_scalp
 USE_STRATEGY_SIGNAL = True            # учитывать мнение стратегии в score
 STRATEGY_SIGNAL_WEIGHT = 12           # макс. баллов, которые стратегия может добавить

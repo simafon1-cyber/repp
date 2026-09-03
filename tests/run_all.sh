@@ -402,6 +402,10 @@ echo "--- Диагностика: доходит ли она до репозит
 python3 test_diag_wiring.py || FAILED=1
 
 echo
+echo "--- З-001 «Зеркало»: вход в противоположную сторону ---"
+python3 test_mirror.py || FAILED=1
+
+echo
 echo "--- Почему нет сделок: программа говорит сама ---"
 python3 test_silence_diagnosis.py || FAILED=1
 
