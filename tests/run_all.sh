@@ -414,6 +414,10 @@ echo "--- В-001 «Фиксация вверху» и кнопка провер�
 python3 test_peak_lock.py || FAILED=1
 
 echo
+echo "--- Самопроверка сборки не падает из-за кодировки ---"
+python3 test_selftest_encoding.py || FAILED=1
+
+echo
 echo "--- Стратегии из репозитория: что файлу из сети позволено ---"
 python3 test_strategies_feed.py || FAILED=1
 
