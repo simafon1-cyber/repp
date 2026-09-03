@@ -1855,6 +1855,12 @@ class App:
         self.strategy_combo.bind("<<ComboboxSelected>>", self._on_strategy_pick)
         ttk.Button(strat_row, text="Применить стратегию",
                    command=self._apply_strategy).pack(side="left", padx=8)
+        # Владелец: «И кнопку принудительная проверка стратегии». Список
+        # подтягивается сам раз в пять часов; кнопка нужна, чтобы не ждать
+        # эти пять часов, когда стратегия только что добавлена.
+        ttk.Button(strat_row, text="Проверить стратегии сейчас",
+                   command=self._проверить_стратегии_сейчас).pack(side="left")
+        self._огонёк(strat_row, "проверить стратегии")
 
         self.strategy_desc = ttk.Label(parent, foreground=self.colors["muted"], wraplength=820,
                                        justify="left", text="")
@@ -1875,6 +1881,70 @@ class App:
 
         # Ниже — прежние быстрые переключатели (профиль, режим, пауза, звук)
         self._build_tab_settings(parent)
+
+    def _проверить_стратегии_сейчас(self):
+        """Спросить репозиторий про стратегии ПРЯМО СЕЙЧАС, не дожидаясь срока.
+
+        Владелец: «И кнопку принудительная проверка стратегии».
+
+        Кнопка НЕ применяет ничего и применить не может: она обновляет
+        список выбора. Что включить — решает человек, как и раньше.
+
+        Сеть — в отдельном потоке: окно не имеет права замереть на ответе
+        GitHub. Кнопка на это время выключается, иначе десять нажатий
+        подряд дали бы десять запросов."""
+        if getattr(self, "_feed_busy", False):
+            messagebox.showinfo(APP_TITLE, "Проверка уже идёт. Подождите.")
+            return
+        self._feed_busy = True
+        self.quick_status.configure(text="Спрашиваю репозиторий про стратегии…",
+                                    foreground=self.colors["muted"])
+
+        def worker():
+            try:
+                итог = strategies_feed.обновить(cfg)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Принудительная проверка стратегий сорвалась")
+                итог = {"скачано": False, "стратегий": 0, "замечаний": [],
+                        "почему": f"{type(e).__name__}: {e}"}
+
+            def finish():
+                self._feed_busy = False
+                замечания = итог.get("замечаний") or []
+                for з in замечания[:5]:
+                    log.warning("Стратегия из репозитория отброшена: %s", з)
+                if итог.get("скачано"):
+                    try:
+                        if getattr(self, "strategy_combo", None) is not None:
+                            self.strategy_combo.configure(
+                                values=strategies_mod.пронумерованные())
+                    except Exception:  # noqa: BLE001
+                        pass
+                    текст = (f"Список стратегий обновлён: получено "
+                             f"{итог.get('стратегий')}.")
+                    if замечания:
+                        # Отброшенные записи НЕ прячем. Человек должен
+                        # знать, что часть файла не принята, иначе он
+                        # будет искать стратегию, которой нет.
+                        текст += (f" Отброшено записей: {len(замечания)} — "
+                                  f"подробности в журнале.")
+                    self.quick_status.configure(text=текст,
+                                                foreground=self.colors["profit"])
+                    messagebox.showinfo(APP_TITLE, текст)
+                else:
+                    почему = итог.get("почему") or "причина неизвестна"
+                    self.quick_status.configure(
+                        text=f"Список стратегий не обновлён: {почему}",
+                        foreground=self.colors["muted"])
+                    messagebox.showwarning(
+                        APP_TITLE,
+                        f"Список стратегий не обновлён.\n\n{почему}\n\n"
+                        f"Встроенные стратегии остались на месте — "
+                        f"работать можно.")
+            self.root.after(0, finish)
+
+        threading.Thread(target=worker, daemon=True,
+                         name="strategies-feed-manual").start()
 
     def _on_strategy_pick(self, _event=None):
         strategy = strategies_mod.по_названию_с_номером(self.strategy_combo.get())

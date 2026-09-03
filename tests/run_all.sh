@@ -410,6 +410,10 @@ echo "--- Чёрные окна: ни одна команда не показы�
 python3 test_no_console_windows.py || FAILED=1
 
 echo
+echo "--- В-001 «Фиксация вверху» и кнопка проверки стратегий ---"
+python3 test_peak_lock.py || FAILED=1
+
+echo
 echo "--- Стратегии из репозитория: что файлу из сети позволено ---"
 python3 test_strategies_feed.py || FAILED=1
 
