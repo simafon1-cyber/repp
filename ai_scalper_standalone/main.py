@@ -623,8 +623,10 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     if auto_off:
         sym_state.last_reject_reason = auto_off
         return
-    if rm.count_open_positions(symbol, positions=all_positions) >= profile["max_open_positions"]:
-        sym_state.last_reject_reason = "Достигнут лимит одновременных сделок"
+    if rm.count_open_positions(symbol, positions=all_positions) >= _лимит_на_пару(profile):
+        sym_state.last_reject_reason = (
+            f"Достигнут лимит одновременных сделок по паре "
+            f"({_лимит_на_пару(profile)})")
         return
     # 0 = без ограничения: бот работает всю торговую сессию, сколько бы
     # сделок ни набралось. Ограничение по ЧИСЛУ сделок само по себе ничего не
@@ -1005,7 +1007,7 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
     # Хедж открывает 2 позиции за раз — нужно, чтобы оба слота были свободны
     # (иначе получится однобокая "хеджированная" сделка, которая на деле хедж не даёт).
     if hedge_directions is not None:
-        free_slots = (profile["max_open_positions"]
+        free_slots = (_лимит_на_пару(profile)
                       - rm.count_open_positions(symbol, positions=all_positions)
                       - acc_state.reservations.сколько(symbol))
         if free_slots < len(directions_to_open):
@@ -1095,7 +1097,15 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         return
 
     if open_risk_pct + new_trade_risk_pct * len(directions_to_open) > profile["max_total_risk_pct"]:
-        sym_state.last_reject_reason = "Превышен общий риск по открытым позициям"
+        # ЧИСЛА, А НЕ ПРОСТО «ПРЕВЫШЕН». Владелец поднял лимит сделок на
+        # пару до десяти и вправе ожидать десять. Но останавливает их не
+        # этот лимит, а потолок совокупного риска — и человек обязан
+        # видеть, ЧТО именно его остановило и на каком числе.
+        sym_state.last_reject_reason = (
+            f"Превышен общий риск по открытым позициям: уже "
+            f"{open_risk_pct:.2f}% + новая {new_trade_risk_pct:.2f}% > "
+            f"потолок {profile['max_total_risk_pct']:.2f}%. Именно этот "
+            f"потолок, а не лимит сделок на пару, ограничивает их число")
         return
 
     # СВОБОДНЫЕ СРЕДСТВА. Проверяется по каждой ноге: у хеджа их две, и
@@ -1523,6 +1533,30 @@ def process_close_requests(all_positions=None):
             log.warning("Дашборд запросил закрытие тикета %s, но такая позиция не найдена.", ticket)
             continue
         _close_one_position(pos)
+
+
+def _лимит_на_пару(profile: dict) -> int:
+    """Сколько сделок разрешено держать одновременно НА ОДНОЙ ПАРЕ.
+
+    ВРЕМЕННОЕ ПОСЛАБЛЕНИЕ, помеченное отдельно. Владелец 03.09.2026,
+    дословно: «Давай разрешим открытые на одной паре до 10 сделок.
+    Пометь это, если что просто дальше уберем».
+
+    Снимается возвратом MAX_POSITIONS_PER_SYMBOL_OVERRIDE в 0: тогда
+    действует лимит профиля риска, как было всегда. Профили при этом не
+    трогаются вовсе — их многострочный блок опасно править вслепую.
+
+    Мусор в настройке (строка, отрицательное число) НЕ расширяет предел:
+    непонятное значение толкуется в сторону прежнего лимита, а не в
+    сторону большего риска."""
+    свой = profile.get("max_open_positions", 1)
+    try:
+        сверху = int(getattr(cfg, "MAX_POSITIONS_PER_SYMBOL_OVERRIDE", 0) or 0)
+    except (TypeError, ValueError):
+        return свой
+    if сверху <= 0:
+        return свой
+    return сверху
 
 
 def build_snapshot(acc_info, acc_state: AccountState, sym_states: dict, all_positions=None) -> dict:

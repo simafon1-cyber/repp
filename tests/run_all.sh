@@ -418,6 +418,10 @@ echo "--- Самопроверка сборки не падает из-за ко
 python3 test_selftest_encoding.py || FAILED=1
 
 echo
+echo "--- Сколько сделок разрешено на одной паре ---"
+python3 test_positions_per_symbol.py || FAILED=1
+
+echo
 echo "--- Стратегии из репозитория: что файлу из сети позволено ---"
 python3 test_strategies_feed.py || FAILED=1
 
