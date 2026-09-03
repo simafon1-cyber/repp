@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -181,6 +182,69 @@ def test_результат_прогона_записан_и_отрицател�
               f"Зеркало на срезе «{срез}» теряет", str(среднее))
     check(bool(р.get("оговорка")),
           "Записана оговорка про уже виденные данные")
+
+
+def test_зеркало_видно_в_СОБРАННОЙ_программе():
+    """Жалоба владельца: «у меня также самая не появилась стратегия зеркала».
+
+    Черновик показывается в списке, только если рядом лежит его паспорт и
+    печать сходится. У собранной программы паспорта лежат ВНУТРИ .exe, и
+    ищутся они по другому пути — через sys._MEIPASS. Забудь строку
+    --add-data в сборке, и стратегия молча исчезнет у человека, хотя на
+    машине разработчика будет на месте.
+
+    Здесь этот путь и проверяется: подставляется _MEIPASS с копией папки
+    pasportов, как это делает PyInstaller."""
+    print("\n[Зеркало видно и в собранной программе]")
+    import importlib
+    import shutil
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as д:
+        shutil.copytree(ROOT / "preregistration",
+                        os.path.join(д, "preregistration"))
+        было = getattr(sys, "_MEIPASS", None)
+        sys._MEIPASS = д
+        try:
+            importlib.reload(st)
+            check(st._корень_данных() == д,
+                  "Паспорта ищутся внутри собранной программы",
+                  st._корень_данных())
+            можно, почему = st.паспорт_заверен("mirror")
+            check(можно, "Паспорт «Зеркала» найден и печать сходится", почему)
+            check("Зеркало" in st.titles(),
+                  "И «Зеркало» есть в списке выбора", str(st.titles()))
+        finally:
+            if было is None:
+                delattr(sys, "_MEIPASS")
+            else:
+                sys._MEIPASS = было
+            importlib.reload(st)
+
+
+def test_сборка_падает_если_паспорта_не_попали_внутрь():
+    """Пропажу паспорта обязана поймать САМОПРОВЕРКА СБОРКИ, а не владелец.
+
+    Проверяется по дереву кода: в selftest есть проверка паспортов и
+    списка стратегий, и она возвращает ненулевой код."""
+    print("\n[Самопроверка сборки ловит пропажу паспорта]")
+    import ast as _ast
+    текст = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    дерево = _ast.parse(текст)
+    selftest = None
+    for узел in _ast.walk(дерево):
+        if isinstance(узел, _ast.FunctionDef) and узел.name == "selftest":
+            selftest = узел
+    check(selftest is not None, "Самопроверка сборки есть")
+    if selftest is None:
+        return
+    тело = _ast.unparse(selftest)
+    check("паспорт_заверен" in тело,
+          "Она проверяет, что паспорта на месте и печать сходится")
+    check("titles" in тело,
+          "И что стратегии действительно попали в список")
+    check("return 1" in тело,
+          "И валит сборку, а не пишет предупреждение")
 
 
 def main() -> int:

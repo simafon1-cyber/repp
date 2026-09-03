@@ -57,62 +57,130 @@ import research_manifest as rm   # noqa: E402
 
 
 # =====================================================================
-def test_профиль_есть_и_называется_понятно():
-    print("\n[Профиль «Фиксация вверху» в списке]")
-    p = st.by_key("peak_lock")
-    check(p is not None, "Профиль найден")
-    if p is None:
-        return
-    check(p.title == "Фиксация вверху", "Название говорит, что он делает",
-          p.title)
-    check("Фиксация вверху" in st.titles(),
-          "И он виден в списке выбора", str(st.titles()))
+def test_фиксация_прибыли_включена_насовсем():
+    """Решение владельца 03.09.2026: «Фиксация прибыли должна быть на
+    постоянной основе».
 
+    Не профиль, не кнопка, не выбор — заводская настройка. Проверяется
+    эталон config.py.example: именно из него берутся значения при новой
+    установке."""
+    print("\n[Фиксация прибыли — заводская настройка, а не выбор]")
+    значения = {}
+    for узел in ast.parse((APP / "config.py.example").read_text(
+            encoding="utf-8")).body:
+        if isinstance(узел, ast.Assign) and узел.targets:
+            имя = getattr(узел.targets[0], "id", "")
+            if имя:
+                try:
+                    значения[имя] = ast.literal_eval(узел.value)
+                except Exception:  # noqa: BLE001
+                    pass
 
-def test_профиль_включает_именно_фиксацию_по_пику():
-    """Простой выход обязан выключиться: пока он включён, программа не
-    прикасается к открытой сделке ВООБЩЕ, и фиксация не работает."""
-    print("\n[Профиль включает именно то, что нужно]")
-    p = st.by_key("peak_lock")
-    if p is None:
-        check(False, "Профиль найден")
-        return
-    check(p.params.get("USE_SIMPLE_EXIT") is False,
-          "Простой выход выключен — иначе фиксация не сработает вовсе")
-    check(p.params.get("USE_PROFIT_LOCK_TRAILING") is True,
-          "Стоп гонится за пиковой прибылью")
-    check(p.params.get("USE_TIERED_PROFIT_LOCK") is True,
+    check(значения.get("USE_SIMPLE_EXIT") is False,
+          "Простой выход выключен — иначе программа не трогает сделку вовсе",
+          str(значения.get("USE_SIMPLE_EXIT")))
+    check(значения.get("USE_PROFIT_LOCK_TRAILING") is True,
+          "Стоп идёт за пиком прибыли")
+    check(значения.get("USE_TIERED_PROFIT_LOCK") is True,
           "И запирает тем больше, чем выше был пик")
-    доля = p.params.get("PROFIT_LOCK_START_R_FRACTION")
-    check(isinstance(доля, (int, float)) and 0.2 <= доля <= 1.0,
-          "Фиксация начинается не раньше пятой части риска: ближе стоп "
-          "упрётся в минимальную дистанцию брокера и в спред", str(доля))
-    check(not (set(p.params) & set(st.PROTECTED_PARAMS)),
-          "Защиты счёта профиль не трогает",
-          str(set(p.params) & set(st.PROTECTED_PARAMS)))
+    доля = значения.get("PROFIT_LOCK_START_R_FRACTION")
+    check(доля == 0.5,
+          "Запирать начинаем с ПОЛОВИНЫ риска, а не с целого", str(доля))
+    ступени = значения.get("PROFIT_LOCK_TIERS")
+    check(isinstance(ступени, list) and ступени and ступени[0][0] <= 0.5,
+          "Первая ступень начинается не позже половины риска", str(ступени))
 
 
-def test_программа_не_обещает_прибыли_от_фиксации():
-    """ГЛАВНАЯ проверка честности.
+def test_выбора_фиксации_в_списке_стратегий_больше_нет():
+    """Владелец: «кнопка по фиксации прибыли не нужна».
 
-    Наоборот: заменить предупреждение на «выгодно защищает прибыль» —
-    проверка падает."""
-    print("\n[Программа честно говорит, что это стоит дороже]")
-    p = st.by_key("peak_lock")
-    if p is None:
-        check(False, "Профиль найден")
+    Два пути к одному и тому же — способ однажды включить не то."""
+    print("\n[Фиксация не выбирается стратегией]")
+    check(st.by_key("peak_lock") is None,
+          "Профиля «Фиксация вверху» в списке нет")
+    check("Фиксация вверху" not in st.titles(включая_черновики=True),
+          "И названия такого нет", str(st.titles(включая_черновики=True)))
+    check("peak_lock" not in st.ПАСПОРТА,
+          "И паспорт к несуществующей стратегии не привязан")
+    # Сам паспорт остаётся: это запись исследования, а не настройка.
+    check((ROOT / "preregistration" / "strategy_peak_exit.json").exists(),
+          "Паспорт В-001 остался как запись исследования")
+
+
+def test_стратегия_не_снимает_фиксацию_молча():
+    """Стратегия может выключить фиксацию. Молчать об этом нельзя.
+
+    Проверяется по дереву кода: перед применением стратегии, которая
+    ставит USE_SIMPLE_EXIT=True, человека обязаны спросить отдельно."""
+    print("\n[О снятии фиксации предупреждают отдельно]")
+    текст = (APP / "desktop_app.py").read_text(encoding="utf-8")
+    дерево = ast.parse(текст)
+    обработчик = None
+    for узел in ast.walk(дерево):
+        if isinstance(узел, ast.FunctionDef) and узел.name == "_apply_strategy":
+            обработчик = узел
+    check(обработчик is not None, "Обработчик применения стратегии найден")
+    if обработчик is None:
         return
-    текст = p.caution.lower()
-    check("хуже" in текст or "дороже, чем даёт" in текст,
-          "Сказано, что в среднем это хуже", p.caution[:70])
-    check("в-001" in текст or "паспорт" in текст,
-          "Названа проверка, на которой это основано")
-    check(any(ч in p.caution for ч in ("0,065", "0,081", "0,059", "0,066")),
-          "И приведены числа, а не слова", p.caution[:70])
-    for обещание in ("гарант", "заработ", "прибыльн"):
-        check(обещание not in текст, f"Нет обещания «{обещание}…»")
-    check("peak_lock" in st.ЧЕРНОВИКИ,
-          "Профиль помечен черновиком, а не готовой стратегией")
+    тело = ast.unparse(обработчик)
+    check("USE_SIMPLE_EXIT" in тело,
+          "Применение стратегии смотрит на простой выход")
+    check("ВЫКЛЮЧИТ фиксацию прибыли" in тело,
+          "И предупреждает человека словами")
+    check(тело.count("askyesno") >= 2,
+          "Спрашивают отдельно, а не одним общим вопросом",
+          str(тело.count("askyesno")))
+
+    # С-001 действительно снимает фиксацию — иначе предупреждать не о чем.
+    c001 = st.by_key("c001_simple")
+    check(c001 is not None and c001.params.get("USE_SIMPLE_EXIT") is True,
+          "С-001 действительно выключает ведение сделки")
+
+
+def test_перенос_включает_фиксацию_в_старых_настройках():
+    """Решение обязано доехать до УЖЕ УСТАНОВЛЕННОЙ программы.
+
+    config.py не перезаписывается при обновлении. Без одноразового
+    переноса владелец поставил бы новую сборку и снова увидел бы, как
+    плюс превращается в минус."""
+    print("\n[Решение доезжает до установленной программы]")
+    import os
+    import tempfile
+    import types
+    import config_migrate as cm
+
+    with tempfile.TemporaryDirectory() as d:
+        путь = os.path.join(d, "config.py")
+        # Настройки, в которых фиксация выключена простым выходом.
+        with open(путь, "w", encoding="utf-8") as f:
+            f.write("USE_SIMPLE_EXIT = True\n"
+                    "USE_PROFIT_LOCK_TRAILING = False\n"
+                    "PROFIT_LOCK_START_R_FRACTION = 1.0\n"
+                    "SYMBOLS = ['EURUSD']\n")
+        пояснения = cm.apply_one_time(путь)
+        mod = types.ModuleType("z")
+        exec(open(путь, encoding="utf-8").read(), mod.__dict__)
+
+        check(mod.USE_SIMPLE_EXIT is False, "Простой выход снят")
+        check(mod.USE_PROFIT_LOCK_TRAILING is True, "Фиксация включена")
+        check(mod.PROFIT_LOCK_START_R_FRACTION == 0.5,
+              "И начинается с половины риска",
+              str(mod.PROFIT_LOCK_START_R_FRACTION))
+        check(any("постоянной основе" in x for x in пояснения),
+              "Человеку объяснили, что изменилось", str(пояснения)[:80])
+        check(any("стоит дороже, чем даёт" in x for x in пояснения),
+              "И честно сказали цену этой защиты", str(пояснения)[:80])
+
+        # Владелец передумал — программа не спорит.
+        with open(путь, "w", encoding="utf-8") as f:
+            f.write("USE_SIMPLE_EXIT = True\n"
+                    "MIGRATED_PROFIT_LOCK_ALWAYS = True\n"
+                    "SYMBOLS = ['EURUSD']\n")
+        cm.apply_one_time(путь)
+        mod2 = types.ModuleType("z2")
+        exec(open(путь, encoding="utf-8").read(), mod2.__dict__)
+        check(mod2.USE_SIMPLE_EXIT is True,
+              "Вернул простой выход сам — повторно не переключаем")
 
 
 def test_паспорт_запечатан_и_сетка_объявлена_заранее():
