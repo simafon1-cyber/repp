@@ -1096,7 +1096,7 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         runtime_events.record("риск", причина)
         return
 
-    if open_risk_pct + new_trade_risk_pct * len(directions_to_open) > profile["max_total_risk_pct"]:
+    if open_risk_pct + new_trade_risk_pct * len(directions_to_open) > _потолок_риска(profile):
         # ЧИСЛА, А НЕ ПРОСТО «ПРЕВЫШЕН». Владелец поднял лимит сделок на
         # пару до десяти и вправе ожидать десять. Но останавливает их не
         # этот лимит, а потолок совокупного риска — и человек обязан
@@ -1104,7 +1104,7 @@ def process_symbol(symbol: str, sym_state: SymbolState, acc_state: AccountState,
         sym_state.last_reject_reason = (
             f"Превышен общий риск по открытым позициям: уже "
             f"{open_risk_pct:.2f}% + новая {new_trade_risk_pct:.2f}% > "
-            f"потолок {profile['max_total_risk_pct']:.2f}%. Именно этот "
+            f"потолок {_потолок_риска(profile):.2f}%. Именно этот "
             f"потолок, а не лимит сделок на пару, ограничивает их число")
         return
 
@@ -1533,6 +1533,29 @@ def process_close_requests(all_positions=None):
             log.warning("Дашборд запросил закрытие тикета %s, но такая позиция не найдена.", ticket)
             continue
         _close_one_position(pos)
+
+
+def _потолок_риска(profile: dict) -> float:
+    """Потолок совокупного риска, % счёта.
+
+    ВТОРАЯ ЧАСТЬ ВРЕМЕННОГО ПОСЛАБЛЕНИЯ от 03.09.2026. Владелец выбрал
+    путь «1» из двух: поднять потолок, а не уменьшать лот.
+
+    Снимается возвратом MAX_TOTAL_RISK_PERCENT_OVERRIDE в 0 — тогда
+    действует значение профиля, как было всегда.
+
+    Мусор в настройке НЕ поднимает потолок: непонятное значение
+    толкуется в сторону МЕНЬШЕГО риска. И вниз потолок этой настройкой
+    тоже не опускается ниже профиля случайно — берётся то, что задано,
+    только если оно осмысленно."""
+    свой = float(profile.get("max_total_risk_pct", 0) or 0)
+    try:
+        сверху = float(getattr(cfg, "MAX_TOTAL_RISK_PERCENT_OVERRIDE", 0) or 0)
+    except (TypeError, ValueError):
+        return свой
+    if сверху <= 0:
+        return свой
+    return сверху
 
 
 def _лимит_на_пару(profile: dict) -> int:
